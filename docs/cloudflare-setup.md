@@ -128,6 +128,23 @@ npx wrangler secret put ACCESS_AUD --config wrangler.api.toml --env prod
 - `GET /auth/whoami`
 - `GET /auth/whoami?workspaceId=default&accountId=<account_id>`
 
+### Pending Follow-up (Skyler)
+
+- Waiting on Skyler to open: `https://sky-ai-api.paulchrisluke.workers.dev/auth/whoami`
+- Capture Skyler `principal.subject` from response JSON.
+- Grant Skyler subject access to mailbox account `SkylerBaird@me.com`.
+- Optional admin wildcard grant: set Paul subject access with `account_id='*'` for super-admin scope.
+
+Example commands (dev):
+
+```bash
+# Grant one mailbox to a user subject
+./scripts/grant-access-subject.sh sky-ai-dev <subject> default SkylerBaird@me.com <email> admin active wrangler.api.toml
+
+# Grant super-admin wildcard across all mailbox accounts in workspace
+./scripts/grant-access-subject.sh sky-ai-dev <subject> default '*' <email> admin active wrangler.api.toml
+```
+
 ## Notes while waiting for Skyler OAuth/Claude key
 
 - `POST /tasks/triage` and `POST /briefings/daily` return safe no-op if `OPENAI_API_KEY` is missing.
