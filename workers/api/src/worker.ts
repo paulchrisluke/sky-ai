@@ -1,15 +1,19 @@
 import { normalizeAccountId } from '../../shared/account';
+import {
+  extractBearerToken,
+  principalFromAccessClaims,
+  verifyAccessJwtClaims,
+  type AccessAuthEnv,
+  type AccessPrincipal
+} from '../../shared/auth';
 import { enforceCitationContract } from '../../shared/citation';
 import { RUN_EVENT_TYPES } from '../../shared/events';
 
-interface Env {
+interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
   CHAT_COORDINATOR: DurableObjectNamespace;
   WORKER_API_KEY?: string;
   ACCESS_AUTH_ENABLED?: string;
-  ACCESS_AUD?: string;
-  ACCESS_ISSUER?: string;
-  ACCESS_JWKS_URL?: string;
   ALLOW_API_KEY_BYPASS?: string;
   ENVIRONMENT?: string;
 }
@@ -1295,7 +1299,8 @@ async function getIngestStats(request: Request, env: Env): Promise<Response> {
     },
     freshness: {
       lastIngestedAt: latest?.last_ingested_at || null,
-      lastSentAt: latest?.last_sent_at || null
+      lastSentAt: latest?.last_sent_at || null,
+      ingestLagMinutes: minutesSince(latest?.last_ingested_at || null)
     },
     generatedAt: new Date().toISOString()
   });
@@ -1328,7 +1333,8 @@ async function getQueueStats(request: Request, env: Env): Promise<Response> {
       queued: Number(row?.queued || 0),
       retry: Number(row?.retry || 0),
       indexed: Number(row?.indexed || 0),
-      oldestNextAttemptAt: row?.oldest_next_attempt_at || null
+      oldestNextAttemptAt: row?.oldest_next_attempt_at || null,
+      oldestPendingLagMinutes: minutesSince(row?.oldest_next_attempt_at || null)
     },
     generatedAt: new Date().toISOString()
   });
@@ -1692,6 +1698,19 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
 
   if (accountId.includes('@')) {
     const accountEmail = normalizeAccountId(accountId);
+
+    const existing = await env.SKY_DB
+      .prepare(
+        `SELECT id
+         FROM accounts
+         WHERE workspace_id = ?
+           AND lower(email) = lower(?)
+         LIMIT 1`
+      )
+      .bind(workspaceId, accountEmail)
+      .first<{ id: string }>();
+    if (existing?.id) return existing.id;
+
     await env.SKY_DB
       .prepare(
         `INSERT OR IGNORE INTO accounts (id, workspace_id, label, email, status, created_at, updated_at)
@@ -1704,6 +1723,18 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
   }
 
   const canonicalId = normalizeAccountId(accountId);
+  const existing = await env.SKY_DB
+    .prepare(
+      `SELECT id
+       FROM accounts
+       WHERE workspace_id = ?
+         AND lower(id) = lower(?)
+       LIMIT 1`
+    )
+    .bind(workspaceId, canonicalId)
+    .first<{ id: string }>();
+  if (existing?.id) return existing.id;
+
   await env.SKY_DB
     .prepare(
       `INSERT OR IGNORE INTO accounts (id, workspace_id, label, email, status, created_at, updated_at)
@@ -2074,12 +2105,6 @@ function arrayOr(input: unknown): unknown[] | null {
   return Array.isArray(input) ? input : null;
 }
 
-const AUTH_CACHE: {
-  jwksUrl?: string;
-  expiresAt?: number;
-  keysByKid?: Record<string, JsonWebKey>;
-} = {};
-
 async function authorizeHttpRequest(
   request: Request,
   env: Env
@@ -2102,14 +2127,11 @@ async function authorizeHttpRequest(
   }
 
   try {
-    const claims = await verifyAccessJwt(jwt, env);
+    const claims = await verifyAccessJwtClaims(jwt, env);
+    const principal: AccessPrincipal = principalFromAccessClaims(claims);
     return {
       ok: true,
-      principal: {
-        type: 'access',
-        subject: String(claims.sub),
-        email: typeof claims.email === 'string' ? claims.email : null
-      }
+      principal
     };
   } catch (error) {
     return {
@@ -2183,97 +2205,6 @@ async function listPermissions(
   }));
 }
 
-async function verifyAccessJwt(token: string, env: Env): Promise<Record<string, unknown>> {
-  const [encodedHeader, encodedPayload, encodedSig] = token.split('.');
-  if (!encodedHeader || !encodedPayload || !encodedSig) {
-    throw new Error('malformed_jwt');
-  }
-
-  const header = JSON.parse(decodeBase64Url(encodedHeader)) as { kid?: string; alg?: string };
-  if (header.alg !== 'RS256' || !header.kid) {
-    throw new Error('unsupported_jwt_alg_or_missing_kid');
-  }
-
-  const jwks = await getJwks(env);
-  const jwk = jwks[header.kid];
-  if (!jwk) throw new Error('jwks_kid_not_found');
-
-  const key = await crypto.subtle.importKey(
-    'jwk',
-    jwk,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['verify']
-  );
-
-  const signed = new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`);
-  const signature = decodeBase64UrlToBytes(encodedSig);
-  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, signed);
-  if (!valid) throw new Error('jwt_signature_invalid');
-
-  const claims = JSON.parse(decodeBase64Url(encodedPayload)) as Record<string, unknown>;
-  const now = Math.floor(Date.now() / 1000);
-  if (typeof claims.exp !== 'number' || claims.exp <= now) throw new Error('jwt_expired');
-  if (typeof claims.nbf === 'number' && claims.nbf > now) throw new Error('jwt_not_yet_valid');
-
-  if (env.ACCESS_ISSUER && typeof claims.iss === 'string') {
-    const iss = claims.iss.replace(/\/+$/, '');
-    const expected = env.ACCESS_ISSUER.replace(/\/+$/, '');
-    if (iss !== expected) throw new Error('jwt_issuer_mismatch');
-  }
-
-  if (env.ACCESS_AUD) {
-    const aud = claims.aud;
-    const ok = typeof aud === 'string' ? aud === env.ACCESS_AUD : Array.isArray(aud) && aud.includes(env.ACCESS_AUD);
-    if (!ok) throw new Error('jwt_audience_mismatch');
-  }
-
-  if (typeof claims.sub !== 'string' || !claims.sub) throw new Error('jwt_missing_sub');
-  return claims;
-}
-
-async function getJwks(env: Env): Promise<Record<string, JsonWebKey>> {
-  const jwksUrl = env.ACCESS_JWKS_URL || (env.ACCESS_ISSUER ? `${env.ACCESS_ISSUER.replace(/\/+$/, '')}/cdn-cgi/access/certs` : null);
-  if (!jwksUrl) throw new Error('missing_access_jwks_url_or_issuer');
-
-  const now = Date.now();
-  if (AUTH_CACHE.jwksUrl === jwksUrl && AUTH_CACHE.expiresAt && AUTH_CACHE.expiresAt > now && AUTH_CACHE.keysByKid) {
-    return AUTH_CACHE.keysByKid;
-  }
-
-  const res = await fetch(jwksUrl, { method: 'GET' });
-  if (!res.ok) throw new Error(`jwks_fetch_failed_${res.status}`);
-  const body = (await res.json()) as { keys?: JsonWebKey[] };
-  const keys: Record<string, JsonWebKey> = {};
-  for (const key of body.keys || []) {
-    if (key.kid) keys[key.kid] = key;
-  }
-  AUTH_CACHE.jwksUrl = jwksUrl;
-  AUTH_CACHE.keysByKid = keys;
-  AUTH_CACHE.expiresAt = now + 10 * 60 * 1000;
-  return keys;
-}
-
-function extractBearerToken(request: Request): string | null {
-  const auth = request.headers.get('authorization') || '';
-  const m = auth.match(/^Bearer\s+(.+)$/i);
-  return m ? m[1].trim() : null;
-}
-
-function decodeBase64Url(input: string): string {
-  const bytes = decodeBase64UrlToBytes(input);
-  return new TextDecoder().decode(bytes);
-}
-
-function decodeBase64UrlToBytes(input: string): Uint8Array {
-  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
 function stringOr(input: unknown): string | null {
   return typeof input === 'string' && input.trim() ? input.trim() : null;
 }
@@ -2283,6 +2214,13 @@ function objectOr(input: unknown): JsonRecord | null {
     return input as JsonRecord;
   }
   return null;
+}
+
+function minutesSince(isoDateTime: string | null): number | null {
+  if (!isoDateTime) return null;
+  const parsed = Date.parse(isoDateTime.endsWith('Z') ? isoDateTime : `${isoDateTime}Z`);
+  if (!Number.isFinite(parsed)) return null;
+  return Number(Math.max(0, (Date.now() - parsed) / 60000).toFixed(2));
 }
 
 function json(payload: JsonRecord, status = 200): Response {
