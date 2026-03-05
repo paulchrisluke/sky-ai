@@ -62,6 +62,8 @@ type SearchResult = {
   chunk_id: string;
 };
 
+const MIN_SEMANTIC_CITATION_SCORE = 0.65;
+
 type UsageContext = {
   workspaceId?: string;
   accountId?: string;
@@ -646,6 +648,7 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
 
   const rawResult = await executeIntent(env, { workspaceId, accountId }, query, intent);
   const result = enforceCitationContract(query, rawResult);
+  let proposals: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }> = [];
 
   const assistantTurnId = await insertTurn(env, {
     sessionId,
@@ -696,6 +699,34 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     }
   });
 
+  // Proposal extraction for /chat/query to keep Railway and API behavior consistent.
+  try {
+    const proposalHits = await performSemanticSearch(env, workspaceId, accountId, query, 10, {
+      workspaceId,
+      accountId,
+      runId,
+      operation: 'chat_query_proposal_retrieval',
+      endpoint: '/chat/query'
+    });
+    console.log(
+      `[chat.query] proposal_extraction start runId=${runId} intent=${intent} hits=${proposalHits.length} query=${query.slice(0, 120)}`
+    );
+    proposals = await extractAndPersistProposals(env, {
+      workspaceId,
+      accountId,
+      agentId: null,
+      query,
+      answer: result.answer,
+      hits: proposalHits
+    });
+    console.log(`[chat.query] proposal_extraction done runId=${runId} proposals=${proposals.length}`);
+  } catch (error) {
+    console.log(
+      `[chat.query] proposal_extraction error runId=${runId} error=${error instanceof Error ? error.message : 'unknown'}`
+    );
+    proposals = [];
+  }
+
   return json({
     ok: true,
     sessionId,
@@ -704,6 +735,7 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     intent,
     answer: result.answer,
     citations: result.citations,
+    proposals,
     citationStatus: result.citationStatus,
     searched: result.searched
   });
@@ -2384,6 +2416,7 @@ async function queryCitations(env: Env, workspaceId: string, accountId: string, 
   const seen = new Set<string>();
   const semanticCitations: Citation[] = [];
   for (const hit of semanticHits) {
+    if (Number(hit.score || 0) < MIN_SEMANTIC_CITATION_SCORE) continue;
     if (seen.has(hit.message_id)) continue;
     seen.add(hit.message_id);
     semanticCitations.push({
