@@ -12,6 +12,9 @@ import { RUN_EVENT_TYPES } from '../../shared/events';
 interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
   SKY_VECTORIZE: VectorizeIndex;
+  AI?: {
+    run(model: string, input: Record<string, unknown>): Promise<unknown>;
+  };
   CHAT_COORDINATOR: DurableObjectNamespace;
   WORKER_API_KEY?: string;
   ACCESS_AUTH_ENABLED?: string;
@@ -21,6 +24,10 @@ interface Env extends AccessAuthEnv {
   AIG_ACCOUNT_ID?: string;
   AIG_GATEWAY_ID?: string;
   OPENAI_EMBEDDING_MODEL?: string;
+  OPENAI_MODEL?: string;
+  WORKERS_AI_EMBEDDING_MODEL?: string;
+  WORKERS_AI_CHAT_MODEL?: string;
+  VECTOR_DIMENSIONS?: string;
   ENVIRONMENT?: string;
 }
 
@@ -44,6 +51,17 @@ type QueryResult = {
   searched: JsonRecord;
 };
 
+type SearchResult = {
+  message_id: string;
+  thread_id: string | null;
+  date: string | null;
+  from: string;
+  subject: string;
+  excerpt: string;
+  score: number;
+  chunk_id: string;
+};
+
 type AuthPrincipal = {
   type: 'access' | 'service' | 'anonymous';
   subject: string;
@@ -64,6 +82,10 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/chat/query') {
       return runHttpChatQuery(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/chat') {
+      return runAgentChat(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/search') {
@@ -680,77 +702,12 @@ async function runSearch(request: Request, env: Env): Promise<Response> {
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
   if (!permission.ok) return permission.response;
 
-  let queryVector: number[];
+  let results: SearchResult[] = [];
   try {
-    queryVector = await embedSearchQuery(env, query);
+    results = await performSemanticSearch(env, workspaceId, accountId, query, k);
   } catch (error) {
-    return json(
-      {
-        ok: false,
-        error: 'search_embedding_failed',
-        detail: error instanceof Error ? error.message : 'unknown'
-      },
-      500
-    );
+    return json({ ok: false, error: 'search_failed', detail: error instanceof Error ? error.message : 'unknown' }, 500);
   }
-
-  const vectorRes = await env.SKY_VECTORIZE.query(queryVector, { topK: k });
-  const matches = vectorRes.matches || [];
-  const vectorIds = matches.map((m) => m.id).filter(Boolean);
-
-  if (vectorIds.length === 0) {
-    return json({ ok: true, workspaceId, accountId, query, results: [] });
-  }
-
-  const placeholders = vectorIds.map(() => '?').join(',');
-  const rows = await env.SKY_DB
-    .prepare(
-      `SELECT
-          mc.vector_id,
-          json_extract(mc.metadata_json, '$.messageId') AS message_id,
-          json_extract(mc.metadata_json, '$.threadId') AS thread_id,
-          em.sent_at AS sent_at,
-          COALESCE(json_extract(em.from_json, '$[0].address'), '') AS sender,
-          em.subject AS subject,
-          em.snippet AS excerpt
-       FROM memory_chunks mc
-       LEFT JOIN email_messages em
-         ON em.id = json_extract(mc.metadata_json, '$.messageId')
-        AND em.workspace_id = mc.workspace_id
-       WHERE mc.workspace_id = ?
-         AND lower(mc.account_id) = lower(?)
-         AND mc.vector_id IN (${placeholders})
-       LIMIT ?`
-    )
-    .bind(workspaceId, accountId, ...vectorIds, k * 3)
-    .all<{
-      vector_id: string;
-      message_id: string | null;
-      thread_id: string | null;
-      sent_at: string | null;
-      sender: string | null;
-      subject: string | null;
-      excerpt: string | null;
-    }>();
-
-  const byVectorId = new Map((rows.results || []).map((r) => [r.vector_id, r]));
-  const results = matches
-    .map((m) => {
-      const row = byVectorId.get(m.id);
-      if (!row || !row.message_id) return null;
-      return {
-        message_id: row.message_id,
-        thread_id: row.thread_id,
-        date: row.sent_at,
-        from: row.sender || '',
-        subject: row.subject || '(no subject)',
-        excerpt: row.excerpt || '',
-        score: Number(m.score || 0),
-        chunk_id: m.id
-      };
-    })
-    .filter((x): x is NonNullable<typeof x> => Boolean(x))
-    .slice(0, k);
 
   return json({
     ok: true,
@@ -758,6 +715,174 @@ async function runSearch(request: Request, env: Env): Promise<Response> {
     accountId,
     query,
     results
+  });
+}
+
+async function runAgentChat(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+  const payload = (await request.json()) as JsonRecord;
+  const workspaceId = stringOr(payload.workspaceId) || 'default';
+  let accountId = stringOr(payload.accountId) || stringOr(payload.account_id);
+  const query = stringOr(payload.query);
+  const agentId = stringOr(payload.agentId) || stringOr(payload.agent_id);
+  const userId = stringOr(payload.userId) || auth.principal.email || auth.principal.subject || 'anonymous';
+  const sessionId = stringOr(payload.sessionId) || crypto.randomUUID();
+
+  if (!accountId || !query) {
+    return json({ ok: false, error: 'accountId/account_id and query are required' }, 400);
+  }
+
+  accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+  if (!permission.ok) return permission.response;
+  await ensureSession(env, { sessionId, workspaceId, accountId, userId });
+
+  const runId = crypto.randomUUID();
+  const userTurnId = await insertTurn(env, {
+    sessionId,
+    workspaceId,
+    accountId,
+    runId,
+    role: 'user',
+    content: query,
+    citationRequired: true,
+    citationStatus: 'not_applicable'
+  });
+
+  let hits: SearchResult[] = [];
+  try {
+    hits = await performSemanticSearch(env, workspaceId, accountId, query, 10);
+  } catch {
+    hits = [];
+  }
+  if (hits.length === 0) {
+    const answer = 'insufficient sources';
+    const assistantTurnId = await insertTurn(env, {
+      sessionId,
+      workspaceId,
+      accountId,
+      runId,
+      role: 'assistant',
+      content: answer,
+      citationRequired: true,
+      citationStatus: 'insufficient'
+    });
+    await insertRunSearchAudit(env, {
+      sessionId,
+      runId,
+      workspaceId,
+      accountId,
+      query,
+      intent: 'find_email',
+      citationStatus: 'insufficient',
+      citationsCount: 0,
+      searched: { strategy: 'vector_search', k: 10 }
+    });
+    await appendRunEvent(env, {
+      sessionId,
+      workspaceId,
+      accountId,
+      runId,
+      turnId: assistantTurnId,
+      eventType: RUN_EVENT_TYPES.COMPLETED,
+      payload: { citations: [], citationStatus: 'insufficient', userTurnId }
+    });
+    return json({ ok: true, answer, citations: [], proposals: [], thread_id: hits[0]?.thread_id || null, runId, sessionId });
+  }
+
+  const agent = agentId ? await loadAgentProfile(env, agentId) : null;
+  const context = hits
+    .map((h, idx) => `${idx + 1}. FROM: ${h.from} | DATE: ${h.date || 'unknown'} | SUBJECT: ${h.subject}\nEXCERPT: ${h.excerpt}`)
+    .join('\n\n');
+
+  const systemPrompt = [
+    agent ? `You are an AI chief of staff for ${agent.name}.` : 'You are an AI chief of staff.',
+    agent ? `Purpose: ${agent.purpose}` : '',
+    agent ? `Context: ${agent.business_context}` : '',
+    agent ? `Goals: ${agent.owner_goals.join('; ')}` : '',
+    'Answer using only provided email context.',
+    'If context is insufficient, say exactly: insufficient sources.',
+    'Keep concise and practical.'
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  let answer = 'insufficient sources';
+  try {
+    answer = await callOpenAiChatViaGateway(env, [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Retrieved email context:\n${context}\n\nQuestion: ${query}` }
+    ]);
+  } catch {
+    answer = 'insufficient sources';
+  }
+
+  const citations: Citation[] = hits.slice(0, 6).map((h) => ({
+    messageId: h.message_id,
+    date: h.date,
+    from: h.from,
+    subject: h.subject,
+    score: h.score
+  }));
+  const citationStatus: 'sufficient' | 'insufficient' = answer.trim().toLowerCase() === 'insufficient sources' ? 'insufficient' : 'sufficient';
+
+  const assistantTurnId = await insertTurn(env, {
+    sessionId,
+    workspaceId,
+    accountId,
+    runId,
+    role: 'assistant',
+    content: answer,
+    citationRequired: true,
+    citationStatus
+  });
+  await insertCitations(env, { sessionId, workspaceId, accountId, turnId: assistantTurnId, citations });
+  await insertRunSearchAudit(env, {
+    sessionId,
+    runId,
+    workspaceId,
+    accountId,
+    query,
+    intent: 'find_email',
+    citationStatus,
+    citationsCount: citations.length,
+    searched: { strategy: 'vector_search', k: 10 }
+  });
+  await appendRunEvent(env, {
+    sessionId,
+    workspaceId,
+    accountId,
+    runId,
+    turnId: assistantTurnId,
+    eventType: RUN_EVENT_TYPES.COMPLETED,
+    payload: { citations, citationStatus, userTurnId }
+  });
+
+  const proposals = await extractAndPersistProposals(env, {
+    workspaceId,
+    accountId,
+    agentId,
+    query,
+    answer,
+    hits
+  });
+
+  return json({
+    ok: true,
+    answer,
+    citations: hits.slice(0, 6).map((h) => ({
+      message_id: h.message_id,
+      thread_id: h.thread_id,
+      date: h.date,
+      from: h.from,
+      subject: h.subject,
+      excerpt: h.excerpt
+    })),
+    proposals,
+    thread_id: hits[0]?.thread_id || null,
+    runId,
+    sessionId
   });
 }
 
@@ -2337,10 +2462,22 @@ function hasSearchEmbeddingConfig(env: Env): boolean {
 }
 
 async function embedSearchQuery(env: Env, query: string): Promise<number[]> {
-  if (!hasSearchEmbeddingConfig(env)) {
-    throw new Error('search_embedding_not_configured');
+  const target = parseVectorDimensions(env);
+  if (hasSearchEmbeddingConfig(env)) {
+    try {
+      return normalizeVectorDimensions(await embedQueryViaGateway(env, query), target);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      if (!env.AI || (!msg.includes('429') && !msg.includes('401') && !msg.includes('quota') && !msg.includes('unauthorized'))) {
+        throw error;
+      }
+    }
   }
+  if (!env.AI) throw new Error('search_embedding_not_configured');
+  return normalizeVectorDimensions(await embedQueryViaWorkersAi(env, query), target);
+}
 
+async function embedQueryViaGateway(env: Env, query: string): Promise<number[]> {
   const gatewayUrl = `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/embeddings`;
   const headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -2356,18 +2493,343 @@ async function embedSearchQuery(env: Env, query: string): Promise<number[]> {
       input: query
     })
   });
-
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`search_embedding_failed_${response.status}:${text.slice(0, 300)}`);
   }
-
   const body = (await response.json()) as { data?: Array<{ embedding?: number[] }> };
   const vector = body.data?.[0]?.embedding || [];
-  if (!Array.isArray(vector) || vector.length === 0) {
-    throw new Error('search_embedding_invalid_response');
-  }
+  if (!Array.isArray(vector) || vector.length === 0) throw new Error('search_embedding_invalid_response');
   return vector;
+}
+
+async function embedQueryViaWorkersAi(env: Env, query: string): Promise<number[]> {
+  const model = env.WORKERS_AI_EMBEDDING_MODEL || '@cf/baai/bge-base-en-v1.5';
+  const result = (await env.AI!.run(model, { text: [query] })) as {
+    data?: number[] | number[][];
+    shape?: number[];
+  };
+
+  if (Array.isArray(result?.shape) && result.shape.length === 2 && Array.isArray(result.data) && typeof result.data[0] === 'number') {
+    const dims = Number(result.shape[1] || 0);
+    const flat = result.data as number[];
+    if (dims > 0 && flat.length >= dims) return flat.slice(0, dims);
+  }
+  if (Array.isArray(result?.data) && Array.isArray(result.data[0])) {
+    return (result.data as number[][])[0] || [];
+  }
+  throw new Error('workers_ai_search_embedding_invalid_response');
+}
+
+function parseVectorDimensions(env: Env): number {
+  const raw = Number(env.VECTOR_DIMENSIONS || '1536');
+  if (!Number.isFinite(raw) || raw <= 0) return 1536;
+  return Math.trunc(raw);
+}
+
+function normalizeVectorDimensions(vector: number[], target: number): number[] {
+  if (vector.length === target) return vector;
+  if (vector.length > target) return vector.slice(0, target);
+  return vector.concat(new Array(target - vector.length).fill(0));
+}
+
+async function performSemanticSearch(
+  env: Env,
+  workspaceId: string,
+  accountId: string,
+  query: string,
+  k: number
+): Promise<SearchResult[]> {
+  const queryVector = await embedSearchQuery(env, query);
+  const vectorRes = await env.SKY_VECTORIZE.query(queryVector, { topK: k });
+  const matches = vectorRes.matches || [];
+  const vectorIds = matches.map((m) => m.id).filter(Boolean);
+  if (vectorIds.length === 0) return [];
+
+  const placeholders = vectorIds.map(() => '?').join(',');
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT
+          mc.vector_id,
+          json_extract(mc.metadata_json, '$.messageId') AS message_id,
+          json_extract(mc.metadata_json, '$.threadId') AS thread_id,
+          em.sent_at AS sent_at,
+          COALESCE(json_extract(em.from_json, '$[0].address'), '') AS sender,
+          em.subject AS subject,
+          em.snippet AS excerpt
+       FROM memory_chunks mc
+       LEFT JOIN email_messages em
+         ON em.id = json_extract(mc.metadata_json, '$.messageId')
+        AND em.workspace_id = mc.workspace_id
+       WHERE mc.workspace_id = ?
+         AND lower(mc.account_id) = lower(?)
+         AND mc.vector_id IN (${placeholders})
+       LIMIT ?`
+    )
+    .bind(workspaceId, accountId, ...vectorIds, k * 3)
+    .all<{
+      vector_id: string;
+      message_id: string | null;
+      thread_id: string | null;
+      sent_at: string | null;
+      sender: string | null;
+      subject: string | null;
+      excerpt: string | null;
+    }>();
+
+  const byVectorId = new Map((rows.results || []).map((r) => [r.vector_id, r]));
+  return matches
+    .map((m) => {
+      const row = byVectorId.get(m.id);
+      if (!row || !row.message_id) return null;
+      return {
+        message_id: row.message_id,
+        thread_id: row.thread_id,
+        date: row.sent_at,
+        from: row.sender || '',
+        subject: row.subject || '(no subject)',
+        excerpt: row.excerpt || '',
+        score: Number(m.score || 0),
+        chunk_id: m.id
+      };
+    })
+    .filter((x): x is SearchResult => Boolean(x))
+    .slice(0, k);
+}
+
+async function loadAgentProfile(
+  env: Env,
+  agentId: string
+): Promise<{ id: string; name: string; purpose: string; business_context: string; owner_goals: string[] } | null> {
+  const row = await env.SKY_DB
+    .prepare(
+      `SELECT id, name, purpose, business_context, owner_goals_json
+       FROM agents
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .bind(agentId)
+    .first<{ id: string; name: string; purpose: string; business_context: string; owner_goals_json: string | null }>();
+  if (!row) return null;
+  let goals: string[] = [];
+  try {
+    const parsed = JSON.parse(row.owner_goals_json || '[]');
+    if (Array.isArray(parsed)) goals = parsed.map((x) => String(x));
+  } catch {
+    goals = [];
+  }
+  return { ...row, owner_goals: goals };
+}
+
+async function callOpenAiChatViaGateway(
+  env: Env,
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+  responseFormat?: { type: 'json_object' }
+): Promise<string> {
+  if (!env.OPENAI_API_KEY || !env.AIG_ACCOUNT_ID || !env.AIG_GATEWAY_ID) {
+    throw new Error('chat_not_configured');
+  }
+
+  const gatewayUrl = `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/chat/completions`;
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    authorization: `Bearer ${env.OPENAI_API_KEY}`
+  };
+  if (env.CF_AIG_AUTH_TOKEN) headers['cf-aig-authorization'] = `Bearer ${env.CF_AIG_AUTH_TOKEN}`;
+
+  const response = await fetch(gatewayUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages,
+      temperature: 0.2,
+      ...(responseFormat ? { response_format: responseFormat } : {})
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    const msg = `chat_gateway_failed_${response.status}:${text.slice(0, 500)}`;
+    if (env.AI && response.status >= 400) {
+      try {
+        return await callWorkersAiChat(env, messages, responseFormat);
+      } catch {
+        throw new Error(msg);
+      }
+    }
+    throw new Error(msg);
+  }
+  const body = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const text = body.choices?.[0]?.message?.content?.trim() || '';
+  if (!text) throw new Error('chat_empty_response');
+  return text;
+}
+
+async function callWorkersAiChat(
+  env: Env,
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+  responseFormat?: { type: 'json_object' }
+): Promise<string> {
+  if (!env.AI) throw new Error('workers_ai_chat_not_bound');
+  const model = env.WORKERS_AI_CHAT_MODEL || '@cf/meta/llama-3.1-8b-instruct';
+  const prompt = messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+  const suffix = responseFormat?.type === 'json_object' ? '\n\nReturn valid JSON only.' : '';
+  const out = (await env.AI.run(model, {
+    prompt: `${prompt}${suffix}`,
+    max_tokens: 700
+  })) as { response?: string; result?: { response?: string } };
+  const text = out.response || out.result?.response || '';
+  if (!text.trim()) throw new Error('workers_ai_chat_empty_response');
+  return text.trim();
+}
+
+async function extractAndPersistProposals(
+  env: Env,
+  input: {
+    workspaceId: string;
+    accountId: string;
+    agentId: string | null;
+    query: string;
+    answer: string;
+    hits: SearchResult[];
+  }
+): Promise<Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }>> {
+  const compactContext = input.hits
+    .slice(0, 8)
+    .map((h) => ({
+      message_id: h.message_id,
+      thread_id: h.thread_id,
+      date: h.date,
+      from: h.from,
+      subject: h.subject,
+      excerpt: h.excerpt
+    }));
+
+  let raw = '[]';
+  try {
+    raw = await callOpenAiChatViaGateway(
+      env,
+      [
+        {
+          role: 'system',
+          content:
+            'Given context and assistant answer, return JSON array of proposed actions only. Each item: type,title,draft_payload,risk_level,citations. If none, return [].'
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            query: input.query,
+            answer: input.answer,
+            context: compactContext
+          })
+        }
+      ],
+      { type: 'json_object' }
+    );
+  } catch {
+    raw = '[]';
+  }
+
+  let proposalsIn: Array<{
+    type?: string;
+    title?: string;
+    draft_payload?: JsonRecord;
+    risk_level?: string;
+    citations?: string[];
+  }> = [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      proposalsIn = parsed as typeof proposalsIn;
+    } else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { proposals?: unknown[] }).proposals)) {
+      proposalsIn = (parsed as { proposals: typeof proposalsIn }).proposals;
+    }
+  } catch {
+    proposalsIn = [];
+  }
+
+  if (proposalsIn.length === 0) {
+    const q = input.query.toLowerCase();
+    if ((q.includes('reply') || q.includes('urgent') || q.includes('refund') || q.includes('follow up')) && input.hits.length > 0) {
+      const first = input.hits[0];
+      proposalsIn = [
+        {
+          type: 'reply_email',
+          title: `Draft reply for: ${first.subject}`,
+          draft_payload: {
+            to: first.from,
+            subject: first.subject,
+            thread_id: first.thread_id,
+            message_id: first.message_id,
+            suggested_response: input.answer.slice(0, 1000)
+          },
+          risk_level: q.includes('urgent') ? 'high' : 'med',
+          citations: [first.message_id]
+        }
+      ];
+    }
+  }
+
+  const out: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }> = [];
+  for (const p of proposalsIn.slice(0, 10)) {
+    const type = stringOr(p.type) || 'create_task';
+    const title = stringOr(p.title) || 'Untitled proposal';
+    const riskLevel = stringOr(p.risk_level) || 'low';
+    const proposalId = crypto.randomUUID();
+    const payload = objectOr(p.draft_payload) || {};
+
+    await env.SKY_DB
+      .prepare(
+        `INSERT INTO proposals
+         (id, workspace_id, account_id, agent_id, type, status, draft_payload_json, required_inputs_json, risk_level, created_from_ref, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'proposed', ?, '{}', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      )
+      .bind(
+        proposalId,
+        input.workspaceId,
+        input.accountId,
+        input.agentId,
+        type,
+        JSON.stringify(payload),
+        riskLevel,
+        `chat:${input.query.slice(0, 120)}`
+      )
+      .run();
+
+    const citationIds = Array.isArray(p.citations) ? p.citations.map((x) => String(x)) : [];
+    for (const citationId of citationIds.slice(0, 8)) {
+      const hit = input.hits.find((h) => h.message_id === citationId);
+      await env.SKY_DB
+        .prepare(
+          `INSERT INTO proposal_citations
+           (id, proposal_id, message_id, thread_id, quote_text, chunk_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+        )
+        .bind(
+          crypto.randomUUID(),
+          proposalId,
+          citationId,
+          hit?.thread_id || null,
+          hit?.excerpt || null,
+          hit?.chunk_id || null
+        )
+        .run();
+    }
+
+    await env.SKY_DB
+      .prepare(
+        `INSERT INTO approvals_audit
+         (id, proposal_id, actor, action, before_json, after_json, created_at)
+         VALUES (?, ?, ?, 'proposed', NULL, ?, CURRENT_TIMESTAMP)`
+      )
+      .bind(crypto.randomUUID(), proposalId, 'system', JSON.stringify({ type, title, riskLevel }))
+      .run();
+
+    out.push({ id: proposalId, type, title, draft_payload_json: payload, risk_level: riskLevel });
+  }
+  return out;
 }
 
 function json(payload: JsonRecord, status = 200): Response {
