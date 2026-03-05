@@ -228,7 +228,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
         .run();
     }
 
-    await enqueueEmbeddingJob(env, workspaceId, recordId);
+    await enqueueEmbeddingJob(env, workspaceId, accountId, recordId);
     embeddingStatus = 'queued';
     if (!hasAiGatewayConfig(env)) embeddingWarning = 'embedding_not_configured';
   }
@@ -381,14 +381,19 @@ async function queueBackfillRun(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, backfillRunId: id, status: 'queued' });
 }
 
-async function enqueueEmbeddingJob(env: Env, workspaceId: string, sourceRecordId: string): Promise<void> {
+async function enqueueEmbeddingJob(
+  env: Env,
+  workspaceId: string,
+  accountId: string,
+  sourceRecordId: string
+): Promise<void> {
   await env.SKY_DB
     .prepare(
       `INSERT OR IGNORE INTO embedding_jobs
-       (id, workspace_id, source_record_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
-       VALUES (?, ?, ?, 'queued', 0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+       (id, workspace_id, account_id, source_record_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'queued', 0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     )
-    .bind(crypto.randomUUID(), workspaceId, sourceRecordId)
+    .bind(crypto.randomUUID(), workspaceId, accountId.toLowerCase(), sourceRecordId)
     .run();
 
   await enqueueEmbeddingQueueMessage(env, { sourceRecordId });

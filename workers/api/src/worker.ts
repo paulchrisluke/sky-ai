@@ -974,16 +974,14 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
     env.SKY_DB
       .prepare(
         `SELECT
-            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
-            SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing,
+            SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
             SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) AS retry,
-            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
-            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+            SUM(CASE WHEN status = 'indexed' THEN 1 ELSE 0 END) AS indexed
          FROM embedding_jobs
          WHERE workspace_id = ? AND account_id = ?`
       )
       .bind(workspaceId, accountId)
-      .first<{ pending: number | null; processing: number | null; retry: number | null; completed: number | null; failed: number | null }>(),
+      .first<{ queued: number | null; retry: number | null; indexed: number | null }>(),
     env.SKY_DB
       .prepare("SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND account_id = ? AND status IN ('ready','needs_review')")
       .bind(workspaceId, accountId)
@@ -1011,11 +1009,9 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
       decisionsLast7d: Number(decisionsRecent?.c || 0)
     },
     embeddings: {
-      pending: Number(embeddings?.pending || 0),
-      processing: Number(embeddings?.processing || 0),
+      queued: Number(embeddings?.queued || 0),
       retry: Number(embeddings?.retry || 0),
-      completed: Number(embeddings?.completed || 0),
-      failed: Number(embeddings?.failed || 0)
+      indexed: Number(embeddings?.indexed || 0)
     },
     generatedAt: new Date().toISOString()
   });
