@@ -463,13 +463,14 @@ async function getAuthWhoami(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+  const canonicalAccountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  const permission = await assertPermission(env, auth.principal, workspaceId, canonicalAccountId);
   return json({
     ok: true,
     principal: auth.principal,
     authorized: permission.ok,
     workspaceId,
-    accountId
+    accountId: canonicalAccountId
   }, permission.ok ? 200 : 403);
 }
 
@@ -952,8 +953,9 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
 
   const url = new URL(request.url);
   const workspaceId = url.searchParams.get('workspaceId') || 'default';
-  const accountId = url.searchParams.get('accountId');
+  let accountId = url.searchParams.get('accountId');
   if (!accountId) return json({ ok: false, error: 'accountId is required' }, 400);
+  accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
 
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
   if (!permission.ok) return permission.response;
@@ -1322,14 +1324,15 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
     return accountEmail;
   }
 
+  const canonicalId = accountId.toLowerCase();
   await env.SKY_DB
     .prepare(
       `INSERT OR IGNORE INTO accounts (id, workspace_id, label, email, status, created_at, updated_at)
        VALUES (?, ?, ?, NULL, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     )
-    .bind(accountId, workspaceId, accountId)
+    .bind(canonicalId, workspaceId, canonicalId)
     .run();
-  return accountId;
+  return canonicalId;
 }
 
 async function ensureSession(
@@ -1667,7 +1670,7 @@ async function assertPermission(
        WHERE subject = ?
          AND workspace_id = ?
          AND status = 'active'
-         AND (account_id = ? OR account_id = '*')
+         AND (lower(account_id) = lower(?) OR account_id = '*')
        LIMIT 1`
     )
     .bind(principal.subject, workspaceId, accountId)
