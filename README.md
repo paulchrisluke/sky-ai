@@ -70,6 +70,24 @@ Policy A is active:
 - Triggers install immediately.
 - If key/account is missing, handlers no-op and log why.
 
+## Secrets Policy (3.3)
+
+- Secrets are stored only in Apps Script Script Properties.
+- No secret values are committed in source, manifest, README, or clasp templates.
+- Logs must never include raw credentials; logging uses redaction for bearer/auth/api-key patterns.
+- Do not place secrets in Sheets, UI prompts, constants, or local committed files.
+
+## Skyler Onboarding (No Sheets/UI Required)
+
+When Skyler's Workspace account and Claude key are available, setup can be completed entirely in Apps Script:
+
+1. Open the target Apps Script project (standalone).
+2. Open `Project Settings` -> `Script properties`.
+3. Add `CLAUDE_API_KEY` with the real key value.
+4. Run `bootstrap()` once and approve OAuth prompts.
+5. Run `listTriggers()` to confirm `triageInbox` and `sendDailyBriefing`.
+6. Run `triageInbox()` and `sendDailyBriefing()` once to verify safe execution.
+
 ## Definition of Done (Current Phase)
 
 - Clean public repo skeleton exists.
