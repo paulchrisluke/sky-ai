@@ -2,18 +2,12 @@ interface Env {
   SKY_DB: D1Database;
   SKY_ARTIFACTS: R2Bucket;
   SKY_VECTORIZE: VectorizeIndex;
-  GOOGLE_CLIENT_ID?: string;
-  GOOGLE_CLIENT_SECRET?: string;
-  GOOGLE_REDIRECT_URI?: string;
   CLAUDE_API_KEY?: string;
   CF_AIG_AUTH_TOKEN?: string;
   AIG_ACCOUNT_ID?: string;
   AIG_GATEWAY_ID?: string;
   CLAUDE_MODEL?: string;
   MAILBOX_SKYLERBAIRD_ME_COM?: string;
-  MAILBOX_SKY_BOOSTEDSAFE_COM?: string;
-  GOOGLE_REFRESH_TOKEN_SKYLERBAIRD_ME_COM?: string;
-  GOOGLE_REFRESH_TOKEN_SKY_BOOSTEDSAFE_COM?: string;
   ENVIRONMENT: string;
 }
 

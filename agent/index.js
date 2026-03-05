@@ -27,16 +27,7 @@ const ACCOUNTS = [
     id: sanitizeAccountId(process.env.APPLE_ID),
     email: process.env.APPLE_ID,
     password: process.env.APPLE_APP_PASSWORD
-  },
-  ...(process.env.SECOND_APPLE_ID && process.env.SECOND_APP_PASSWORD
-    ? [
-        {
-          id: sanitizeAccountId(process.env.SECOND_APPLE_ID),
-          email: process.env.SECOND_APPLE_ID,
-          password: process.env.SECOND_APP_PASSWORD
-        }
-      ]
-    : [])
+  }
 ];
 
 function sanitizeAccountId(email) {

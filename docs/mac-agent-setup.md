@@ -21,7 +21,6 @@ npm install
 Fill `agent/.env` with:
 
 - `APPLE_ID` / `APPLE_APP_PASSWORD`
-- optional `SECOND_APPLE_ID` / `SECOND_APP_PASSWORD`
 - `WORKER_INGEST_URL`
 - optional `WORKER_API_KEY`
 

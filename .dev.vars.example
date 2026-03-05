@@ -1,16 +1,10 @@
 # Copy to .dev.vars for local development.
 # Do not commit .dev.vars.
 
-GOOGLE_CLIENT_ID="replace-me"
-GOOGLE_CLIENT_SECRET="replace-me"
-GOOGLE_REDIRECT_URI="http://localhost:8787/oauth/callback"
 AIG_ACCOUNT_ID="replace-me"
 AIG_GATEWAY_ID="replace-me"
 CLAUDE_MODEL="claude-sonnet-4-5"
 CLAUDE_API_KEY="replace-me"
 MAILBOX_SKYLERBAIRD_ME_COM="SkylerBaird@me.com"
-MAILBOX_SKY_BOOSTEDSAFE_COM="Sky@boostedsafe.com"
-GOOGLE_REFRESH_TOKEN_SKYLERBAIRD_ME_COM="replace-me"
-GOOGLE_REFRESH_TOKEN_SKY_BOOSTEDSAFE_COM="replace-me"
 # Optional if AI Gateway requires auth on your account:
 # CF_AIG_AUTH_TOKEN="replace-me"

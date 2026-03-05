@@ -37,12 +37,8 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
    - update `wrangler.toml` with the returned DEV D1 `database_id`
    - `npx wrangler d1 migrations apply sky-ai-dev`
 4. Set dev secrets:
-   - `npx wrangler secret put GOOGLE_CLIENT_ID`
-   - `npx wrangler secret put GOOGLE_CLIENT_SECRET`
-   - `npx wrangler secret put GOOGLE_REDIRECT_URI`
    - `npx wrangler secret put CLAUDE_API_KEY`
-   - `npx wrangler secret put GOOGLE_REFRESH_TOKEN_SKYLERBAIRD_ME_COM`
-   - `npx wrangler secret put GOOGLE_REFRESH_TOKEN_SKY_BOOSTEDSAFE_COM`
+   - `npx wrangler secret put CF_AIG_AUTH_TOKEN` (optional)
 5. Deploy:
    - `npx wrangler deploy`
 6. Validate:
@@ -63,15 +59,12 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
   - optional `CF_AIG_AUTH_TOKEN`
 - Mailbox identity vars:
   - `MAILBOX_SKYLERBAIRD_ME_COM` (`SkylerBaird@me.com`)
-  - `MAILBOX_SKY_BOOSTEDSAFE_COM` (`Sky@boostedsafe.com`)
-- Mailbox refresh token vars:
-  - `GOOGLE_REFRESH_TOKEN_SKYLERBAIRD_ME_COM`
-  - `GOOGLE_REFRESH_TOKEN_SKY_BOOSTEDSAFE_COM`
 
 ## Secrets Clarification
 
 - `wrangler secret put` is encrypted at rest by Cloudflare.
-- For this single-tenant setup, mailbox refresh tokens are stored as Worker secrets (not in D1).
+- In the current setup, iCloud app-specific password is used only by the Mac agent (`agent/.env`).
+- Worker secrets currently needed are AI-related (`CLAUDE_API_KEY`, optional `CF_AIG_AUTH_TOKEN`).
 
 ## Status While Waiting On Skyler OAuth/Claude Key
 

@@ -33,9 +33,6 @@ Set these local values in `.dev.vars`:
 - `CLAUDE_MODEL` (default `claude-sonnet-4-5`)
 - `CLAUDE_API_KEY`
 - `MAILBOX_SKYLERBAIRD_ME_COM` (`SkylerBaird@me.com`)
-- `MAILBOX_SKY_BOOSTEDSAFE_COM` (`Sky@boostedsafe.com`)
-- `GOOGLE_REFRESH_TOKEN_SKYLERBAIRD_ME_COM`
-- `GOOGLE_REFRESH_TOKEN_SKY_BOOSTEDSAFE_COM`
 - optional: `CF_AIG_AUTH_TOKEN`
 
 ## 2) Provision DEV infrastructure
@@ -57,12 +54,7 @@ npx wrangler d1 migrations apply sky-ai-dev
 ## 3) Push secrets (DEV)
 
 ```bash
-npx wrangler secret put GOOGLE_CLIENT_ID
-npx wrangler secret put GOOGLE_CLIENT_SECRET
-npx wrangler secret put GOOGLE_REDIRECT_URI
 npx wrangler secret put CLAUDE_API_KEY
-npx wrangler secret put GOOGLE_REFRESH_TOKEN_SKYLERBAIRD_ME_COM
-npx wrangler secret put GOOGLE_REFRESH_TOKEN_SKY_BOOSTEDSAFE_COM
 npx wrangler secret put CF_AIG_AUTH_TOKEN
 ```
 
@@ -96,11 +88,11 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
 ## Notes while waiting for Skyler OAuth/Claude key
 
 - `POST /tasks/triage` and `POST /briefings/daily` return safe no-op if `CLAUDE_API_KEY` is missing.
-- Gmail/Calendar OAuth sync wiring should be built directly in Cloudflare next.
+- Mail sync runs via Mac IMAP agent (`agent/`) for now.
 - Test gateway wiring with `POST /ai/test`.
 
 ## Secret storage clarification
 
 - `wrangler secret put` stores Worker secrets encrypted at rest by Cloudflare.
 - Those secrets are available to your Worker at runtime as plaintext environment values.
-- For this single-tenant setup, Google refresh tokens are kept in Worker secrets, not persisted in D1.
+- iCloud app-specific password is stored only in the local Mac agent `.env` file.
