@@ -1,101 +1,78 @@
 # sky-ai
 
-`sky-ai` is a standalone Google Apps Script project with a clean DEV/PROD `clasp` workflow and Script Properties-based secret management.
+`sky-ai` is a clean Apps Script skeleton with a `clasp` DEV/PROD workflow and safe trigger stubs that run even before credentials are configured.
+
+## Status
+
+- Public repo: `https://github.com/paulchrisluke/sky-ai`
+- Baseline scaffolding is in place.
+- This phase intentionally has no Gmail reads and no Claude API calls.
+
+## Project Layout
+
+- `src/Logging.gs`
+- `src/Config.gs`
+- `src/Triggers.gs`
+- `src/Main.gs`
+- `src/appsscript.json`
+- `.clasp.dev.json.template`
+- `.clasp.prod.json.template`
+- `docs/onboarding.md`
 
 ## Prerequisites
 
 - Node.js 20+
 - npm
-- Google account access to your Apps Script projects
+- Google account for Apps Script (DEV first)
 
-## Setup
+## clasp Workflow
 
-1. Clone repo and install dependencies:
+1. Install deps:
    - `npm install`
-2. Authenticate clasp:
+2. Login:
    - `npx clasp login`
-3. Create two standalone Apps Script projects:
-   - DEV project
-   - PROD project
-4. Copy each project `scriptId` from Apps Script project settings.
+3. Create/select DEV Apps Script project and copy script ID.
+4. Link local to DEV:
+   - `cp .clasp.dev.json.template .clasp.json`
+   - edit `.clasp.json` and set `scriptId`
+5. Push:
+   - `npx clasp push`
+6. Verify drift:
+   - `npx clasp status`
 
-## Link DEV/PROD script IDs
-
-DEV mapping:
-
-1. `cp .clasp.dev.json.template .clasp.json`
-2. Edit `.clasp.json` and set DEV `scriptId`
-
-PROD mapping:
+For PROD later:
 
 1. `cp .clasp.prod.json.template .clasp.json`
-2. Edit `.clasp.json` and set PROD `scriptId`
-
-`rootDir` is fixed to `src`, so pushes always use files in `/src`.
-
-## Push workflow
-
-DEV:
-
-1. `cp .clasp.dev.json.template .clasp.json`
-2. Set DEV `scriptId`
+2. set PROD `scriptId`
 3. `npx clasp push`
 4. `npx clasp status`
 
-PROD:
+## Runtime Functions
 
-1. `cp .clasp.prod.json.template .clasp.json`
-2. Set PROD `scriptId`
-3. `npx clasp push`
-4. `npx clasp status`
+- `bootstrap()`
+  - writes defaults
+  - installs managed triggers
+  - logs clear warning if `CLAUDE_API_KEY` is missing (does not throw)
+- `installTriggers()` / `uninstallTriggers()` / `listTriggers()`
+- `triageInbox()` stub
+  - logs
+  - writes `last_run_at`
+  - no-ops safely if key missing
+- `sendDailyBriefing()` stub
+  - logs
+  - writes `last_briefing_at`
+  - no-ops safely if key missing
 
-Use `npx clasp pull` only when you intentionally want to sync remote changes into local source.
+## Blocked Behavior Policy
 
-## Verify in Apps Script
+Policy A is active:
 
-After pushing to DEV:
+- Triggers install immediately.
+- If key/account is missing, handlers no-op and log why.
 
-1. Run `bootstrapProject` once from Apps Script editor (or `npx clasp run bootstrapProject`).
-2. Approve OAuth scopes when prompted.
-3. Confirm a time-based trigger exists for `runAutomationCycle`.
-4. Run `runAutomationCycle` once and check Executions.
-5. Run `npx clasp status` locally to ensure no drift.
+## Definition of Done (Current Phase)
 
-After DEV is stable, repeat on PROD.
-
-## Secrets (Script Properties)
-
-Store secrets only in Script Properties; never in code, sheets, or committed files.
-
-Set Claude key:
-
-1. Open Apps Script project settings.
-2. Add script property:
-   - key: `CLAUDE_API_KEY`
-   - value: your real key
-3. Run `validateSecrets`.
-4. Confirm it returns masked preview (`first4...last4`).
-
-Optional CLI update flow (if Apps Script API execution is enabled):
-
-- `npx clasp run setClaudeApiKey --params '["YOUR_KEY"]'`
-
-Key rotation:
-
-1. Set new key in DEV and run `validateSecrets`.
-2. Set new key in PROD and run `validateSecrets`.
-
-No code changes are required for key rotation.
-
-## Logging and redaction
-
-- Logs redact bearer authorization tokens.
-- Logs redact values associated with `CLAUDE_API_KEY` and generic `api_key` patterns.
-- Never log full secret values.
-
-## Trigger management
-
-- Install or reset baseline trigger: run `installDefaultTriggers`
-- Remove baseline trigger: run `clearDefaultTriggers`
-
-`bootstrapProject` installs the default time-based trigger and validates secret configuration.
+- Clean public repo skeleton exists.
+- `clasp push` works to DEV.
+- `bootstrap()` installs triggers and persists properties.
+- `triageInbox()` and `sendDailyBriefing()` run safely without credentials.

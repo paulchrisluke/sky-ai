@@ -1,53 +1,64 @@
-function bootstrapProject() {
-  installDefaultTriggers();
+function bootstrap() {
+  writeDefaultConfig();
+  installTriggers();
+
+  if (!hasClaudeApiKey()) {
+    logInfo('Bootstrap complete with warning: CLAUDE_API_KEY missing. Triggers are installed (Policy A no-op mode).');
+    return {
+      ok: true,
+      mode: 'no_key',
+      message: 'Triggers installed. Claude key missing; automation handlers remain safe no-op stubs.'
+    };
+  }
+
+  logInfo('Bootstrap complete: CLAUDE_API_KEY detected.');
   return {
-    app: APP_NAME,
-    triggerHandler: TRIGGER_CONFIG.HANDLER,
-    triggerEveryHours: TRIGGER_CONFIG.EVERY_HOURS,
-    secretStatus: validateSecrets()
+    ok: true,
+    mode: 'ready',
+    message: 'Triggers installed and key detected.'
   };
 }
 
-function installDefaultTriggers() {
-  const existing = ScriptApp.getProjectTriggers().filter(function(trigger) {
-    return trigger.getHandlerFunction() === TRIGGER_CONFIG.HANDLER;
-  });
+function triageInbox() {
+  const nowIso = new Date().toISOString();
+  getScriptProperties().setProperty(PROPERTY_KEYS.LAST_RUN_AT, nowIso);
 
-  existing.forEach(function(trigger) {
-    ScriptApp.deleteTrigger(trigger);
-  });
-
-  ScriptApp.newTrigger(TRIGGER_CONFIG.HANDLER)
-    .timeBased()
-    .everyHours(TRIGGER_CONFIG.EVERY_HOURS)
-    .create();
-
-  logInfo('Installed trigger for handler ' + TRIGGER_CONFIG.HANDLER + '.');
-}
-
-function clearDefaultTriggers() {
-  ScriptApp.getProjectTriggers().forEach(function(trigger) {
-    if (trigger.getHandlerFunction() === TRIGGER_CONFIG.HANDLER) {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
-
-  logInfo('Cleared default trigger set.');
-}
-
-function runAutomationCycle() {
-  logInfo(APP_NAME + ' cycle started.');
-
-  try {
-    const secretCheck = validateSecrets();
-    if (!secretCheck.ok) {
-      throw new Error(secretCheck.message);
-    }
-
-    // Placeholder for future automation steps.
-    logInfo(APP_NAME + ' cycle completed.');
-  } catch (err) {
-    logError(APP_NAME + ' cycle failed.', err);
-    throw err;
+  if (!hasClaudeApiKey()) {
+    logInfo('triageInbox no-op: missing CLAUDE_API_KEY.', { lastRunAt: nowIso });
+    return {
+      ok: true,
+      noop: true,
+      reason: 'missing_claude_key',
+      lastRunAt: nowIso
+    };
   }
+
+  logInfo('triageInbox stub executed (no external calls in this phase).', { lastRunAt: nowIso });
+  return {
+    ok: true,
+    noop: true,
+    lastRunAt: nowIso
+  };
+}
+
+function sendDailyBriefing() {
+  const nowIso = new Date().toISOString();
+  getScriptProperties().setProperty(PROPERTY_KEYS.LAST_BRIEFING_AT, nowIso);
+
+  if (!hasClaudeApiKey()) {
+    logInfo('sendDailyBriefing no-op: missing CLAUDE_API_KEY.', { lastBriefingAt: nowIso });
+    return {
+      ok: true,
+      noop: true,
+      reason: 'missing_claude_key',
+      lastBriefingAt: nowIso
+    };
+  }
+
+  logInfo('sendDailyBriefing stub executed (no external calls in this phase).', { lastBriefingAt: nowIso });
+  return {
+    ok: true,
+    noop: true,
+    lastBriefingAt: nowIso
+  };
 }
