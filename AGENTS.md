@@ -1,0 +1,1 @@
+Greenfield app: no backward-compat/legacy support. Do not add fallback paths, silent catches, default substitutions, or retry-on-unknown-error logic unless explicitly requested by the user; propagate backend/runtime errors verbatim.
