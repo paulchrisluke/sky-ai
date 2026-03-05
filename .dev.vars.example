@@ -10,3 +10,7 @@ WORKER_API_KEY="replace-me"
 MAILBOX_SKYLERBAIRD_ME_COM="SkylerBaird@me.com"
 # Optional if AI Gateway auth is enforced:
 # CF_AIG_AUTH_TOKEN="replace-me"
+
+# Optional for scripts/validate-api-e2e.sh (Access service-token E2E checks):
+# CF_ACCESS_CLIENT_ID="replace-me"
+# CF_ACCESS_CLIENT_SECRET="replace-me"
