@@ -76,6 +76,10 @@ export default {
       return approveAction(request, env);
     }
 
+    if (request.method === 'GET' && url.pathname === '/ops/account/status') {
+      return getAccountOpsStatus(request, env);
+    }
+
     return json({ ok: false, error: 'Not found' }, 404);
   }
 };
@@ -940,6 +944,81 @@ async function approveAction(request: Request, env: Env): Promise<Response> {
     .run();
 
   return json({ ok: true, action: { id: row.id, status: 'approved', nextStep: 'manual_or_separate_executor_required' } });
+}
+
+async function getAccountOpsStatus(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+
+  const url = new URL(request.url);
+  const workspaceId = url.searchParams.get('workspaceId') || 'default';
+  const accountId = url.searchParams.get('accountId');
+  if (!accountId) return json({ ok: false, error: 'accountId is required' }, 400);
+
+  const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+  if (!permission.ok) return permission.response;
+
+  const [messages, threads, chunks, embeddings, tasksOpen, followupsOpen, decisionsRecent] = await Promise.all([
+    env.SKY_DB
+      .prepare('SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND account_id = ?')
+      .bind(workspaceId, accountId)
+      .first<{ c: number }>(),
+    env.SKY_DB
+      .prepare('SELECT COUNT(*) AS c FROM email_threads WHERE workspace_id = ? AND account_id = ?')
+      .bind(workspaceId, accountId)
+      .first<{ c: number }>(),
+    env.SKY_DB
+      .prepare('SELECT COUNT(*) AS c FROM memory_chunks WHERE workspace_id = ? AND account_id = ?')
+      .bind(workspaceId, accountId)
+      .first<{ c: number }>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT
+            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing,
+            SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) AS retry,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+         FROM embedding_jobs
+         WHERE workspace_id = ? AND account_id = ?`
+      )
+      .bind(workspaceId, accountId)
+      .first<{ pending: number | null; processing: number | null; retry: number | null; completed: number | null; failed: number | null }>(),
+    env.SKY_DB
+      .prepare("SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND account_id = ? AND status IN ('ready','needs_review')")
+      .bind(workspaceId, accountId)
+      .first<{ c: number }>(),
+    env.SKY_DB
+      .prepare("SELECT COUNT(*) AS c FROM followups WHERE workspace_id = ? AND account_id = ? AND status IN ('ready','needs_review')")
+      .bind(workspaceId, accountId)
+      .first<{ c: number }>(),
+    env.SKY_DB
+      .prepare("SELECT COUNT(*) AS c FROM decisions WHERE workspace_id = ? AND account_id = ? AND date(created_at) >= date('now','-7 days')")
+      .bind(workspaceId, accountId)
+      .first<{ c: number }>()
+  ]);
+
+  return json({
+    ok: true,
+    workspaceId,
+    accountId,
+    counts: {
+      messages: Number(messages?.c || 0),
+      threads: Number(threads?.c || 0),
+      memoryChunks: Number(chunks?.c || 0),
+      tasksOpen: Number(tasksOpen?.c || 0),
+      followupsOpen: Number(followupsOpen?.c || 0),
+      decisionsLast7d: Number(decisionsRecent?.c || 0)
+    },
+    embeddings: {
+      pending: Number(embeddings?.pending || 0),
+      processing: Number(embeddings?.processing || 0),
+      retry: Number(embeddings?.retry || 0),
+      completed: Number(embeddings?.completed || 0),
+      failed: Number(embeddings?.failed || 0)
+    },
+    generatedAt: new Date().toISOString()
+  });
 }
 
 async function executeIntent(
