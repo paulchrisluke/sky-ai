@@ -7,10 +7,16 @@ This is the operational setup for a non-technical user Mac that must auto-recove
 ```bash
 brew install node
 npm install -g pm2
-brew install cloudflared
 ```
 
-## 2) Configure local agent
+## 2) Get the project
+
+```bash
+git clone https://github.com/paulchrisluke/sky-ai.git
+cd sky-ai
+```
+
+## 3) Configure local agent
 
 ```bash
 cd agent
@@ -29,7 +35,7 @@ Fill `agent/.env` with:
 
 Use Apple app-specific passwords only.
 
-## 3) Start as persistent service
+## 4) Start as persistent service
 
 ```bash
 cd agent
@@ -40,7 +46,7 @@ pm2 startup
 
 Run the command printed by `pm2 startup` (it usually needs `sudo`).
 
-## 4) (Optional) Install Cloudflare Tunnel as service
+## 5) (Optional) Install Cloudflare Tunnel as service
 
 1. Create tunnel in Cloudflare Zero Trust.
 2. Copy tunnel token.
@@ -50,13 +56,13 @@ Run the command printed by `pm2 startup` (it usually needs `sudo`).
 sudo cloudflared service install <TUNNEL_TOKEN>
 ```
 
-## 5) Remote support safety net
+## 6) Remote support safety net
 
 Enable macOS Screen Sharing:
 
 - System Settings -> General -> Sharing -> Screen Sharing: ON
 
-## 6) Health checks
+## 7) Health checks
 
 ```bash
 pm2 status
