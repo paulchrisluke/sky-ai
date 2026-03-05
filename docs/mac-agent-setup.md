@@ -31,6 +31,9 @@ Fill `agent/.env` with:
 - `WORKER_OUTBOUND_NEXT_URL`
 - `WORKER_OUTBOUND_RESULT_URL`
 - `WORKER_API_KEY` (required; must match Worker secret)
+- `MAILBOXES` (default: `INBOX,Sent Messages`)
+- `POLL_INTERVAL_MS` (recommended: `60000`)
+- `STATE_FILE` (default: `../data/mailbox-state.json`)
 - SMTP defaults for iCloud are already in `.env.example` (`smtp.mail.me.com:587`)
 
 Use Apple app-specific passwords only.
@@ -61,7 +64,7 @@ pm2 logs email-sync --lines 100
 
 ## Suggested sync interval
 
-Start with `POLL_INTERVAL_MS=60000` (60s). If rate-limited, move to 120000-300000.
+Start with `POLL_INTERVAL_MS=60000` (60s). If rate-limited, move to `120000`-`300000`.
 
 ## Notes
 
