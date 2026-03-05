@@ -1182,15 +1182,15 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
 
   const [messages, threads, chunks, embeddings, tasksOpen, followupsOpen, decisionsRecent] = await Promise.all([
     env.SKY_DB
-      .prepare('SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND account_id = ?')
+      .prepare('SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND lower(account_id) = lower(?)')
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
-      .prepare('SELECT COUNT(*) AS c FROM email_threads WHERE workspace_id = ? AND account_id = ?')
+      .prepare('SELECT COUNT(*) AS c FROM email_threads WHERE workspace_id = ? AND lower(account_id) = lower(?)')
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
-      .prepare('SELECT COUNT(*) AS c FROM memory_chunks WHERE workspace_id = ? AND account_id = ?')
+      .prepare('SELECT COUNT(*) AS c FROM memory_chunks WHERE workspace_id = ? AND lower(account_id) = lower(?)')
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
@@ -1200,20 +1200,20 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
             SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) AS retry,
             SUM(CASE WHEN status = 'indexed' THEN 1 ELSE 0 END) AS indexed
          FROM embedding_jobs
-         WHERE workspace_id = ? AND account_id = ?`
+         WHERE workspace_id = ? AND lower(account_id) = lower(?)`
       )
       .bind(workspaceId, accountId)
       .first<{ queued: number | null; retry: number | null; indexed: number | null }>(),
     env.SKY_DB
-      .prepare("SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND account_id = ? AND status IN ('ready','needs_review')")
+      .prepare("SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND lower(account_id) = lower(?) AND status IN ('ready','needs_review')")
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
-      .prepare("SELECT COUNT(*) AS c FROM followups WHERE workspace_id = ? AND account_id = ? AND status IN ('ready','needs_review')")
+      .prepare("SELECT COUNT(*) AS c FROM followups WHERE workspace_id = ? AND lower(account_id) = lower(?) AND status IN ('ready','needs_review')")
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
-      .prepare("SELECT COUNT(*) AS c FROM decisions WHERE workspace_id = ? AND account_id = ? AND date(created_at) >= date('now','-7 days')")
+      .prepare("SELECT COUNT(*) AS c FROM decisions WHERE workspace_id = ? AND lower(account_id) = lower(?) AND date(created_at) >= date('now','-7 days')")
       .bind(workspaceId, accountId)
       .first<{ c: number }>()
   ]);
@@ -1265,7 +1265,7 @@ async function getIngestStats(request: Request, env: Env): Promise<Response> {
 
   const [total, last24h, latest] = await Promise.all([
     env.SKY_DB
-      .prepare(`SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND account_id = ?`)
+      .prepare(`SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND lower(account_id) = lower(?)`)
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
@@ -1273,7 +1273,7 @@ async function getIngestStats(request: Request, env: Env): Promise<Response> {
         `SELECT COUNT(*) AS c
          FROM email_messages
          WHERE workspace_id = ?
-           AND account_id = ?
+           AND lower(account_id) = lower(?)
            AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-24 hours')`
       )
       .bind(workspaceId, accountId)
@@ -1283,7 +1283,7 @@ async function getIngestStats(request: Request, env: Env): Promise<Response> {
         `SELECT MAX(created_at) AS last_ingested_at, MAX(sent_at) AS last_sent_at
          FROM email_messages
          WHERE workspace_id = ?
-           AND account_id = ?`
+           AND lower(account_id) = lower(?)`
       )
       .bind(workspaceId, accountId)
       .first<{ last_ingested_at: string | null; last_sent_at: string | null }>()
@@ -1320,7 +1320,7 @@ async function getQueueStats(request: Request, env: Env): Promise<Response> {
           MIN(CASE WHEN status IN ('queued','retry') THEN next_attempt_at END) AS oldest_next_attempt_at
        FROM embedding_jobs
        WHERE workspace_id = ?
-         AND account_id = ?`
+         AND lower(account_id) = lower(?)`
     )
     .bind(workspaceId, accountId)
     .first<{ queued: number | null; retry: number | null; indexed: number | null; oldest_next_attempt_at: string | null }>();
@@ -1350,7 +1350,7 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
       .prepare(
         `SELECT SUM(CASE WHEN review_state = 'needs_review' THEN 1 ELSE 0 END) AS c
          FROM tasks
-         WHERE workspace_id = ? AND account_id = ?`
+         WHERE workspace_id = ? AND lower(account_id) = lower(?)`
       )
       .bind(workspaceId, accountId)
       .first<{ c: number | null }>(),
@@ -1358,7 +1358,7 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
       .prepare(
         `SELECT SUM(CASE WHEN review_state = 'needs_review' THEN 1 ELSE 0 END) AS c
          FROM followups
-         WHERE workspace_id = ? AND account_id = ?`
+         WHERE workspace_id = ? AND lower(account_id) = lower(?)`
       )
       .bind(workspaceId, accountId)
       .first<{ c: number | null }>(),
@@ -1366,7 +1366,7 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
       .prepare(
         `SELECT SUM(CASE WHEN review_state = 'needs_review' THEN 1 ELSE 0 END) AS c
          FROM decisions
-         WHERE workspace_id = ? AND account_id = ?`
+         WHERE workspace_id = ? AND lower(account_id) = lower(?)`
       )
       .bind(workspaceId, accountId)
       .first<{ c: number | null }>(),
@@ -1376,7 +1376,7 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
             SUM(CASE WHEN status = 'needs_review' THEN 1 ELSE 0 END) AS extractions_needs_review,
             COUNT(*) AS extractions_total
          FROM message_extractions
-         WHERE workspace_id = ? AND account_id = ?`
+         WHERE workspace_id = ? AND lower(account_id) = lower(?)`
       )
       .bind(workspaceId, accountId)
       .first<{ extractions_needs_review: number | null; extractions_total: number | null }>(),
@@ -1387,7 +1387,7 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
             COUNT(*) AS total_runs
          FROM run_search_audits
          WHERE workspace_id = ?
-           AND account_id = ?
+           AND lower(account_id) = lower(?)
            AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-7 days')`
       )
       .bind(workspaceId, accountId)
