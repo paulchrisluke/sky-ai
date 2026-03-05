@@ -16,11 +16,15 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 
 - `src/worker.ts`
 - `src/types.d.ts`
+- `workers/api/src/worker.ts`
 - `db/migrations/0001_init.sql`
 - `db/migrations/0002_outbound_messages.sql`
 - `db/migrations/0003_email_canonical_schema.sql`
 - `db/migrations/0004_embedding_jobs.sql`
+- `db/migrations/0005_chat_sessions_and_actions.sql`
+- `db/migrations/0006_account_id_on_email_memory.sql`
 - `wrangler.toml`
+- `wrangler.api.toml`
 - `docs/cloudflare-setup.md`
 - `agent/index.js`
 - `agent/.env.example`
@@ -47,6 +51,7 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
    - `npx wrangler d1 migrations apply sky-ai-dev`
 6. Deploy:
    - `npx wrangler deploy`
+   - `npx wrangler deploy --config wrangler.api.toml`
 7. Validate:
    - `curl "https://<worker-subdomain>.workers.dev/health"`
 
@@ -100,6 +105,17 @@ Use the auto-generated Worker domain by default:
 - Cron drains embedding retries every 15 minutes.
 - You can manually trigger processing:
   - `curl -X POST "https://<worker>.workers.dev/embeddings/process" -H "authorization: Bearer <WORKER_API_KEY>"`
+
+## API Worker (Chat/Actions)
+
+- API worker health: `GET /health`
+- Citation-required chat:
+  - `GET /ws/chat?workspaceId=default&accountId=<account_id>` (websocket)
+  - `POST /chat/query`
+- Approval-only actions:
+  - `POST /actions/propose`
+  - `POST /actions/approve`
+- Durable Object coordinator class: `ChatCoordinator`
 
 ## Historical Backfill (Controlled)
 

@@ -1,0 +1,38 @@
+name = "sky-ai-api"
+main = "workers/api/src/worker.ts"
+compatibility_date = "2026-03-05"
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "dev"
+
+[[d1_databases]]
+binding = "SKY_DB"
+database_name = "sky-ai-dev"
+database_id = "4d6853be-e6da-45df-b054-afd2207413e6"
+migrations_dir = "db/migrations"
+
+[[durable_objects.bindings]]
+name = "CHAT_COORDINATOR"
+class_name = "ChatCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ChatCoordinator"]
+
+[env.prod]
+workers_dev = false
+route = { pattern = "sky-ai-api.example.com/*", zone_name = "example.com" }
+
+[env.prod.vars]
+ENVIRONMENT = "prod"
+
+[[env.prod.d1_databases]]
+binding = "SKY_DB"
+database_name = "sky-ai-prod"
+database_id = "e0dc4ec1-26d5-46db-819d-a416bb76c7ec"
+migrations_dir = "db/migrations"
+
+[[env.prod.durable_objects.bindings]]
+name = "CHAT_COORDINATOR"
+class_name = "ChatCoordinator"

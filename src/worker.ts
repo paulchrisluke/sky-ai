@@ -112,6 +112,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
   const accountEmail = (stringOr(payload.accountEmail) || 'unknown').toLowerCase();
+  const accountId = (stringOr(payload.accountId) || accountEmail).toLowerCase();
   const mailbox = stringOr(payload.mailbox) || 'INBOX';
   const threadExternalId = stringOr(payload.threadId);
   const providerUid = numberOr(payload.uid);
@@ -125,7 +126,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
 
   const sourceMessageKey = buildSourceMessageKey({
     workspaceId,
-    accountEmail,
+    accountId,
     mailbox,
     providerUid,
     providerMessageId,
@@ -149,6 +150,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
 
   const threadId = await upsertEmailThread(env, {
     workspaceId,
+    accountId,
     accountEmail,
     mailbox,
     threadExternalId,
@@ -172,7 +174,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
       workspaceId,
       threadExternalId,
       artifactKey,
-      JSON.stringify({ ingestedBy: 'imap-agent', sourceMessageKey, accountEmail, mailbox })
+      JSON.stringify({ ingestedBy: 'imap-agent', sourceMessageKey, accountId, accountEmail, mailbox })
     )
     .run();
 
@@ -188,6 +190,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
       workspaceId,
       artifactId,
       JSON.stringify({
+        accountId,
         accountEmail,
         mailbox,
         threadExternalId,
@@ -209,14 +212,15 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   await env.SKY_DB
     .prepare(
       `INSERT INTO email_messages
-       (id, workspace_id, thread_id, account_email, mailbox, provider_uid, provider_message_id, source_message_key, subject,
+       (id, workspace_id, thread_id, account_id, account_email, mailbox, provider_uid, provider_message_id, source_message_key, subject,
         sent_at, from_json, to_json, snippet, artifact_id, raw_sha256, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     )
     .bind(
       messageId,
       workspaceId,
       threadId,
+      accountId,
       accountEmail,
       mailbox,
       providerUid,
@@ -245,16 +249,17 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
     for (let i = 0; i < chunks.length; i += 1) {
       await env.SKY_DB
         .prepare(
-          `INSERT INTO memory_chunks (id, workspace_id, source_record_id, vector_id, chunk_text, metadata_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+          `INSERT INTO memory_chunks (id, workspace_id, account_id, source_record_id, vector_id, chunk_text, metadata_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
         )
         .bind(
           crypto.randomUUID(),
           workspaceId,
+          accountId,
           recordId,
           `${messageId}:${i}`,
           chunks[i],
-          JSON.stringify({ messageId, threadId, mailbox, accountEmail, sentAt, chunkIndex: i })
+          JSON.stringify({ messageId, threadId, mailbox, accountId, accountEmail, sentAt, chunkIndex: i })
         )
         .run();
     }
@@ -280,6 +285,7 @@ async function upsertEmailThread(
   env: Env,
   input: {
     workspaceId: string;
+    accountId: string;
     accountEmail: string;
     mailbox: string;
     threadExternalId: string;
@@ -290,12 +296,13 @@ async function upsertEmailThread(
   await env.SKY_DB
     .prepare(
       `INSERT OR IGNORE INTO email_threads
-       (id, workspace_id, account_email, mailbox, thread_external_id, subject, first_message_at, last_message_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+       (id, workspace_id, account_id, account_email, mailbox, thread_external_id, subject, first_message_at, last_message_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     )
     .bind(
       crypto.randomUUID(),
       input.workspaceId,
+      input.accountId,
       input.accountEmail,
       input.mailbox,
       input.threadExternalId,
@@ -308,10 +315,10 @@ async function upsertEmailThread(
   const row = await env.SKY_DB
     .prepare(
       `SELECT id FROM email_threads
-       WHERE workspace_id = ? AND account_email = ? AND mailbox = ? AND thread_external_id = ?
+       WHERE workspace_id = ? AND account_id = ? AND mailbox = ? AND thread_external_id = ?
        LIMIT 1`
     )
-    .bind(input.workspaceId, input.accountEmail, input.mailbox, input.threadExternalId)
+    .bind(input.workspaceId, input.accountId, input.mailbox, input.threadExternalId)
     .first<{ id: string }>();
 
   if (!row) {
@@ -764,7 +771,7 @@ function chunkText(text: string, size: number, overlap: number, maxChunks: numbe
 
 function buildSourceMessageKey(input: {
   workspaceId: string;
-  accountEmail: string;
+  accountId: string;
   mailbox: string;
   providerUid: number | null;
   providerMessageId: string | null;
@@ -773,14 +780,14 @@ function buildSourceMessageKey(input: {
   subject: string;
 }): string {
   if (input.providerUid !== null) {
-    return `${input.workspaceId}:${input.accountEmail}:${input.mailbox}:uid:${input.providerUid}`;
+    return `${input.workspaceId}:${input.accountId}:${input.mailbox}:uid:${input.providerUid}`;
   }
 
   if (input.providerMessageId) {
-    return `${input.workspaceId}:${input.accountEmail}:mid:${input.providerMessageId}`;
+    return `${input.workspaceId}:${input.accountId}:mid:${input.providerMessageId}`;
   }
 
-  return `${input.workspaceId}:${input.accountEmail}:${input.mailbox}:thread:${input.threadExternalId}:${input.sentAt || ''}:${input.subject}`;
+  return `${input.workspaceId}:${input.accountId}:${input.mailbox}:thread:${input.threadExternalId}:${input.sentAt || ''}:${input.subject}`;
 }
 
 function safeForKey(input: string): string {
