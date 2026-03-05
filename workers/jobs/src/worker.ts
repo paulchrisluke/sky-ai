@@ -348,6 +348,9 @@ function cleanEmailBody(raw: string): string {
     .replace(/^>.*$/gm, '')
     .replace(/^-{3,}.*Forwarded.*-{3,}$/gim, '')
     .replace(/^(unsubscribe|this email was sent|you are receiving|view in browser|privacy policy).*/gim, '')
+    .replace(/^(sent from my|get outlook for|this email and any attachments).*/gim, '')
+    .replace(/^(begin:vcalendar|end:vcalendar|begin:vevent|dtstart|dtend|organizer).*/gim, '')
+    .replace(/^(confidentiality notice|this message is intended only for).*/gim, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
@@ -356,7 +359,13 @@ function cleanEmailBody(raw: string): string {
     ' '
   );
 
-  return cleaned.trim();
+  return cleaned
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/[A-Za-z0-9+/]{100,}={0,2}/g, '')
+    .replace(/https?:\/\/[^\s]+/g, '')
+    .replace(/[\w.-]+@[\w.-]+\.\w+/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 function parseJsonObject(input: string | null | undefined): Record<string, unknown> {

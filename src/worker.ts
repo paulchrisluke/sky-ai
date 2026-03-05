@@ -754,6 +754,11 @@ function cleanEmailBody(raw: string): string {
     .replace(/^-{3,}.*Forwarded.*-{3,}$/gim, '')
     // Remove common footer boilerplate.
     .replace(/^(unsubscribe|this email was sent|you are receiving|view in browser|privacy policy).*/gim, '')
+    .replace(/^(sent from my|get outlook for|this email and any attachments).*/gim, '')
+    // Remove calendar invite artifacts.
+    .replace(/^(begin:vcalendar|end:vcalendar|begin:vevent|dtstart|dtend|organizer).*/gim, '')
+    // Remove disclaimer blocks.
+    .replace(/^(confidentiality notice|this message is intended only for).*/gim, '')
     // Collapse excessive line breaks.
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -764,7 +769,18 @@ function cleanEmailBody(raw: string): string {
     ' '
   );
 
-  return cleaned.trim();
+  return cleaned
+    // Strip HTML tags.
+    .replace(/<[^>]*>/g, ' ')
+    // Remove long base64-like blobs.
+    .replace(/[A-Za-z0-9+/]{100,}={0,2}/g, '')
+    // Remove URLs.
+    .replace(/https?:\/\/[^\s]+/g, '')
+    // Remove email addresses.
+    .replace(/[\w.-]+@[\w.-]+\.\w+/g, '')
+    // Final whitespace normalization.
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 function buildSourceMessageKey(input: {
