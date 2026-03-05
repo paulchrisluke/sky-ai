@@ -23,6 +23,8 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 - `agent/.env.example`
 - `agent/ecosystem.config.cjs`
 - `docs/mac-agent-setup.md`
+- `docs/tunnel-setup.md`
+- `tunnel/config.yml.example`
 
 ## Quickstart
 

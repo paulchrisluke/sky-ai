@@ -1,0 +1,10 @@
+# Cloudflared local config template
+# Copy to ~/.cloudflared/config.yml on the Mac mini after tunnel creation.
+
+tunnel: REPLACE_TUNNEL_ID
+credentials-file: /Users/skyler/.cloudflared/REPLACE_TUNNEL_ID.json
+
+ingress:
+  - hostname: mail-agent.sky-ai.example.com
+    service: http://localhost:8787
+  - service: http_status:404
