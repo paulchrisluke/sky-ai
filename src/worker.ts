@@ -2,6 +2,7 @@ interface Env {
   SKY_DB: D1Database;
   SKY_ARTIFACTS: R2Bucket;
   SKY_VECTORIZE: VectorizeIndex;
+  WORKER_API_KEY?: string;
   CLAUDE_API_KEY?: string;
   CF_AIG_AUTH_TOKEN?: string;
   AIG_ACCOUNT_ID?: string;
@@ -22,7 +23,23 @@ export default {
     }
 
     if (request.method === 'POST' && url.pathname === '/ingest/gmail-thread') {
+      if (!isAuthorized(request, env)) return unauthorized();
       return ingestGmailThread(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/mail/send') {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return queueOutboundMail(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/mail/outbound/next') {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return claimNextOutboundMail(env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/mail/outbound/result') {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return markOutboundMailResult(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/tasks/triage') {
@@ -130,8 +147,117 @@ async function enqueueSyncJob(env: Env, jobType: string, metadata: JsonRecord): 
     .run();
 }
 
+async function queueOutboundMail(request: Request, env: Env): Promise<Response> {
+  const payload = (await request.json()) as JsonRecord;
+  const to = stringOr(payload.to);
+  const subject = stringOr(payload.subject);
+  const text = stringOr(payload.text);
+  const html = stringOr(payload.html);
+
+  if (!to || !subject || (!text && !html)) {
+    return json({ ok: false, error: 'to, subject, and at least one of text/html are required' }, 400);
+  }
+
+  const id = crypto.randomUUID();
+  await env.SKY_DB
+    .prepare(
+      `INSERT INTO outbound_messages
+       (id, status, to_email, subject, text_body, html_body, error_message, created_at, updated_at, sent_at)
+       VALUES (?, 'queued', ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)`
+    )
+    .bind(id, to, subject, text || null, html || null)
+    .run();
+
+  return json({ ok: true, id, status: 'queued' });
+}
+
+async function claimNextOutboundMail(env: Env): Promise<Response> {
+  const row = await env.SKY_DB
+    .prepare(
+      `SELECT id, to_email, subject, text_body, html_body
+       FROM outbound_messages
+       WHERE status = 'queued'
+       ORDER BY created_at ASC
+       LIMIT 1`
+    )
+    .first<{
+      id: string;
+      to_email: string;
+      subject: string;
+      text_body: string | null;
+      html_body: string | null;
+    }>();
+
+  if (!row) {
+    return json({ ok: true, item: null });
+  }
+
+  await env.SKY_DB
+    .prepare(
+      `UPDATE outbound_messages
+       SET status = 'sending', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(row.id)
+    .run();
+
+  return json({
+    ok: true,
+    item: {
+      id: row.id,
+      to: row.to_email,
+      subject: row.subject,
+      text: row.text_body,
+      html: row.html_body
+    }
+  });
+}
+
+async function markOutboundMailResult(request: Request, env: Env): Promise<Response> {
+  const payload = (await request.json()) as JsonRecord;
+  const id = stringOr(payload.id);
+  const status = stringOr(payload.status);
+  const error = stringOr(payload.error);
+
+  if (!id || (status !== 'sent' && status !== 'failed')) {
+    return json({ ok: false, error: 'id and status(sent|failed) are required' }, 400);
+  }
+
+  if (status === 'sent') {
+    await env.SKY_DB
+      .prepare(
+        `UPDATE outbound_messages
+         SET status = 'sent', sent_at = CURRENT_TIMESTAMP, error_message = NULL, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+      )
+      .bind(id)
+      .run();
+    return json({ ok: true, id, status: 'sent' });
+  }
+
+  await env.SKY_DB
+    .prepare(
+      `UPDATE outbound_messages
+       SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(error || 'unknown_error', id)
+    .run();
+  return json({ ok: true, id, status: 'failed' });
+}
+
 function stringOr(input: unknown): string | null {
   return typeof input === 'string' && input.trim() ? input.trim() : null;
+}
+
+function isAuthorized(request: Request, env: Env): boolean {
+  if (!env.WORKER_API_KEY) return true;
+  const auth = request.headers.get('authorization') || '';
+  return auth === `Bearer ${env.WORKER_API_KEY}`;
+}
+
+function unauthorized(): Response {
+  return json({ ok: false, error: 'unauthorized' }, 401);
 }
 
 function hasAiGatewayConfig(env: Env): boolean {

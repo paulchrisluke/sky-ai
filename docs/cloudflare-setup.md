@@ -56,6 +56,7 @@ npx wrangler d1 migrations apply sky-ai-dev
 ```bash
 npx wrangler secret put CLAUDE_API_KEY
 npx wrangler secret put CF_AIG_AUTH_TOKEN
+npx wrangler secret put WORKER_API_KEY
 ```
 
 Set non-secret AI Gateway vars in `wrangler.toml`:
@@ -90,6 +91,10 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
 - `POST /tasks/triage` and `POST /briefings/daily` return safe no-op if `CLAUDE_API_KEY` is missing.
 - Mail sync runs via Mac IMAP agent (`agent/`) for now.
 - Test gateway wiring with `POST /ai/test`.
+- Outbound mail queue endpoints are:
+  - `POST /mail/send` (enqueue)
+  - `GET /mail/outbound/next` (agent claim)
+  - `POST /mail/outbound/result` (sent/failed ack)
 
 ## Secret storage clarification
 

@@ -22,7 +22,10 @@ Fill `agent/.env` with:
 
 - `APPLE_ID` / `APPLE_APP_PASSWORD`
 - `WORKER_INGEST_URL`
+- `WORKER_OUTBOUND_NEXT_URL`
+- `WORKER_OUTBOUND_RESULT_URL`
 - optional `WORKER_API_KEY`
+- SMTP defaults for iCloud are already in `.env.example` (`smtp.mail.me.com:587`)
 
 Use Apple app-specific passwords only.
 
@@ -68,3 +71,6 @@ Start with `POLL_INTERVAL_MS=60000` (60s). If rate-limited, move to 120000-30000
 ## Notes
 
 - If your Mac agent only needs outbound calls to `workers.dev`, tunnel is not required.
+- Agent now does both:
+  - IMAP ingest (`INBOX`, `Sent Messages`) -> Worker `/ingest/gmail-thread`
+  - SMTP send on behalf of `APPLE_ID` by polling Worker `/mail/outbound/next`

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { ImapFlow } from 'imapflow';
+import nodemailer from 'nodemailer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,6 +67,24 @@ async function postToWorker(payload) {
   }
 }
 
+function workerHeaders() {
+  const headers = { 'content-type': 'application/json' };
+  if (process.env.WORKER_API_KEY) {
+    headers['authorization'] = `Bearer ${process.env.WORKER_API_KEY}`;
+  }
+  return headers;
+}
+
+const smtpTransport = nodemailer.createTransport({
+  host: process.env.SMTP_HOST || 'smtp.mail.me.com',
+  port: Number(process.env.SMTP_PORT || '587'),
+  secure: (process.env.SMTP_SECURE || 'false') === 'true',
+  auth: {
+    user: process.env.APPLE_ID,
+    pass: process.env.APPLE_APP_PASSWORD
+  }
+});
+
 async function syncAccount(account, state) {
   const client = new ImapFlow({
     host: process.env.IMAP_HOST || 'imap.mail.me.com',
@@ -124,8 +143,54 @@ async function run() {
     await syncAccount(account, state);
   }
 
+  await processOutboundQueue();
   saveState(state);
   console.log(`[email-sync] sync complete at ${new Date().toISOString()}`);
+}
+
+async function processOutboundQueue() {
+  const nextUrl = process.env.WORKER_OUTBOUND_NEXT_URL || process.env.WORKER_INGEST_URL.replace('/ingest/gmail-thread', '/mail/outbound/next');
+  const resultUrl =
+    process.env.WORKER_OUTBOUND_RESULT_URL || process.env.WORKER_INGEST_URL.replace('/ingest/gmail-thread', '/mail/outbound/result');
+
+  while (true) {
+    const nextRes = await fetch(nextUrl, { method: 'GET', headers: workerHeaders() });
+    if (!nextRes.ok) {
+      throw new Error(`Failed to poll outbound queue (${nextRes.status})`);
+    }
+
+    const nextJson = await nextRes.json();
+    const item = nextJson?.item;
+    if (!item) {
+      return;
+    }
+
+    try {
+      await smtpTransport.sendMail({
+        from: process.env.APPLE_ID,
+        to: item.to,
+        subject: item.subject,
+        text: item.text || undefined,
+        html: item.html || undefined
+      });
+
+      await fetch(resultUrl, {
+        method: 'POST',
+        headers: workerHeaders(),
+        body: JSON.stringify({ id: item.id, status: 'sent' })
+      });
+    } catch (error) {
+      await fetch(resultUrl, {
+        method: 'POST',
+        headers: workerHeaders(),
+        body: JSON.stringify({
+          id: item.id,
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error)
+        })
+      });
+    }
+  }
 }
 
 async function loop() {
