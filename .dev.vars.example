@@ -2,10 +2,10 @@
 # Do not commit .dev.vars.
 
 AIG_ACCOUNT_ID="replace-me"
-AIG_GATEWAY_ID="replace-me"
+AIG_GATEWAY_ID="sky-ai"
 CLAUDE_MODEL="claude-sonnet-4-5"
 CLAUDE_API_KEY="replace-me"
 WORKER_API_KEY="replace-me"
 MAILBOX_SKYLERBAIRD_ME_COM="SkylerBaird@me.com"
-# Optional if AI Gateway requires auth on your account:
+# Optional if AI Gateway auth is enforced:
 # CF_AIG_AUTH_TOKEN="replace-me"
