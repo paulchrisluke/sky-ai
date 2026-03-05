@@ -1,13 +1,14 @@
 function bootstrap() {
   writeDefaultConfig();
   installTriggers();
-
-  if (!hasClaudeApiKey()) {
+  const secretState = validateSecrets([PROPERTY_KEYS.CLAUDE_API_KEY]);
+  if (!secretState.ok) {
     logInfo('Bootstrap complete with warning: CLAUDE_API_KEY missing. Triggers are installed (Policy A no-op mode).');
     return {
       ok: true,
       mode: 'no_key',
-      message: 'Triggers installed. Claude key missing; automation handlers remain safe no-op stubs.'
+      message: 'Triggers installed. Claude key missing; automation handlers remain safe no-op stubs.',
+      secrets: secretState
     };
   }
 
@@ -15,7 +16,8 @@ function bootstrap() {
   return {
     ok: true,
     mode: 'ready',
-    message: 'Triggers installed and key detected.'
+    message: 'Triggers installed and key detected.',
+    secrets: secretState
   };
 }
 

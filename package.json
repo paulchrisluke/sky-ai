@@ -7,7 +7,9 @@
     "clasp:login": "clasp login",
     "clasp:status": "clasp status",
     "clasp:push": "clasp push",
-    "clasp:pull": "clasp pull"
+    "clasp:pull": "clasp pull",
+    "secrets:load": "node scripts/load-secrets.mjs",
+    "secrets:validate": "clasp run validateSecrets"
   },
   "devDependencies": {
     "@google/clasp": "^2.5.0"
