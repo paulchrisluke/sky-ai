@@ -3030,6 +3030,12 @@ async function extractAndPersistProposals(
     hits: SearchResult[];
   }
 ): Promise<Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }>> {
+  const fullChunkByVectorId = await loadChunkTextByVectorIds(
+    env,
+    input.workspaceId,
+    input.accountId,
+    input.hits.map((h) => h.chunk_id)
+  );
   const compactContext = input.hits
     .slice(0, 8)
     .map((h) => ({
@@ -3038,7 +3044,8 @@ async function extractAndPersistProposals(
       date: h.date,
       from: h.from,
       subject: h.subject,
-      excerpt: h.excerpt
+      excerpt: h.excerpt,
+      body_text: truncateText(fullChunkByVectorId.get(h.chunk_id) || h.excerpt || '', 3000)
     }));
 
   let raw = '[]';
@@ -3049,7 +3056,7 @@ async function extractAndPersistProposals(
         {
           role: 'system',
           content:
-            'Given context and assistant answer, return JSON array of proposed actions only. Each item: type,title,draft_payload,risk_level,citations. If none, return []. For reply_email proposals, draft_payload MUST include suggested_response as an actual professional email body the user could send. Do not copy or paraphrase the search/retrieval summary.'
+            'Given context and assistant answer, return JSON array of proposed actions only. Each item: type,title,draft_payload,risk_level,citations. If none, return []. For reply_email proposals, draft_payload MUST include suggested_response as a concrete professional email body the user could send. Do not copy or paraphrase the retrieval summary. Use the provided body_text context when available.'
         },
         {
           role: 'user',
@@ -3103,7 +3110,7 @@ async function extractAndPersistProposals(
             subject: first.subject,
             thread_id: first.thread_id,
             message_id: first.message_id,
-            suggested_response: buildFallbackReplyDraft(first)
+            needs_draft: true
           },
           risk_level: q.includes('urgent') ? 'high' : 'med',
           citations: [first.message_id]
@@ -3121,9 +3128,9 @@ async function extractAndPersistProposals(
     const payload = objectOr(p.draft_payload) || {};
     if (type === 'reply_email') {
       const suggested = stringOr(payload.suggested_response);
-      if (!suggested || suggested.toLowerCase().includes('found relevant sources')) {
-        const firstHit = input.hits.find((h) => h.message_id === (Array.isArray(p.citations) ? String(p.citations[0] || '') : '')) || input.hits[0];
-        payload.suggested_response = firstHit ? buildFallbackReplyDraft(firstHit) : 'Hi,\n\nThanks for your message. I will review and follow up shortly.\n\nBest,\nSkyler';
+      if (!suggested || isSummaryLikeDraft(suggested)) {
+        delete payload.suggested_response;
+        payload.needs_draft = true;
       }
     }
 
@@ -3179,18 +3186,37 @@ async function extractAndPersistProposals(
   return out;
 }
 
-function buildFallbackReplyDraft(hit: SearchResult): string {
-  const cleanSubject = (hit.subject || '').replace(/^re:\s*/i, '').trim();
-  const subjectLine = cleanSubject ? `about ${cleanSubject}` : 'on this';
-  return [
-    'Hi,',
-    '',
-    `Following up ${subjectLine} as requested. I can move this forward right away.`,
-    'Please let me know if you need anything from my end to finalize next steps.',
-    '',
-    'Best,',
-    'Skyler'
-  ].join('\n');
+async function loadChunkTextByVectorIds(
+  env: Env,
+  workspaceId: string,
+  accountId: string,
+  vectorIds: string[]
+): Promise<Map<string, string>> {
+  const ids = vectorIds.filter(Boolean);
+  if (ids.length === 0) return new Map();
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT vector_id, chunk_text
+       FROM memory_chunks
+       WHERE workspace_id = ?
+         AND lower(account_id) = lower(?)
+         AND vector_id IN (${placeholders})`
+    )
+    .bind(workspaceId, accountId, ...ids)
+    .all<{ vector_id: string; chunk_text: string | null }>();
+  return new Map((rows.results || []).map((r) => [r.vector_id, r.chunk_text || '']));
+}
+
+function isSummaryLikeDraft(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    t.includes('found relevant sources') ||
+    t.includes('top references') ||
+    t.includes('insufficient sources') ||
+    t.includes('i searched') ||
+    t.includes('citation')
+  );
 }
 
 function json(payload: JsonRecord, status = 200): Response {
