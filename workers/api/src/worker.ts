@@ -11,10 +11,16 @@ import { RUN_EVENT_TYPES } from '../../shared/events';
 
 interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
+  SKY_VECTORIZE: VectorizeIndex;
   CHAT_COORDINATOR: DurableObjectNamespace;
   WORKER_API_KEY?: string;
   ACCESS_AUTH_ENABLED?: string;
   ALLOW_API_KEY_BYPASS?: string;
+  OPENAI_API_KEY?: string;
+  CF_AIG_AUTH_TOKEN?: string;
+  AIG_ACCOUNT_ID?: string;
+  AIG_GATEWAY_ID?: string;
+  OPENAI_EMBEDDING_MODEL?: string;
   ENVIRONMENT?: string;
 }
 
@@ -58,6 +64,10 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/chat/query') {
       return runHttpChatQuery(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/search') {
+      return runSearch(request, env);
     }
 
     if (request.method === 'GET' && url.pathname === '/auth/whoami') {
@@ -649,6 +659,105 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     citations: result.citations,
     citationStatus: result.citationStatus,
     searched: result.searched
+  });
+}
+
+async function runSearch(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+  const payload = (await request.json()) as JsonRecord;
+  const workspaceId = stringOr(payload.workspaceId) || 'default';
+  let accountId = stringOr(payload.accountId) || stringOr(payload.account_id);
+  const query = stringOr(payload.query);
+  const kRaw = numberOr(payload.k);
+  const k = Math.min(25, Math.max(1, kRaw || 10));
+
+  if (!accountId || !query) {
+    return json({ ok: false, error: 'accountId/account_id and query are required' }, 400);
+  }
+
+  accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+  if (!permission.ok) return permission.response;
+
+  let queryVector: number[];
+  try {
+    queryVector = await embedSearchQuery(env, query);
+  } catch (error) {
+    return json(
+      {
+        ok: false,
+        error: 'search_embedding_failed',
+        detail: error instanceof Error ? error.message : 'unknown'
+      },
+      500
+    );
+  }
+
+  const vectorRes = await env.SKY_VECTORIZE.query(queryVector, { topK: k });
+  const matches = vectorRes.matches || [];
+  const vectorIds = matches.map((m) => m.id).filter(Boolean);
+
+  if (vectorIds.length === 0) {
+    return json({ ok: true, workspaceId, accountId, query, results: [] });
+  }
+
+  const placeholders = vectorIds.map(() => '?').join(',');
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT
+          mc.vector_id,
+          json_extract(mc.metadata_json, '$.messageId') AS message_id,
+          json_extract(mc.metadata_json, '$.threadId') AS thread_id,
+          em.sent_at AS sent_at,
+          COALESCE(json_extract(em.from_json, '$[0].address'), '') AS sender,
+          em.subject AS subject,
+          em.snippet AS excerpt
+       FROM memory_chunks mc
+       LEFT JOIN email_messages em
+         ON em.id = json_extract(mc.metadata_json, '$.messageId')
+        AND em.workspace_id = mc.workspace_id
+       WHERE mc.workspace_id = ?
+         AND lower(mc.account_id) = lower(?)
+         AND mc.vector_id IN (${placeholders})
+       LIMIT ?`
+    )
+    .bind(workspaceId, accountId, ...vectorIds, k * 3)
+    .all<{
+      vector_id: string;
+      message_id: string | null;
+      thread_id: string | null;
+      sent_at: string | null;
+      sender: string | null;
+      subject: string | null;
+      excerpt: string | null;
+    }>();
+
+  const byVectorId = new Map((rows.results || []).map((r) => [r.vector_id, r]));
+  const results = matches
+    .map((m) => {
+      const row = byVectorId.get(m.id);
+      if (!row || !row.message_id) return null;
+      return {
+        message_id: row.message_id,
+        thread_id: row.thread_id,
+        date: row.sent_at,
+        from: row.sender || '',
+        subject: row.subject || '(no subject)',
+        excerpt: row.excerpt || '',
+        score: Number(m.score || 0),
+        chunk_id: m.id
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => Boolean(x))
+    .slice(0, k);
+
+  return json({
+    ok: true,
+    workspaceId,
+    accountId,
+    query,
+    results
   });
 }
 
@@ -2221,6 +2330,44 @@ function minutesSince(isoDateTime: string | null): number | null {
   const parsed = Date.parse(isoDateTime.endsWith('Z') ? isoDateTime : `${isoDateTime}Z`);
   if (!Number.isFinite(parsed)) return null;
   return Number(Math.max(0, (Date.now() - parsed) / 60000).toFixed(2));
+}
+
+function hasSearchEmbeddingConfig(env: Env): boolean {
+  return Boolean(env.OPENAI_API_KEY && env.AIG_ACCOUNT_ID && env.AIG_GATEWAY_ID);
+}
+
+async function embedSearchQuery(env: Env, query: string): Promise<number[]> {
+  if (!hasSearchEmbeddingConfig(env)) {
+    throw new Error('search_embedding_not_configured');
+  }
+
+  const gatewayUrl = `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/embeddings`;
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    authorization: `Bearer ${env.OPENAI_API_KEY as string}`
+  };
+  if (env.CF_AIG_AUTH_TOKEN) headers['cf-aig-authorization'] = `Bearer ${env.CF_AIG_AUTH_TOKEN}`;
+
+  const response = await fetch(gatewayUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
+      input: query
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`search_embedding_failed_${response.status}:${text.slice(0, 300)}`);
+  }
+
+  const body = (await response.json()) as { data?: Array<{ embedding?: number[] }> };
+  const vector = body.data?.[0]?.embedding || [];
+  if (!Array.isArray(vector) || vector.length === 0) {
+    throw new Error('search_embedding_invalid_response');
+  }
+  return vector;
 }
 
 function json(payload: JsonRecord, status = 200): Response {

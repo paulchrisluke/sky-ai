@@ -7,12 +7,19 @@ workers_dev = true
 ENVIRONMENT = "dev"
 ACCESS_AUTH_ENABLED = "true"
 ALLOW_API_KEY_BYPASS = "false"
+AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
+AIG_GATEWAY_ID = "sky-ai"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 [[d1_databases]]
 binding = "SKY_DB"
 database_name = "sky-ai-dev"
 database_id = "4d6853be-e6da-45df-b054-afd2207413e6"
 migrations_dir = "db/migrations"
+
+[[vectorize]]
+binding = "SKY_VECTORIZE"
+index_name = "sky-ai-memory-dev"
 
 [[durable_objects.bindings]]
 name = "CHAT_COORDINATOR"
@@ -30,12 +37,19 @@ route = { pattern = "sky-ai-api.example.com/*", zone_name = "example.com" }
 ENVIRONMENT = "prod"
 ACCESS_AUTH_ENABLED = "true"
 ALLOW_API_KEY_BYPASS = "false"
+AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
+AIG_GATEWAY_ID = "sky-ai"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 [[env.prod.d1_databases]]
 binding = "SKY_DB"
 database_name = "sky-ai-prod"
 database_id = "e0dc4ec1-26d5-46db-819d-a416bb76c7ec"
 migrations_dir = "db/migrations"
+
+[[env.prod.vectorize]]
+binding = "SKY_VECTORIZE"
+index_name = "sky-ai-memory-prod"
 
 [[env.prod.durable_objects.bindings]]
 name = "CHAT_COORDINATOR"
