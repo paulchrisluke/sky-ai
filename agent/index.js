@@ -149,9 +149,9 @@ async function run() {
 }
 
 async function processOutboundQueue() {
-  const nextUrl = process.env.WORKER_OUTBOUND_NEXT_URL || process.env.WORKER_INGEST_URL.replace('/ingest/gmail-thread', '/mail/outbound/next');
+  const nextUrl = process.env.WORKER_OUTBOUND_NEXT_URL || process.env.WORKER_INGEST_URL.replace('/ingest/mail-thread', '/mail/outbound/next');
   const resultUrl =
-    process.env.WORKER_OUTBOUND_RESULT_URL || process.env.WORKER_INGEST_URL.replace('/ingest/gmail-thread', '/mail/outbound/result');
+    process.env.WORKER_OUTBOUND_RESULT_URL || process.env.WORKER_INGEST_URL.replace('/ingest/mail-thread', '/mail/outbound/result');
 
   while (true) {
     const nextRes = await fetch(nextUrl, { method: 'GET', headers: workerHeaders() });

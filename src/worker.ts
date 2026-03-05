@@ -22,9 +22,9 @@ export default {
       return json({ ok: true, service: 'sky-ai-worker', env: env.ENVIRONMENT || 'unknown' });
     }
 
-    if (request.method === 'POST' && url.pathname === '/ingest/gmail-thread') {
+    if (request.method === 'POST' && url.pathname === '/ingest/mail-thread') {
       if (!isAuthorized(request, env)) return unauthorized();
-      return ingestGmailThread(request, env);
+      return ingestMailThread(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/mail/send') {
@@ -59,7 +59,7 @@ export default {
 
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     if (controller.cron === '*/15 * * * *') {
-      await enqueueSyncJob(env, 'gmail_incremental_sync', { source: 'cron' });
+      await enqueueSyncJob(env, 'mailbox_incremental_sync', { source: 'cron' });
       return;
     }
 
@@ -69,7 +69,7 @@ export default {
   }
 };
 
-async function ingestGmailThread(request: Request, env: Env): Promise<Response> {
+async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
   const threadId = stringOr(payload.threadId);
@@ -78,7 +78,7 @@ async function ingestGmailThread(request: Request, env: Env): Promise<Response> 
     return json({ ok: false, error: 'threadId is required' }, 400);
   }
 
-  const artifactKey = `gmail/${workspaceId}/threads/${threadId}/${Date.now()}.json`;
+  const artifactKey = `mail/${workspaceId}/threads/${threadId}/${Date.now()}.json`;
   await env.SKY_ARTIFACTS.put(artifactKey, JSON.stringify(payload), {
     httpMetadata: { contentType: 'application/json' }
   });
@@ -86,7 +86,7 @@ async function ingestGmailThread(request: Request, env: Env): Promise<Response> 
   await env.SKY_DB
     .prepare(
       `INSERT INTO artifacts (id, workspace_id, source, source_id, r2_key, metadata_json, created_at)
-       VALUES (?, ?, 'gmail_thread', ?, ?, ?, CURRENT_TIMESTAMP)`
+       VALUES (?, ?, 'mail_thread', ?, ?, ?, CURRENT_TIMESTAMP)`
     )
     .bind(crypto.randomUUID(), workspaceId, threadId, artifactKey, JSON.stringify({ ingestedBy: 'api' }))
     .run();

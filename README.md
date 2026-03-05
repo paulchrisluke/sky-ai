@@ -65,6 +65,7 @@ Use the auto-generated Worker domain by default:
   - `CLAUDE_MODEL`
   - `CLAUDE_API_KEY`
   - optional `CF_AIG_AUTH_TOKEN`
+- To switch models, change `CLAUDE_MODEL` and redeploy.
 - Mailbox identity vars:
   - `MAILBOX_SKYLERBAIRD_ME_COM` (`SkylerBaird@me.com`)
 

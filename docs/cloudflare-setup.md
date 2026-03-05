@@ -65,6 +65,11 @@ Set non-secret AI Gateway vars in `wrangler.toml`:
 - `AIG_GATEWAY_ID`
 - `CLAUDE_MODEL`
 
+Model switching:
+
+- Update `CLAUDE_MODEL` to the model you want to target (or switch routing in AI Gateway policy).
+- Redeploy Worker: `npx wrangler deploy`
+
 ## 4) Deploy DEV worker
 
 ```bash

@@ -72,5 +72,5 @@ Start with `POLL_INTERVAL_MS=60000` (60s). If rate-limited, move to 120000-30000
 
 - If your Mac agent only needs outbound calls to `workers.dev`, tunnel is not required.
 - Agent now does both:
-  - IMAP ingest (`INBOX`, `Sent Messages`) -> Worker `/ingest/gmail-thread`
+  - IMAP ingest (`INBOX`, `Sent Messages`) -> Worker `/ingest/mail-thread`
   - SMTP send on behalf of `APPLE_ID` by polling Worker `/mail/outbound/next`
