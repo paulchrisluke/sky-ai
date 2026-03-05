@@ -19,15 +19,27 @@ npx wrangler login
 ## 2) Provision DEV infrastructure
 
 ```bash
-./scripts/bootstrap-cloudflare.sh
+npx wrangler d1 create sky-ai-dev
+npx wrangler r2 bucket create sky-ai-artifacts-dev
+npx wrangler vectorize create sky-ai-memory-dev --dimensions=1536 --metric=cosine
 ```
 
 Then update `wrangler.toml` with the returned DEV D1 `database_id`.
 
+Apply schema:
+
+```bash
+npx wrangler d1 migrations apply sky-ai-dev
+```
+
 ## 3) Push secrets (DEV)
 
 ```bash
-./scripts/set-cloudflare-secrets.sh dev
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put GOOGLE_REDIRECT_URI
+npx wrangler secret put TOKEN_ENCRYPTION_KEY
+npx wrangler secret put CLAUDE_API_KEY
 ```
 
 ## 4) Deploy DEV worker
@@ -48,7 +60,7 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
 
 - set PROD IDs in `wrangler.toml`
 - set route in `wrangler.toml`
-- run `./scripts/set-cloudflare-secrets.sh prod`
+- set PROD secrets using `npx wrangler secret put <NAME> --env prod`
 - deploy with `npx wrangler deploy --env prod`
 
 ## Notes while waiting for Skyler OAuth/Claude key

@@ -16,8 +16,6 @@ Cloudflare-native backend for Sky AI.
 - `src/types.d.ts`
 - `db/migrations/0001_init.sql`
 - `wrangler.toml`
-- `scripts/bootstrap-cloudflare.sh`
-- `scripts/set-cloudflare-secrets.sh`
 - `docs/cloudflare-setup.md`
 
 ## Quickstart
@@ -27,9 +25,17 @@ Cloudflare-native backend for Sky AI.
 2. Authenticate:
    - `npx wrangler login`
 3. Provision dev infra:
-   - `./scripts/bootstrap-cloudflare.sh`
+   - `npx wrangler d1 create sky-ai-dev`
+   - `npx wrangler r2 bucket create sky-ai-artifacts-dev`
+   - `npx wrangler vectorize create sky-ai-memory-dev --dimensions=1536 --metric=cosine`
+   - update `wrangler.toml` with the returned DEV D1 `database_id`
+   - `npx wrangler d1 migrations apply sky-ai-dev`
 4. Set dev secrets:
-   - `./scripts/set-cloudflare-secrets.sh dev`
+   - `npx wrangler secret put GOOGLE_CLIENT_ID`
+   - `npx wrangler secret put GOOGLE_CLIENT_SECRET`
+   - `npx wrangler secret put GOOGLE_REDIRECT_URI`
+   - `npx wrangler secret put TOKEN_ENCRYPTION_KEY`
+   - `npx wrangler secret put CLAUDE_API_KEY`
 5. Deploy:
    - `npx wrangler deploy`
 6. Validate:
