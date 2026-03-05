@@ -2,6 +2,7 @@ interface Env {
   SKY_DB: D1Database;
   SKY_ARTIFACTS: R2Bucket;
   SKY_VECTORIZE: VectorizeIndex;
+  EMBEDDING_QUEUE?: QueueBinding;
   WORKER_API_KEY?: string;
   OPENAI_API_KEY?: string;
   CF_AIG_AUTH_TOKEN?: string;
@@ -18,6 +19,10 @@ type JsonRecord = Record<string, unknown>;
 type NormalizedAddress = {
   email: string;
   name: string | null;
+};
+
+type EmbeddingQueueMessage = {
+  sourceRecordId: string;
 };
 
 const MAX_CHUNK_SOURCE_CHARS = 24000;
@@ -89,6 +94,16 @@ export default {
     if (controller.cron === '0 13 * * *') {
       await enqueueSyncJob(env, 'daily_briefing', { source: 'cron' });
       await processEmbeddingJobs(env, 40);
+    }
+  },
+
+  async queue(batch: { messages?: Array<{ body?: unknown }> }, env: Env): Promise<void> {
+    const messages = batch.messages || [];
+    for (const msg of messages) {
+      const body = (msg.body || {}) as Record<string, unknown>;
+      const sourceRecordId = stringOr(body.sourceRecordId);
+      if (!sourceRecordId) continue;
+      await processSingleEmbeddingJob(env, sourceRecordId);
     }
   }
 };
@@ -246,14 +261,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
 
     await enqueueEmbeddingJob(env, workspaceId, recordId);
     embeddingStatus = 'queued';
-
-    if (hasAiGatewayConfig(env)) {
-      const result = await processSingleEmbeddingJob(env, recordId);
-      embeddingStatus = result.status;
-      embeddingWarning = result.warning;
-    } else {
-      embeddingWarning = 'embedding_not_configured';
-    }
+    if (!hasAiGatewayConfig(env)) embeddingWarning = 'embedding_not_configured';
   }
 
   return json({
@@ -262,7 +270,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
     messageId,
     artifactKey,
     sourceMessageKey,
-    chunksIndexed: embeddingStatus === 'indexed' ? chunks.length : 0,
+    chunksIndexed: 0,
     embeddingStatus,
     warning: embeddingWarning
   });
@@ -411,6 +419,13 @@ async function enqueueEmbeddingJob(env: Env, workspaceId: string, sourceRecordId
     )
     .bind(crypto.randomUUID(), workspaceId, sourceRecordId)
     .run();
+
+  await enqueueEmbeddingQueueMessage(env, { sourceRecordId });
+}
+
+async function enqueueEmbeddingQueueMessage(env: Env, payload: EmbeddingQueueMessage): Promise<void> {
+  if (!env.EMBEDDING_QUEUE) return;
+  await env.EMBEDDING_QUEUE.send(payload);
 }
 
 async function processEmbeddingJobs(env: Env, limit: number): Promise<number> {

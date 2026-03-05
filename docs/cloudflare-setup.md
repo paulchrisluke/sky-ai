@@ -43,6 +43,7 @@ Set these local values in `.dev.vars`:
 npx wrangler d1 create sky-ai-dev
 npx wrangler r2 bucket create sky-ai-artifacts-dev
 npx wrangler vectorize create sky-ai-memory-dev --dimensions=1536 --metric=cosine
+npx wrangler queues create sky-ai-embeddings-dev
 ```
 
 Then update `wrangler.toml` with the returned DEV D1 `database_id`.
@@ -113,4 +114,5 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
 - `wrangler secret put` stores Worker secrets encrypted at rest by Cloudflare.
 - Those secrets are available to your Worker at runtime as plaintext environment values.
 - iCloud app-specific password is stored only in the local Mac agent `.env` file.
-- Embedding quota/rate failures are retried via D1 `embedding_jobs` and do not block mail ingest.
+- Embeddings are processed asynchronously through Cloudflare Queue (`EMBEDDING_QUEUE`).
+- Embedding quota/rate failures are tracked/retried via D1 `embedding_jobs` and do not block mail ingest.

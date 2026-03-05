@@ -37,6 +37,7 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
    - `npx wrangler d1 create sky-ai-dev`
    - `npx wrangler r2 bucket create sky-ai-artifacts-dev`
    - `npx wrangler vectorize create sky-ai-memory-dev --dimensions=1536 --metric=cosine`
+   - `npx wrangler queues create sky-ai-embeddings-dev`
    - update `wrangler.toml` with the returned DEV D1 `database_id`
 4. Set dev secrets:
    - `npx wrangler secret put OPENAI_API_KEY`
@@ -90,12 +91,12 @@ Use the auto-generated Worker domain by default:
   - SMTP send on behalf of the mailbox via outbound queue (`/mail/send`)
   - Canonical persistence in D1 (`email_threads`, `email_messages`, participants)
   - Idempotent ingest keys (`source_message_key`) to prevent duplicates
-  - Chunking + embedding + Vectorize indexing when AI Gateway credentials are set
-  - Embedding retry queue (`embedding_jobs`) with exponential backoff on quota/rate errors
+  - Async chunking + embedding + Vectorize indexing via Cloudflare Queue
+  - Embedding retry queue state (`embedding_jobs`) with exponential backoff on quota/rate errors
 
 ## Embedding Recovery
 
-- `POST /ingest/mail-thread` never fails due to embedding quota; it stores mail and marks embedding `retry`.
+- `POST /ingest/mail-thread` never fails due to embedding quota; it stores mail and enqueues embedding work.
 - Cron drains embedding retries every 15 minutes.
 - You can manually trigger processing:
   - `curl -X POST "https://<worker>.workers.dev/embeddings/process" -H "authorization: Bearer <WORKER_API_KEY>"`

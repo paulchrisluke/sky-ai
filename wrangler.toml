@@ -24,6 +24,16 @@ bucket_name = "sky-ai-artifacts-dev"
 binding = "SKY_VECTORIZE"
 index_name = "sky-ai-memory-dev"
 
+[[queues.producers]]
+binding = "EMBEDDING_QUEUE"
+queue = "sky-ai-embeddings-dev"
+
+[[queues.consumers]]
+queue = "sky-ai-embeddings-dev"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+
 [triggers]
 crons = ["*/15 * * * *", "0 13 * * *"]
 
@@ -54,6 +64,16 @@ bucket_name = "sky-ai-artifacts-prod"
 [[env.prod.vectorize]]
 binding = "SKY_VECTORIZE"
 index_name = "sky-ai-memory-prod"
+
+[[env.prod.queues.producers]]
+binding = "EMBEDDING_QUEUE"
+queue = "sky-ai-embeddings-prod"
+
+[[env.prod.queues.consumers]]
+queue = "sky-ai-embeddings-prod"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
 
 [env.prod.triggers]
 crons = ["*/15 * * * *", "0 13 * * *"]
