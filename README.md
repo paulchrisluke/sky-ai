@@ -232,3 +232,18 @@ Use the Mac agent one-off backfill command. This is checkpointed and dedupe-safe
    - `npm run backfill -- --since=2024-01-01 --mailboxes=INBOX`
    - optional: `--until=2024-12-31 --batchSize=25 --delayMs=250`
 3. Progress checkpoint is written to `data/backfill-state.json`.
+
+## Railway ChatKit Skeleton
+
+A starter FastAPI service for Railway is included at `railway-chatkit/`.
+
+Deploy steps:
+
+1. Create a new Railway project from the `railway-chatkit` folder.
+2. Railway will use:
+   - `Procfile`
+   - `requirements.txt`
+   - `main.py`
+3. Verify after deploy:
+   - `GET /health` returns `{"status":"healthy"}`
+   - `POST /chatkit` returns `{"status":"ok","message":"ChatKit endpoint ready"}`

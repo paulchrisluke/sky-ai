@@ -62,6 +62,27 @@ type SearchResult = {
   chunk_id: string;
 };
 
+type UsageContext = {
+  workspaceId?: string;
+  accountId?: string;
+  runId?: string;
+  endpoint?: string;
+  operation: string;
+};
+
+type UsageEntry = {
+  provider: string;
+  model: string;
+  operation: string;
+  endpoint?: string;
+  requestUnits?: number | null;
+  responseUnits?: number | null;
+  estimatedCostUsd?: number | null;
+  status?: 'ok' | 'error';
+  errorCode?: string | null;
+  metadata?: JsonRecord;
+};
+
 type AuthPrincipal = {
   type: 'access' | 'service' | 'anonymous';
   subject: string;
@@ -138,6 +159,10 @@ export default {
 
     if (request.method === 'GET' && url.pathname === '/ops/extraction-stats') {
       return getExtractionStats(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/ops/usage-stats') {
+      return getUsageStats(request, env);
     }
 
     return json({ ok: false, error: 'Not found' }, 404);
@@ -704,7 +729,12 @@ async function runSearch(request: Request, env: Env): Promise<Response> {
 
   let results: SearchResult[] = [];
   try {
-    results = await performSemanticSearch(env, workspaceId, accountId, query, k);
+    results = await performSemanticSearch(env, workspaceId, accountId, query, k, {
+      workspaceId,
+      accountId,
+      operation: 'search_query',
+      endpoint: '/search'
+    });
   } catch (error) {
     return json({ ok: false, error: 'search_failed', detail: error instanceof Error ? error.message : 'unknown' }, 500);
   }
@@ -752,7 +782,13 @@ async function runAgentChat(request: Request, env: Env): Promise<Response> {
 
   let hits: SearchResult[] = [];
   try {
-    hits = await performSemanticSearch(env, workspaceId, accountId, query, 10);
+    hits = await performSemanticSearch(env, workspaceId, accountId, query, 10, {
+      workspaceId,
+      accountId,
+      runId,
+      operation: 'chat_retrieval',
+      endpoint: '/chat'
+    });
   } catch {
     hits = [];
   }
@@ -810,10 +846,15 @@ async function runAgentChat(request: Request, env: Env): Promise<Response> {
 
   let answer = 'insufficient sources';
   try {
-    answer = await callOpenAiChatViaGateway(env, [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: `Retrieved email context:\n${context}\n\nQuestion: ${query}` }
-    ]);
+    answer = await callOpenAiChatViaGateway(
+      env,
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Retrieved email context:\n${context}\n\nQuestion: ${query}` }
+      ],
+      undefined,
+      { workspaceId, accountId, runId, operation: 'chat_completion', endpoint: '/chat' }
+    );
   } catch {
     answer = 'insufficient sources';
   }
@@ -1652,6 +1693,76 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
   });
 }
 
+async function getUsageStats(request: Request, env: Env): Promise<Response> {
+  const scope = await resolveOpsScope(request, env);
+  if (!scope.ok) return scope.response;
+  const { workspaceId, accountId } = scope;
+  const url = new URL(request.url);
+  const daysRaw = Number(url.searchParams.get('days') || '7');
+  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(90, Math.trunc(daysRaw)) : 7;
+
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT provider,
+              model,
+              operation,
+              COUNT(*) AS calls,
+              COALESCE(SUM(request_units), 0) AS request_units,
+              COALESCE(SUM(response_units), 0) AS response_units,
+              COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd
+       FROM model_usage_events
+       WHERE workspace_id = ?
+         AND lower(COALESCE(account_id, '')) = lower(?)
+         AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-' || ? || ' days')
+       GROUP BY provider, model, operation
+       ORDER BY estimated_cost_usd DESC, calls DESC`
+    )
+    .bind(workspaceId, accountId, String(days))
+    .all<{
+      provider: string;
+      model: string;
+      operation: string;
+      calls: number | string;
+      request_units: number | string;
+      response_units: number | string;
+      estimated_cost_usd: number | string;
+    }>();
+
+  const totals = (rows.results || []).reduce(
+    (acc, row) => {
+      acc.calls += Number(row.calls || 0);
+      acc.requestUnits += Number(row.request_units || 0);
+      acc.responseUnits += Number(row.response_units || 0);
+      acc.estimatedCostUsd += Number(row.estimated_cost_usd || 0);
+      return acc;
+    },
+    { calls: 0, requestUnits: 0, responseUnits: 0, estimatedCostUsd: 0 }
+  );
+
+  return json({
+    ok: true,
+    workspaceId,
+    accountId,
+    windowDays: days,
+    totals: {
+      calls: totals.calls,
+      requestUnits: totals.requestUnits,
+      responseUnits: totals.responseUnits,
+      estimatedCostUsd: Number(totals.estimatedCostUsd.toFixed(6))
+    },
+    breakdown: (rows.results || []).map((row) => ({
+      provider: row.provider,
+      model: row.model,
+      operation: row.operation,
+      calls: Number(row.calls || 0),
+      requestUnits: Number(row.request_units || 0),
+      responseUnits: Number(row.response_units || 0),
+      estimatedCostUsd: Number(Number(row.estimated_cost_usd || 0).toFixed(6))
+    })),
+    generatedAt: new Date().toISOString()
+  });
+}
+
 async function executeIntent(
   env: Env,
   ctx: { workspaceId: string; accountId: string },
@@ -2439,6 +2550,57 @@ async function listPermissions(
   }));
 }
 
+async function recordUsageEvent(env: Env, entry: UsageEntry & { workspaceId?: string; accountId?: string; runId?: string }): Promise<void> {
+  try {
+    const id = crypto.randomUUID();
+    await env.SKY_DB
+      .prepare(
+        `INSERT INTO model_usage_events
+           (id, workspace_id, account_id, run_id, provider, model, operation, endpoint, request_units, response_units, estimated_cost_usd, status, error_code, metadata_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+      )
+      .bind(
+        id,
+        entry.workspaceId || 'default',
+        entry.accountId || null,
+        entry.runId || null,
+        entry.provider,
+        entry.model,
+        entry.operation,
+        entry.endpoint || null,
+        entry.requestUnits ?? null,
+        entry.responseUnits ?? null,
+        entry.estimatedCostUsd ?? null,
+        entry.status || 'ok',
+        entry.errorCode || null,
+        entry.metadata ? JSON.stringify(entry.metadata) : null
+      )
+      .run();
+  } catch {
+    // usage telemetry must never break primary request paths
+  }
+}
+
+function estimateTextUnits(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function estimateUsageCostUsd(provider: string, model: string, requestUnits: number, responseUnits: number): number | null {
+  const p = provider.toLowerCase();
+  const m = model.toLowerCase();
+  if (p !== 'openai') return 0;
+
+  if (m === 'text-embedding-3-small') {
+    return Number(((requestUnits / 1_000_000) * 0.02).toFixed(8));
+  }
+  if (m === 'gpt-4o-mini') {
+    const input = (requestUnits / 1_000_000) * 0.15;
+    const output = (responseUnits / 1_000_000) * 0.6;
+    return Number((input + output).toFixed(8));
+  }
+  return null;
+}
+
 function stringOr(input: unknown): string | null {
   return typeof input === 'string' && input.trim() ? input.trim() : null;
 }
@@ -2461,11 +2623,11 @@ function hasSearchEmbeddingConfig(env: Env): boolean {
   return Boolean(env.OPENAI_API_KEY && env.AIG_ACCOUNT_ID && env.AIG_GATEWAY_ID);
 }
 
-async function embedSearchQuery(env: Env, query: string): Promise<number[]> {
+async function embedSearchQuery(env: Env, query: string, usageContext?: UsageContext): Promise<number[]> {
   const target = parseVectorDimensions(env);
   if (hasSearchEmbeddingConfig(env)) {
     try {
-      return normalizeVectorDimensions(await embedQueryViaGateway(env, query), target);
+      return normalizeVectorDimensions(await embedQueryViaGateway(env, query, usageContext), target);
     } catch (error) {
       const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
       if (!env.AI || (!msg.includes('429') && !msg.includes('401') && !msg.includes('quota') && !msg.includes('unauthorized'))) {
@@ -2474,10 +2636,10 @@ async function embedSearchQuery(env: Env, query: string): Promise<number[]> {
     }
   }
   if (!env.AI) throw new Error('search_embedding_not_configured');
-  return normalizeVectorDimensions(await embedQueryViaWorkersAi(env, query), target);
+  return normalizeVectorDimensions(await embedQueryViaWorkersAi(env, query, usageContext), target);
 }
 
-async function embedQueryViaGateway(env: Env, query: string): Promise<number[]> {
+async function embedQueryViaGateway(env: Env, query: string, usageContext?: UsageContext): Promise<number[]> {
   const gatewayUrl = `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/embeddings`;
   const headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -2495,20 +2657,63 @@ async function embedQueryViaGateway(env: Env, query: string): Promise<number[]> 
   });
   if (!response.ok) {
     const text = await response.text();
+    await recordUsageEvent(env, {
+      workspaceId: usageContext?.workspaceId,
+      accountId: usageContext?.accountId,
+      runId: usageContext?.runId,
+      provider: 'openai',
+      model: env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
+      operation: usageContext?.operation || 'embedding_query',
+      endpoint: usageContext?.endpoint || '/search',
+      status: 'error',
+      errorCode: `http_${response.status}`,
+      metadata: { preview: text.slice(0, 200) }
+    });
     throw new Error(`search_embedding_failed_${response.status}:${text.slice(0, 300)}`);
   }
-  const body = (await response.json()) as { data?: Array<{ embedding?: number[] }> };
+  const body = (await response.json()) as {
+    data?: Array<{ embedding?: number[] }>;
+    usage?: { prompt_tokens?: number; total_tokens?: number };
+  };
   const vector = body.data?.[0]?.embedding || [];
   if (!Array.isArray(vector) || vector.length === 0) throw new Error('search_embedding_invalid_response');
+  const requestUnits = Number(body.usage?.prompt_tokens ?? body.usage?.total_tokens ?? 0);
+  await recordUsageEvent(env, {
+    workspaceId: usageContext?.workspaceId,
+    accountId: usageContext?.accountId,
+    runId: usageContext?.runId,
+    provider: 'openai',
+    model: env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
+    operation: usageContext?.operation || 'embedding_query',
+    endpoint: usageContext?.endpoint || '/search',
+    requestUnits,
+    responseUnits: 0,
+    estimatedCostUsd: estimateUsageCostUsd('openai', env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small', requestUnits, 0),
+    status: 'ok'
+  });
   return vector;
 }
 
-async function embedQueryViaWorkersAi(env: Env, query: string): Promise<number[]> {
+async function embedQueryViaWorkersAi(env: Env, query: string, usageContext?: UsageContext): Promise<number[]> {
   const model = env.WORKERS_AI_EMBEDDING_MODEL || '@cf/baai/bge-base-en-v1.5';
   const result = (await env.AI!.run(model, { text: [query] })) as {
     data?: number[] | number[][];
     shape?: number[];
   };
+  const approxUnits = estimateTextUnits(query);
+  await recordUsageEvent(env, {
+    workspaceId: usageContext?.workspaceId,
+    accountId: usageContext?.accountId,
+    runId: usageContext?.runId,
+    provider: 'workers_ai',
+    model,
+    operation: usageContext?.operation || 'embedding_query',
+    endpoint: usageContext?.endpoint || '/search',
+    requestUnits: approxUnits,
+    responseUnits: 0,
+    estimatedCostUsd: estimateUsageCostUsd('workers_ai', model, approxUnits, 0),
+    status: 'ok'
+  });
 
   if (Array.isArray(result?.shape) && result.shape.length === 2 && Array.isArray(result.data) && typeof result.data[0] === 'number') {
     const dims = Number(result.shape[1] || 0);
@@ -2538,9 +2743,10 @@ async function performSemanticSearch(
   workspaceId: string,
   accountId: string,
   query: string,
-  k: number
+  k: number,
+  usageContext?: UsageContext
 ): Promise<SearchResult[]> {
-  const queryVector = await embedSearchQuery(env, query);
+  const queryVector = await embedSearchQuery(env, query, usageContext);
   const vectorRes = await env.SKY_VECTORIZE.query(queryVector, { topK: k });
   const matches = vectorRes.matches || [];
   const vectorIds = matches.map((m) => m.id).filter(Boolean);
@@ -2624,7 +2830,8 @@ async function loadAgentProfile(
 async function callOpenAiChatViaGateway(
   env: Env,
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-  responseFormat?: { type: 'json_object' }
+  responseFormat?: { type: 'json_object' },
+  usageContext?: UsageContext
 ): Promise<string> {
   if (!env.OPENAI_API_KEY || !env.AIG_ACCOUNT_ID || !env.AIG_GATEWAY_ID) {
     throw new Error('chat_not_configured');
@@ -2649,10 +2856,22 @@ async function callOpenAiChatViaGateway(
   });
   if (!response.ok) {
     const text = await response.text();
+    await recordUsageEvent(env, {
+      workspaceId: usageContext?.workspaceId,
+      accountId: usageContext?.accountId,
+      runId: usageContext?.runId,
+      provider: 'openai',
+      model: env.OPENAI_MODEL || 'gpt-4o-mini',
+      operation: usageContext?.operation || 'chat_completion',
+      endpoint: usageContext?.endpoint || '/chat',
+      status: 'error',
+      errorCode: `http_${response.status}`,
+      metadata: { preview: text.slice(0, 200) }
+    });
     const msg = `chat_gateway_failed_${response.status}:${text.slice(0, 500)}`;
     if (env.AI && response.status >= 400) {
       try {
-        return await callWorkersAiChat(env, messages, responseFormat);
+        return await callWorkersAiChat(env, messages, responseFormat, usageContext);
       } catch {
         throw new Error(msg);
       }
@@ -2661,16 +2880,33 @@ async function callOpenAiChatViaGateway(
   }
   const body = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const text = body.choices?.[0]?.message?.content?.trim() || '';
   if (!text) throw new Error('chat_empty_response');
+  const reqUnits = Number(body.usage?.prompt_tokens || 0);
+  const respUnits = Number(body.usage?.completion_tokens || 0);
+  await recordUsageEvent(env, {
+    workspaceId: usageContext?.workspaceId,
+    accountId: usageContext?.accountId,
+    runId: usageContext?.runId,
+    provider: 'openai',
+    model: env.OPENAI_MODEL || 'gpt-4o-mini',
+    operation: usageContext?.operation || 'chat_completion',
+    endpoint: usageContext?.endpoint || '/chat',
+    requestUnits: reqUnits,
+    responseUnits: respUnits,
+    estimatedCostUsd: estimateUsageCostUsd('openai', env.OPENAI_MODEL || 'gpt-4o-mini', reqUnits, respUnits),
+    status: 'ok'
+  });
   return text;
 }
 
 async function callWorkersAiChat(
   env: Env,
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-  responseFormat?: { type: 'json_object' }
+  responseFormat?: { type: 'json_object' },
+  usageContext?: UsageContext
 ): Promise<string> {
   if (!env.AI) throw new Error('workers_ai_chat_not_bound');
   const model = env.WORKERS_AI_CHAT_MODEL || '@cf/meta/llama-3.1-8b-instruct';
@@ -2682,6 +2918,21 @@ async function callWorkersAiChat(
   })) as { response?: string; result?: { response?: string } };
   const text = out.response || out.result?.response || '';
   if (!text.trim()) throw new Error('workers_ai_chat_empty_response');
+  const reqUnits = estimateTextUnits(prompt);
+  const respUnits = estimateTextUnits(text);
+  await recordUsageEvent(env, {
+    workspaceId: usageContext?.workspaceId,
+    accountId: usageContext?.accountId,
+    runId: usageContext?.runId,
+    provider: 'workers_ai',
+    model,
+    operation: usageContext?.operation || 'chat_completion',
+    endpoint: usageContext?.endpoint || '/chat',
+    requestUnits: reqUnits,
+    responseUnits: respUnits,
+    estimatedCostUsd: estimateUsageCostUsd('workers_ai', model, reqUnits, respUnits),
+    status: 'ok'
+  });
   return text.trim();
 }
 
@@ -2726,7 +2977,13 @@ async function extractAndPersistProposals(
           })
         }
       ],
-      { type: 'json_object' }
+      { type: 'json_object' },
+      {
+        workspaceId: input.workspaceId,
+        accountId: input.accountId,
+        operation: 'proposal_extraction',
+        endpoint: '/chat'
+      }
     );
   } catch {
     raw = '[]';
