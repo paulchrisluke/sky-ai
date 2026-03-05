@@ -3,6 +3,9 @@ import { extractBearerToken, verifyAccessJwtClaims, type AccessAuthEnv } from '.
 interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
   SKY_VECTORIZE: VectorizeIndex;
+  AI?: {
+    run(model: string, input: Record<string, unknown>): Promise<unknown>;
+  };
   WORKER_API_KEY?: string;
   ACCESS_AUTH_ENABLED?: string;
   OPENAI_API_KEY?: string;
@@ -10,6 +13,8 @@ interface Env extends AccessAuthEnv {
   AIG_ACCOUNT_ID?: string;
   AIG_GATEWAY_ID?: string;
   OPENAI_EMBEDDING_MODEL?: string;
+  WORKERS_AI_EMBEDDING_MODEL?: string;
+  VECTOR_DIMENSIONS?: string;
   ENVIRONMENT?: string;
 }
 
@@ -107,7 +112,7 @@ async function processSingleEmbeddingJob(
     return { status: 'retry', warning: 'embedding_job_missing' };
   }
 
-  if (!hasAiGatewayConfig(env)) {
+  if (!hasEmbeddingProviderConfig(env)) {
     const nextAttempts = Number(job.attempts || 0) + 1;
     const backoffMinutes = computeBackoffMinutes(nextAttempts);
     await markEmbeddingJobRetry(env, job.id, nextAttempts, 'embedding_not_configured', backoffMinutes);
@@ -131,7 +136,8 @@ async function processSingleEmbeddingJob(
   }
 
   try {
-    const embeddings = await callOpenAiEmbeddingsViaGateway(env, chunks);
+    const targetDims = parseVectorDimensions(env);
+    const embeddings = (await embedChunks(env, chunks)).map((v) => normalizeVectorDimensions(v, targetDims));
     await env.SKY_VECTORIZE.upsert(
       embeddings.map((values, index) => ({
         id: chunkRows.results?.[index]?.vector_id || `${sourceRecordId}:${index}`,
@@ -191,6 +197,14 @@ function hasAiGatewayConfig(env: Env): boolean {
   return Boolean(env.OPENAI_API_KEY && env.AIG_ACCOUNT_ID && env.AIG_GATEWAY_ID);
 }
 
+function hasWorkersAiConfig(env: Env): boolean {
+  return Boolean(env.AI);
+}
+
+function hasEmbeddingProviderConfig(env: Env): boolean {
+  return hasAiGatewayConfig(env) || hasWorkersAiConfig(env);
+}
+
 function computeBackoffMinutes(attempts: number): number {
   return Math.min(240, Math.max(1, 2 ** Math.min(attempts, 8)));
 }
@@ -241,6 +255,78 @@ async function callOpenAiEmbeddingsViaGateway(env: Env, chunks: string[]): Promi
     throw new Error('Embedding response did not match requested chunk count');
   }
   return vectors;
+}
+
+async function callWorkersAiEmbeddings(env: Env, chunks: string[]): Promise<number[][]> {
+  if (!env.AI) throw new Error('workers_ai_not_bound');
+  const model = env.WORKERS_AI_EMBEDDING_MODEL || '@cf/baai/bge-base-en-v1.5';
+  const result = (await env.AI.run(model, { text: chunks })) as {
+    data?: number[] | number[][];
+    shape?: number[];
+  };
+
+  // Workers AI embeddings commonly return a flattened `data` with `shape: [n, d]`.
+  if (Array.isArray(result?.shape) && result.shape.length === 2 && Array.isArray(result?.data) && typeof result.data[0] === 'number') {
+    const rows = Number(result.shape[0] || 0);
+    const dims = Number(result.shape[1] || 0);
+    const flat = result.data as number[];
+    if (rows <= 0 || dims <= 0 || flat.length !== rows * dims) {
+      throw new Error('workers_ai_embedding_shape_mismatch');
+    }
+    const out: number[][] = [];
+    for (let i = 0; i < rows; i += 1) {
+      out.push(flat.slice(i * dims, (i + 1) * dims));
+    }
+    return out;
+  }
+
+  if (Array.isArray(result?.data) && Array.isArray(result.data[0])) {
+    return result.data as number[][];
+  }
+
+  throw new Error('workers_ai_embedding_response_invalid');
+}
+
+function shouldFallbackToWorkersAi(errorMessage: string): boolean {
+  const msg = errorMessage.toLowerCase();
+  return (
+    msg.includes('insufficient_quota') ||
+    msg.includes('embedding request failed (429)') ||
+    msg.includes('embedding request failed (401)') ||
+    msg.includes('unauthorized')
+  );
+}
+
+async function embedChunks(env: Env, chunks: string[]): Promise<number[][]> {
+  if (hasAiGatewayConfig(env)) {
+    try {
+      return await callOpenAiEmbeddingsViaGateway(env, chunks);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (hasWorkersAiConfig(env) && shouldFallbackToWorkersAi(message)) {
+        return callWorkersAiEmbeddings(env, chunks);
+      }
+      throw error;
+    }
+  }
+
+  if (hasWorkersAiConfig(env)) {
+    return callWorkersAiEmbeddings(env, chunks);
+  }
+
+  throw new Error('embedding_not_configured');
+}
+
+function parseVectorDimensions(env: Env): number {
+  const raw = Number(env.VECTOR_DIMENSIONS || '1536');
+  if (!Number.isFinite(raw) || raw <= 0) return 1536;
+  return Math.trunc(raw);
+}
+
+function normalizeVectorDimensions(vector: number[], target: number): number[] {
+  if (vector.length === target) return vector;
+  if (vector.length > target) return vector.slice(0, target);
+  return vector.concat(new Array(target - vector.length).fill(0));
 }
 
 function unauthorized(): Response {
