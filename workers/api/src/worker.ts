@@ -3049,7 +3049,7 @@ async function extractAndPersistProposals(
         {
           role: 'system',
           content:
-            'Given context and assistant answer, return JSON array of proposed actions only. Each item: type,title,draft_payload,risk_level,citations. If none, return [].'
+            'Given context and assistant answer, return JSON array of proposed actions only. Each item: type,title,draft_payload,risk_level,citations. If none, return []. For reply_email proposals, draft_payload MUST include suggested_response as an actual professional email body the user could send. Do not copy or paraphrase the search/retrieval summary.'
         },
         {
           role: 'user',
@@ -3103,7 +3103,7 @@ async function extractAndPersistProposals(
             subject: first.subject,
             thread_id: first.thread_id,
             message_id: first.message_id,
-            suggested_response: input.answer.slice(0, 1000)
+            suggested_response: buildFallbackReplyDraft(first)
           },
           risk_level: q.includes('urgent') ? 'high' : 'med',
           citations: [first.message_id]
@@ -3119,6 +3119,13 @@ async function extractAndPersistProposals(
     const riskLevel = stringOr(p.risk_level) || 'low';
     const proposalId = crypto.randomUUID();
     const payload = objectOr(p.draft_payload) || {};
+    if (type === 'reply_email') {
+      const suggested = stringOr(payload.suggested_response);
+      if (!suggested || suggested.toLowerCase().includes('found relevant sources')) {
+        const firstHit = input.hits.find((h) => h.message_id === (Array.isArray(p.citations) ? String(p.citations[0] || '') : '')) || input.hits[0];
+        payload.suggested_response = firstHit ? buildFallbackReplyDraft(firstHit) : 'Hi,\n\nThanks for your message. I will review and follow up shortly.\n\nBest,\nSkyler';
+      }
+    }
 
     await env.SKY_DB
       .prepare(
@@ -3170,6 +3177,20 @@ async function extractAndPersistProposals(
     out.push({ id: proposalId, type, title, draft_payload_json: payload, risk_level: riskLevel });
   }
   return out;
+}
+
+function buildFallbackReplyDraft(hit: SearchResult): string {
+  const cleanSubject = (hit.subject || '').replace(/^re:\s*/i, '').trim();
+  const subjectLine = cleanSubject ? `about ${cleanSubject}` : 'on this';
+  return [
+    'Hi,',
+    '',
+    `Following up ${subjectLine} as requested. I can move this forward right away.`,
+    'Please let me know if you need anything from my end to finalize next steps.',
+    '',
+    'Best,',
+    'Skyler'
+  ].join('\n');
 }
 
 function json(payload: JsonRecord, status = 200): Response {
