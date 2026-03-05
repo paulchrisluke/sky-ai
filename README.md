@@ -23,6 +23,7 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 - `db/migrations/0004_embedding_jobs.sql`
 - `db/migrations/0005_chat_sessions_and_actions.sql`
 - `db/migrations/0006_account_id_on_email_memory.sql`
+- `db/migrations/0007_action_extraction_and_briefing.sql`
 - `wrangler.toml`
 - `wrangler.api.toml`
 - `docs/cloudflare-setup.md`
@@ -112,6 +113,13 @@ Use the auto-generated Worker domain by default:
 - Citation-required chat:
   - `GET /ws/chat?workspaceId=default&accountId=<account_id>` (websocket)
   - `POST /chat/query`
+  - Intents supported now:
+    - `today_actions`
+    - `find_email`
+    - `thread_summary`
+- Action extraction + briefing:
+  - `POST /extraction/run`
+  - `GET /briefing/today?workspaceId=...&accountId=...`
 - Approval-only actions:
   - `POST /actions/propose`
   - `POST /actions/approve`

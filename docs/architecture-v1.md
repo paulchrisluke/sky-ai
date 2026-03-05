@@ -46,6 +46,24 @@ This document maps the locked decisions to implemented code.
 - If no citations are found, assistant responds with insufficient sources and searched strategy.
 - Citations are persisted in `chat_citations`.
 
+## 6) Action Extraction + Briefing (implemented)
+
+- `POST /extraction/run` extracts:
+  - tasks
+  - decisions
+  - followups
+- Each extracted item has confidence + review state (`ready` or `needs_review`).
+- Extraction audit is persisted in:
+  - `message_extractions`
+  - `model_audit_logs`
+- `GET /briefing/today` returns prioritized actions + citations.
+
+## 7) Chat intents (implemented)
+
+- `today_actions` -> reads prioritized tasks/followups
+- `find_email` -> citation-based message retrieval
+- `thread_summary` -> thread-focused summary with citations
+
 ## Action Policy (from decision 6, included now)
 
 - No auto-execution.

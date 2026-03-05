@@ -15,6 +15,16 @@ type Citation = {
   score: number;
 };
 
+type QueryIntent = 'today_actions' | 'find_email' | 'thread_summary';
+
+type QueryResult = {
+  intent: QueryIntent;
+  answer: string;
+  citations: Citation[];
+  citationStatus: 'sufficient' | 'insufficient';
+  searched: JsonRecord;
+};
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -31,6 +41,16 @@ export default {
     if (request.method === 'POST' && url.pathname === '/chat/query') {
       if (!isAuthorized(request, env)) return unauthorized();
       return runHttpChatQuery(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/extraction/run') {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return runExtraction(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/briefing/today') {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return getTodayBriefing(url, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/actions/propose') {
@@ -64,8 +84,7 @@ export class ChatCoordinator {
     const url = new URL(request.url);
 
     if (request.method === 'GET' && url.pathname === '/connect') {
-      const upgrade = request.headers.get('Upgrade');
-      if (upgrade !== 'websocket') {
+      if (request.headers.get('Upgrade') !== 'websocket') {
         return json({ ok: false, error: 'Expected websocket upgrade' }, 426);
       }
 
@@ -78,10 +97,7 @@ export class ChatCoordinator {
       server.addEventListener('message', async (event: MessageEvent) => {
         await this.handleSocketMessage(server, event.data);
       });
-
-      server.addEventListener('close', () => {
-        this.sockets.delete(server);
-      });
+      server.addEventListener('close', () => this.sockets.delete(server));
 
       return new Response(null, { status: 101, webSocket: client });
     }
@@ -104,7 +120,7 @@ export class ChatCoordinator {
     }
 
     const workspaceId = stringOr(payload.workspaceId) || 'default';
-    const accountId = stringOr(payload.accountId);
+    let accountId = stringOr(payload.accountId);
     const userId = stringOr(payload.userId) || 'anonymous';
     const sessionId = stringOr(payload.sessionId) || crypto.randomUUID();
     const query = stringOr(payload.query);
@@ -114,11 +130,10 @@ export class ChatCoordinator {
       return;
     }
 
-    await ensureWorkspaceAndAccount(this.env, workspaceId, accountId);
+    accountId = await ensureWorkspaceAndAccount(this.env, workspaceId, accountId);
     await ensureSession(this.env, { sessionId, workspaceId, accountId, userId });
 
-    const rateOk = await this.checkRateLimit(sessionId);
-    if (!rateOk) {
+    if (!(await this.checkRateLimit(sessionId))) {
       this.send(socket, { type: 'run.rejected', reason: 'rate_limited', sessionId });
       return;
     }
@@ -142,9 +157,8 @@ export class ChatCoordinator {
       });
       this.broadcast({ type: 'run.started', sessionId, runId });
 
-      await this.broadcastProgress(workspaceId, accountId, sessionId, runId, 'retrieval.started');
-      const citations = await queryCitations(this.env, workspaceId, accountId, query);
-      await this.broadcastProgress(workspaceId, accountId, sessionId, runId, 'retrieval.completed', { hits: citations.length });
+      const intent = detectIntent(query);
+      await this.broadcastProgress(workspaceId, accountId, sessionId, runId, 'intent.detected', { intent });
 
       const userTurnId = await insertTurn(this.env, {
         sessionId,
@@ -157,7 +171,7 @@ export class ChatCoordinator {
         citationStatus: 'not_applicable'
       });
 
-      const { answer, citationStatus, searched } = buildCitationEnforcedAnswer(query, citations);
+      const result = await executeIntent(this.env, { workspaceId, accountId }, query, intent);
 
       const assistantTurnId = await insertTurn(this.env, {
         sessionId,
@@ -165,18 +179,18 @@ export class ChatCoordinator {
         accountId,
         runId,
         role: 'assistant',
-        content: answer,
+        content: result.answer,
         citationRequired: true,
-        citationStatus
+        citationStatus: result.citationStatus
       });
 
-      if (citations.length > 0) {
+      if (result.citations.length > 0) {
         await insertCitations(this.env, {
           sessionId,
           workspaceId,
           accountId,
           turnId: assistantTurnId,
-          citations
+          citations: result.citations
         });
       }
 
@@ -187,7 +201,13 @@ export class ChatCoordinator {
         runId,
         turnId: assistantTurnId,
         eventType: 'run.completed',
-        payload: { citationStatus, citations, searched, userTurnId }
+        payload: {
+          intent: result.intent,
+          citationStatus: result.citationStatus,
+          citations: result.citations,
+          searched: result.searched,
+          userTurnId
+        }
       });
 
       this.broadcast({
@@ -195,10 +215,11 @@ export class ChatCoordinator {
         sessionId,
         runId,
         turnId: assistantTurnId,
-        answer,
-        citations,
-        citationStatus,
-        searched
+        intent: result.intent,
+        answer: result.answer,
+        citations: result.citations,
+        citationStatus: result.citationStatus,
+        searched: result.searched
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown_error';
@@ -288,7 +309,8 @@ async function routeWebSocketToCoordinator(request: Request, env: Env): Promise<
     return json({ ok: false, error: 'accountId query parameter is required' }, 400);
   }
 
-  const id = env.CHAT_COORDINATOR.idFromName(`${workspaceId}:${accountId}`);
+  const canonicalAccountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  const id = env.CHAT_COORDINATOR.idFromName(`${workspaceId}:${canonicalAccountId}`);
   const stub = env.CHAT_COORDINATOR.get(id);
   const connectUrl = new URL(request.url);
   connectUrl.pathname = '/connect';
@@ -298,7 +320,7 @@ async function routeWebSocketToCoordinator(request: Request, env: Env): Promise<
 async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
-  const accountId = stringOr(payload.accountId);
+  let accountId = stringOr(payload.accountId);
   const userId = stringOr(payload.userId) || 'anonymous';
   const sessionId = stringOr(payload.sessionId) || crypto.randomUUID();
   const query = stringOr(payload.query);
@@ -307,10 +329,12 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     return json({ ok: false, error: 'accountId and query are required' }, 400);
   }
 
-  await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
   await ensureSession(env, { sessionId, workspaceId, accountId, userId });
 
   const runId = crypto.randomUUID();
+  const intent = detectIntent(query);
+
   const userTurnId = await insertTurn(env, {
     sessionId,
     workspaceId,
@@ -322,8 +346,7 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     citationStatus: 'not_applicable'
   });
 
-  const citations = await queryCitations(env, workspaceId, accountId, query);
-  const { answer, citationStatus, searched } = buildCitationEnforcedAnswer(query, citations);
+  const result = await executeIntent(env, { workspaceId, accountId }, query, intent);
 
   const assistantTurnId = await insertTurn(env, {
     sessionId,
@@ -331,18 +354,18 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     accountId,
     runId,
     role: 'assistant',
-    content: answer,
+    content: result.answer,
     citationRequired: true,
-    citationStatus
+    citationStatus: result.citationStatus
   });
 
-  if (citations.length > 0) {
+  if (result.citations.length > 0) {
     await insertCitations(env, {
       sessionId,
       workspaceId,
       accountId,
       turnId: assistantTurnId,
-      citations
+      citations: result.citations
     });
   }
 
@@ -353,24 +376,298 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     runId,
     turnId: assistantTurnId,
     eventType: 'run.completed',
-    payload: { citations, citationStatus, searched, userTurnId }
+    payload: {
+      intent,
+      citations: result.citations,
+      citationStatus: result.citationStatus,
+      searched: result.searched,
+      userTurnId
+    }
   });
 
   return json({
     ok: true,
     sessionId,
     runId,
-    answer,
+    turnId: assistantTurnId,
+    intent,
+    answer: result.answer,
+    citations: result.citations,
+    citationStatus: result.citationStatus,
+    searched: result.searched
+  });
+}
+
+async function runExtraction(request: Request, env: Env): Promise<Response> {
+  const payload = (await request.json()) as JsonRecord;
+  const workspaceId = stringOr(payload.workspaceId) || 'default';
+  let accountId = stringOr(payload.accountId);
+  const limit = numberOr(payload.limit) || 100;
+
+  if (!accountId) {
+    return json({ ok: false, error: 'accountId is required' }, 400);
+  }
+
+  accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  const accountEmail = await resolveAccountEmail(env, workspaceId, accountId);
+  if (!accountEmail) {
+    return json({ ok: false, error: 'account email could not be resolved for accountId' }, 400);
+  }
+
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT em.id, em.thread_id, em.subject, em.snippet, em.sent_at,
+              COALESCE(json_extract(em.from_json, '$[0].address'), '') AS sender
+       FROM email_messages em
+       LEFT JOIN message_extractions mx
+         ON mx.workspace_id = em.workspace_id
+        AND mx.account_id = em.account_id
+        AND mx.source_message_id = em.id
+       WHERE em.workspace_id = ?
+         AND (em.account_id = ? OR lower(em.account_email) = ?)
+         AND mx.id IS NULL
+       ORDER BY datetime(COALESCE(em.sent_at, em.created_at)) DESC
+       LIMIT ?`
+    )
+    .bind(workspaceId, accountId, accountEmail, Math.min(Math.max(limit, 1), 500))
+    .all<{
+      id: string;
+      thread_id: string | null;
+      subject: string | null;
+      snippet: string | null;
+      sent_at: string | null;
+      sender: string | null;
+    }>();
+
+  let tasksCreated = 0;
+  let decisionsCreated = 0;
+  let followupsCreated = 0;
+
+  for (const row of rows.results || []) {
+    const text = `${row.subject || ''}\n${row.snippet || ''}`;
+    const extracted = extractActionSignals(text, row.sent_at, row.sender || '', accountId);
+
+    for (const task of extracted.tasks) {
+      await env.SKY_DB
+        .prepare(
+          `INSERT INTO tasks
+           (id, workspace_id, account_id, title, status, priority, due_at, source_record_id, source_message_id, confidence_score, review_state, owner, metadata_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'open', ?, ?, NULL, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        )
+        .bind(
+          crypto.randomUUID(),
+          workspaceId,
+          accountId,
+          task.text,
+          task.priority,
+          task.dueAt,
+          row.id,
+          task.confidence,
+          task.reviewState,
+          task.owner,
+          JSON.stringify({ extractor: 'heuristic-v1', threadId: row.thread_id })
+        )
+        .run();
+      tasksCreated += 1;
+    }
+
+    for (const decision of extracted.decisions) {
+      await env.SKY_DB
+        .prepare(
+          `INSERT INTO decisions
+           (id, workspace_id, account_id, source_message_id, thread_id, decision_text, owner, confidence_score, review_state, status, metadata_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        )
+        .bind(
+          crypto.randomUUID(),
+          workspaceId,
+          accountId,
+          row.id,
+          row.thread_id,
+          decision.text,
+          decision.owner,
+          decision.confidence,
+          decision.reviewState,
+          JSON.stringify({ extractor: 'heuristic-v1' })
+        )
+        .run();
+      decisionsCreated += 1;
+    }
+
+    for (const followup of extracted.followups) {
+      await env.SKY_DB
+        .prepare(
+          `INSERT INTO followups
+           (id, workspace_id, account_id, source_message_id, thread_id, followup_text, owner, due_at, confidence_score, review_state, status, metadata_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        )
+        .bind(
+          crypto.randomUUID(),
+          workspaceId,
+          accountId,
+          row.id,
+          row.thread_id,
+          followup.text,
+          followup.owner,
+          followup.dueAt,
+          followup.confidence,
+          followup.reviewState,
+          JSON.stringify({ extractor: 'heuristic-v1' })
+        )
+        .run();
+      followupsCreated += 1;
+    }
+
+    await env.SKY_DB
+      .prepare(
+        `INSERT INTO message_extractions
+         (id, workspace_id, account_id, source_message_id, extractor_version, status, summary_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'heuristic-v1', 'processed', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      )
+      .bind(
+        crypto.randomUUID(),
+        workspaceId,
+        accountId,
+        row.id,
+        JSON.stringify({
+          tasks: extracted.tasks.length,
+          decisions: extracted.decisions.length,
+          followups: extracted.followups.length
+        })
+      )
+      .run();
+
+    await env.SKY_DB
+      .prepare(
+        `INSERT INTO model_audit_logs
+         (id, workspace_id, account_id, source, model_name, input_json, output_json, success, created_at)
+         VALUES (?, ?, ?, 'action_extraction', 'heuristic-v1', ?, ?, 1, CURRENT_TIMESTAMP)`
+      )
+      .bind(
+        crypto.randomUUID(),
+        workspaceId,
+        accountId,
+        JSON.stringify({ messageId: row.id, textSample: text.slice(0, 500) }),
+        JSON.stringify(extracted)
+      )
+      .run();
+  }
+
+  return json({
+    ok: true,
+    processedMessages: (rows.results || []).length,
+    tasksCreated,
+    decisionsCreated,
+    followupsCreated
+  });
+}
+
+async function getTodayBriefing(url: URL, env: Env): Promise<Response> {
+  const workspaceId = url.searchParams.get('workspaceId') || 'default';
+  let accountId = url.searchParams.get('accountId');
+
+  if (!accountId) {
+    return json({ ok: false, error: 'accountId query parameter is required' }, 400);
+  }
+
+  accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+
+  const tasks = await env.SKY_DB
+    .prepare(
+      `SELECT id, title, priority, due_at, source_message_id, confidence_score, review_state
+       FROM tasks
+       WHERE workspace_id = ?
+         AND account_id = ?
+         AND status = 'open'
+       ORDER BY datetime(COALESCE(due_at, '2999-12-31')) ASC, created_at DESC
+       LIMIT 30`
+    )
+    .bind(workspaceId, accountId)
+    .all<{
+      id: string;
+      title: string;
+      priority: string | null;
+      due_at: string | null;
+      source_message_id: string | null;
+      confidence_score: number;
+      review_state: string;
+    }>();
+
+  const followups = await env.SKY_DB
+    .prepare(
+      `SELECT id, followup_text, due_at, source_message_id, confidence_score, review_state
+       FROM followups
+       WHERE workspace_id = ?
+         AND account_id = ?
+         AND status = 'open'
+       ORDER BY datetime(COALESCE(due_at, '2999-12-31')) ASC, created_at DESC
+       LIMIT 30`
+    )
+    .bind(workspaceId, accountId)
+    .all<{
+      id: string;
+      followup_text: string;
+      due_at: string | null;
+      source_message_id: string | null;
+      confidence_score: number;
+      review_state: string;
+    }>();
+
+  const today = new Date();
+  const ranked = [
+    ...(tasks.results || []).map((t) => ({
+      type: 'task' as const,
+      id: t.id,
+      text: t.title,
+      dueAt: t.due_at,
+      sourceMessageId: t.source_message_id,
+      reviewState: t.review_state,
+      confidence: t.confidence_score,
+      score: computePriorityScore(t.priority, t.due_at, today)
+    })),
+    ...(followups.results || []).map((f) => ({
+      type: 'followup' as const,
+      id: f.id,
+      text: f.followup_text,
+      dueAt: f.due_at,
+      sourceMessageId: f.source_message_id,
+      reviewState: f.review_state,
+      confidence: f.confidence_score,
+      score: computePriorityScore('medium', f.due_at, today)
+    }))
+  ]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 12);
+
+  const messageIds = ranked.map((x) => x.sourceMessageId).filter((x): x is string => Boolean(x));
+  const citationMap = await loadCitationsForMessages(env, workspaceId, accountId, messageIds);
+
+  const citations: Citation[] = [];
+  for (const item of ranked) {
+    if (!item.sourceMessageId) continue;
+    const c = citationMap.get(item.sourceMessageId);
+    if (!c) continue;
+    citations.push(c);
+  }
+
+  return json({
+    ok: true,
+    date: toDateOnly(today),
+    workspaceId,
+    accountId,
+    actions: ranked,
     citations,
-    citationStatus,
-    searched
+    note:
+      ranked.length === 0
+        ? 'No open extracted actions yet. Run POST /extraction/run first.'
+        : 'Prioritized by urgency, due date, and confidence.'
   });
 }
 
 async function proposeAction(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
-  const accountId = stringOr(payload.accountId);
+  let accountId = stringOr(payload.accountId);
   const sessionId = stringOr(payload.sessionId);
   const turnId = stringOr(payload.turnId);
   const actionType = stringOr(payload.actionType);
@@ -380,7 +677,7 @@ async function proposeAction(request: Request, env: Env): Promise<Response> {
     return json({ ok: false, error: 'accountId and actionType are required' }, 400);
   }
 
-  await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
 
   const actionId = crypto.randomUUID();
   const approvalToken = crypto.randomUUID();
@@ -434,26 +731,16 @@ async function approveAction(request: Request, env: Env): Promise<Response> {
 
   const row = actionId
     ? await env.SKY_DB
-        .prepare(
-          `SELECT id, status, expires_at FROM proposed_actions WHERE id = ? LIMIT 1`
-        )
+        .prepare(`SELECT id, status, expires_at FROM proposed_actions WHERE id = ? LIMIT 1`)
         .bind(actionId)
         .first<{ id: string; status: string; expires_at: string | null }>()
     : await env.SKY_DB
-        .prepare(
-          `SELECT id, status, expires_at FROM proposed_actions WHERE approval_token = ? LIMIT 1`
-        )
+        .prepare(`SELECT id, status, expires_at FROM proposed_actions WHERE approval_token = ? LIMIT 1`)
         .bind(approvalToken)
         .first<{ id: string; status: string; expires_at: string | null }>();
 
-  if (!row) {
-    return json({ ok: false, error: 'action_not_found' }, 404);
-  }
-
-  if (row.status !== 'proposed') {
-    return json({ ok: false, error: `action_not_approvable:${row.status}` }, 409);
-  }
-
+  if (!row) return json({ ok: false, error: 'action_not_found' }, 404);
+  if (row.status !== 'proposed') return json({ ok: false, error: `action_not_approvable:${row.status}` }, 409);
   if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) {
     return json({ ok: false, error: 'approval_token_expired' }, 409);
   }
@@ -467,17 +754,283 @@ async function approveAction(request: Request, env: Env): Promise<Response> {
     .bind(approvedBy, row.id)
     .run();
 
-  return json({
-    ok: true,
-    action: {
-      id: row.id,
-      status: 'approved',
-      nextStep: 'manual_or_separate_executor_required'
-    }
-  });
+  return json({ ok: true, action: { id: row.id, status: 'approved', nextStep: 'manual_or_separate_executor_required' } });
 }
 
-async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountId: string): Promise<void> {
+async function executeIntent(
+  env: Env,
+  ctx: { workspaceId: string; accountId: string },
+  query: string,
+  intent: QueryIntent
+): Promise<QueryResult> {
+  if (intent === 'today_actions') {
+    const briefing = await buildTodayActionsIntent(env, ctx.workspaceId, ctx.accountId);
+    return {
+      intent,
+      answer: briefing.answer,
+      citations: briefing.citations,
+      citationStatus: briefing.citations.length > 0 ? 'sufficient' : 'insufficient',
+      searched: briefing.searched
+    };
+  }
+
+  if (intent === 'thread_summary') {
+    const summary = await buildThreadSummaryIntent(env, ctx.workspaceId, ctx.accountId, query);
+    return {
+      intent,
+      answer: summary.answer,
+      citations: summary.citations,
+      citationStatus: summary.citations.length > 0 ? 'sufficient' : 'insufficient',
+      searched: summary.searched
+    };
+  }
+
+  const citations = await queryCitations(env, ctx.workspaceId, ctx.accountId, query);
+  const result = buildCitationEnforcedAnswer(query, citations);
+  return {
+    intent,
+    answer: result.answer,
+    citations,
+    citationStatus: result.citationStatus,
+    searched: result.searched
+  };
+}
+
+async function buildTodayActionsIntent(
+  env: Env,
+  workspaceId: string,
+  accountId: string
+): Promise<{ answer: string; citations: Citation[]; searched: JsonRecord }> {
+  const briefingRes = await getTodayBriefing(
+    new URL(`https://local/briefing/today?workspaceId=${encodeURIComponent(workspaceId)}&accountId=${encodeURIComponent(accountId)}`),
+    env
+  );
+  const body = (await briefingRes.json()) as JsonRecord;
+  const actions = arrayOr(body.actions);
+  const citations = (arrayOr(body.citations) || []) as unknown as Citation[];
+
+  if (!actions || actions.length === 0) {
+    return {
+      answer: 'Insufficient sources for today_actions. No extracted open tasks/followups found yet.',
+      citations: [],
+      searched: { intent: 'today_actions', sourceTables: ['tasks', 'followups'], accountId }
+    };
+  }
+
+  const top = actions.slice(0, 5).map((a, i) => `${i + 1}. ${stringOr((a as JsonRecord).text) || 'untitled action'}`);
+  return {
+    answer: `Top actions for today:\n${top.join('\n')}`,
+    citations,
+    searched: { intent: 'today_actions', sourceTables: ['tasks', 'followups'], accountId }
+  };
+}
+
+async function buildThreadSummaryIntent(
+  env: Env,
+  workspaceId: string,
+  accountId: string,
+  query: string
+): Promise<{ answer: string; citations: Citation[]; searched: JsonRecord }> {
+  const hits = await queryCitations(env, workspaceId, accountId, query);
+  if (hits.length === 0) {
+    return {
+      answer: 'Insufficient sources for thread_summary. No matching thread evidence found.',
+      citations: [],
+      searched: { intent: 'thread_summary', query, strategy: 'message match -> thread lookup' }
+    };
+  }
+
+  const first = hits[0];
+  const msg = await env.SKY_DB
+    .prepare(`SELECT thread_id FROM email_messages WHERE id = ? LIMIT 1`)
+    .bind(first.messageId)
+    .first<{ thread_id: string | null }>();
+
+  if (!msg?.thread_id) {
+    return {
+      answer: 'Insufficient sources for thread_summary. Matched email had no thread identifier.',
+      citations: [],
+      searched: { intent: 'thread_summary', query, strategy: 'thread_id missing' }
+    };
+  }
+
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT id, sent_at, subject, snippet,
+              COALESCE(json_extract(from_json, '$[0].address'), '') AS sender
+       FROM email_messages
+       WHERE workspace_id = ?
+         AND (account_id = ? OR lower(account_email) = ?)
+         AND thread_id = ?
+       ORDER BY datetime(COALESCE(sent_at, created_at)) DESC
+       LIMIT 8`
+    )
+    .bind(workspaceId, accountId, accountId.toLowerCase(), msg.thread_id)
+    .all<{ id: string; sent_at: string | null; subject: string | null; snippet: string | null; sender: string | null }>();
+
+  const citations = (rows.results || []).map((r, idx) => ({
+    messageId: r.id,
+    date: r.sent_at,
+    from: r.sender || 'unknown',
+    subject: r.subject || '(no subject)',
+    score: Math.max(0, 1 - idx * 0.08)
+  }));
+
+  if (citations.length === 0) {
+    return {
+      answer: 'Insufficient sources for thread_summary. Thread had no retrievable messages.',
+      citations: [],
+      searched: { intent: 'thread_summary', query, threadId: msg.thread_id }
+    };
+  }
+
+  const subjects = citations.slice(0, 5).map((c, i) => `${i + 1}. ${c.subject} (${c.from})`);
+  return {
+    answer: `Thread summary (latest first):\n${subjects.join('\n')}`,
+    citations,
+    searched: { intent: 'thread_summary', query, threadId: msg.thread_id }
+  };
+}
+
+function detectIntent(query: string): QueryIntent {
+  const q = query.toLowerCase();
+  if ((q.includes('what') && q.includes('today') && (q.includes('need') || q.includes('action'))) || q.includes('today actions')) {
+    return 'today_actions';
+  }
+  if (q.includes('thread summary') || q.includes('summarize thread')) {
+    return 'thread_summary';
+  }
+  return 'find_email';
+}
+
+function extractActionSignals(text: string, sentAt: string | null, sender: string, accountId: string): {
+  tasks: Array<{ text: string; priority: string; dueAt: string | null; confidence: number; reviewState: string; owner: string }>;
+  decisions: Array<{ text: string; confidence: number; reviewState: string; owner: string }>;
+  followups: Array<{ text: string; dueAt: string | null; confidence: number; reviewState: string; owner: string }>;
+} {
+  const t = text.trim();
+  const lower = t.toLowerCase();
+  const taskPatterns = [/\bplease\b/, /\bneed to\b/, /\bcan you\b/, /\btodo\b/, /\baction item\b/, /\bby\s+\w+/];
+  const decisionPatterns = [/\bdecided\b/, /\bapproved\b/, /\bwe will\b/, /\blet'?s\b/, /\bfinal decision\b/];
+  const followupPatterns = [/\bfollow up\b/, /\bchecking in\b/, /\bremind\b/, /\bcircle back\b/];
+
+  const taskHits = taskPatterns.filter((r) => r.test(lower)).length;
+  const decisionHits = decisionPatterns.filter((r) => r.test(lower)).length;
+  const followupHits = followupPatterns.filter((r) => r.test(lower)).length;
+
+  const dueAt = parseDueAt(lower, sentAt);
+  const owner = lower.includes('you') ? accountId : sender || accountId;
+
+  const tasks = taskHits > 0
+    ? [
+        {
+          text: truncateText(t, 180),
+          priority: taskHits >= 2 || /\burgent|asap|today\b/.test(lower) ? 'high' : 'medium',
+          dueAt,
+          confidence: Math.min(0.95, 0.55 + taskHits * 0.15),
+          reviewState: taskHits >= 2 ? 'ready' : 'needs_review',
+          owner
+        }
+      ]
+    : [];
+
+  const decisions = decisionHits > 0
+    ? [
+        {
+          text: truncateText(t, 220),
+          confidence: Math.min(0.95, 0.55 + decisionHits * 0.15),
+          reviewState: decisionHits >= 2 ? 'ready' : 'needs_review',
+          owner
+        }
+      ]
+    : [];
+
+  const followups = followupHits > 0
+    ? [
+        {
+          text: truncateText(t, 180),
+          dueAt,
+          confidence: Math.min(0.9, 0.5 + followupHits * 0.2),
+          reviewState: followupHits >= 2 ? 'ready' : 'needs_review',
+          owner
+        }
+      ]
+    : [];
+
+  return { tasks, decisions, followups };
+}
+
+function parseDueAt(lower: string, sentAt: string | null): string | null {
+  const iso = lower.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (iso) return `${iso[1]}T00:00:00.000Z`;
+
+  const base = sentAt ? new Date(sentAt) : new Date();
+  if (lower.includes('tomorrow')) {
+    const d = new Date(base);
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString();
+  }
+  if (lower.includes('next week')) {
+    const d = new Date(base);
+    d.setUTCDate(d.getUTCDate() + 7);
+    return d.toISOString();
+  }
+  if (lower.includes('today')) {
+    return base.toISOString();
+  }
+
+  return null;
+}
+
+function computePriorityScore(priority: string | null, dueAt: string | null, now: Date): number {
+  const p = (priority || 'medium').toLowerCase();
+  let score = p === 'high' ? 3 : p === 'low' ? 1 : 2;
+  if (dueAt) {
+    const dueTs = new Date(dueAt).getTime();
+    const nowTs = now.getTime();
+    if (!Number.isNaN(dueTs)) {
+      if (dueTs < nowTs) score += 3;
+      else if (dueTs - nowTs < 24 * 60 * 60 * 1000) score += 2;
+      else if (dueTs - nowTs < 3 * 24 * 60 * 60 * 1000) score += 1;
+    }
+  }
+  return score;
+}
+
+async function loadCitationsForMessages(
+  env: Env,
+  workspaceId: string,
+  accountId: string,
+  messageIds: string[]
+): Promise<Map<string, Citation>> {
+  if (messageIds.length === 0) return new Map();
+
+  const placeholders = messageIds.map(() => '?').join(',');
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT id, sent_at, subject,
+              COALESCE(json_extract(from_json, '$[0].address'), '') AS sender
+       FROM email_messages
+       WHERE workspace_id = ?
+         AND id IN (${placeholders})`
+    )
+    .bind(workspaceId, ...messageIds)
+    .all<{ id: string; sent_at: string | null; subject: string | null; sender: string | null }>();
+
+  const map = new Map<string, Citation>();
+  for (const row of rows.results || []) {
+    map.set(row.id, {
+      messageId: row.id,
+      date: row.sent_at,
+      from: row.sender || 'unknown',
+      subject: row.subject || '(no subject)',
+      score: 0.8
+    });
+  }
+  return map;
+}
+
+async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountId: string): Promise<string> {
   await env.SKY_DB
     .prepare(
       `INSERT OR IGNORE INTO workspaces (id, name, status, created_at, updated_at)
@@ -486,14 +1039,41 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
     .bind(workspaceId, workspaceId)
     .run();
 
-  const accountEmail = accountId.includes('@') ? accountId.toLowerCase() : null;
+  if (accountId.includes('@')) {
+    const accountEmail = accountId.toLowerCase();
+    const existing = await env.SKY_DB
+      .prepare(
+        `SELECT id FROM accounts
+         WHERE workspace_id = ?
+           AND lower(email) = ?
+         LIMIT 1`
+      )
+      .bind(workspaceId, accountEmail)
+      .first<{ id: string }>();
+
+    if (existing?.id) {
+      return existing.id;
+    }
+
+    await env.SKY_DB
+      .prepare(
+        `INSERT OR IGNORE INTO accounts (id, workspace_id, label, email, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      )
+      .bind(accountEmail, workspaceId, accountEmail, accountEmail)
+      .run();
+
+    return accountEmail;
+  }
+
   await env.SKY_DB
     .prepare(
       `INSERT OR IGNORE INTO accounts (id, workspace_id, label, email, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+       VALUES (?, ?, ?, NULL, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     )
-    .bind(accountId, workspaceId, accountId, accountEmail)
+    .bind(accountId, workspaceId, accountId)
     .run();
+  return accountId;
 }
 
 async function ensureSession(
@@ -510,9 +1090,7 @@ async function ensureSession(
     .run();
 
   await env.SKY_DB
-    .prepare(
-      `UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    )
+    .prepare(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
     .bind(input.sessionId)
     .run();
 }
@@ -616,12 +1194,7 @@ async function insertCitations(
   }
 }
 
-async function queryCitations(
-  env: Env,
-  workspaceId: string,
-  accountId: string,
-  query: string
-): Promise<Citation[]> {
+async function queryCitations(env: Env, workspaceId: string, accountId: string, query: string): Promise<Citation[]> {
   const accountEmail = await resolveAccountEmail(env, workspaceId, accountId);
   if (!accountEmail) return [];
 
@@ -638,13 +1211,7 @@ async function queryCitations(
        LIMIT 6`
     )
     .bind(workspaceId, accountEmail, like, like)
-    .all<{
-      id: string;
-      sent_at: string | null;
-      subject: string | null;
-      snippet: string | null;
-      sender: string | null;
-    }>();
+    .all<{ id: string; sent_at: string | null; subject: string | null; snippet: string | null; sender: string | null }>();
 
   return (rows.results || []).map((row, idx) => ({
     messageId: row.id,
@@ -691,6 +1258,29 @@ function buildCitationEnforcedAnswer(
     citationStatus: 'sufficient',
     searched
   };
+}
+
+function truncateText(text: string, max: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, max - 3)}...`;
+}
+
+function toDateOnly(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function numberOr(input: unknown): number | null {
+  if (typeof input === 'number' && Number.isFinite(input)) return input;
+  if (typeof input === 'string' && input.trim()) {
+    const n = Number(input);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function arrayOr(input: unknown): unknown[] | null {
+  return Array.isArray(input) ? input : null;
 }
 
 function isAuthorized(request: Request, env: Env): boolean {
