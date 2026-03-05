@@ -2362,34 +2362,7 @@ async function insertCitations(
 }
 
 async function queryCitations(env: Env, workspaceId: string, accountId: string, query: string): Promise<Citation[]> {
-  const accountEmail = await resolveAccountEmail(env, workspaceId, accountId);
-  if (!accountEmail) return [];
-
-  const like = `%${query.replace(/[%_]/g, ' ').trim()}%`;
-  const rows = await env.SKY_DB
-    .prepare(
-      `SELECT id, sent_at, subject, snippet,
-              COALESCE(json_extract(from_json, '$[0].address'), '') AS sender
-       FROM email_messages
-       WHERE workspace_id = ?
-         AND account_email = ?
-         AND (subject LIKE ? OR snippet LIKE ?)
-       ORDER BY datetime(COALESCE(sent_at, created_at)) DESC
-       LIMIT 6`
-    )
-    .bind(workspaceId, accountEmail, like, like)
-    .all<{ id: string; sent_at: string | null; subject: string | null; snippet: string | null; sender: string | null }>();
-
-  const lexical = (rows.results || []).map((row, idx) => ({
-    messageId: row.id,
-    date: row.sent_at,
-    from: row.sender || 'unknown',
-    subject: row.subject || '(no subject)',
-    score: Math.max(0, 1 - idx * 0.1)
-  }));
-  if (lexical.length > 0) return lexical;
-
-  // Fallback to semantic retrieval when lexical match misses singular/plural or wording variants.
+  // Semantic-first retrieval for natural language queries.
   const semanticHits = await performSemanticSearch(env, workspaceId, accountId, query, 6, {
     workspaceId,
     accountId,
@@ -2409,7 +2382,34 @@ async function queryCitations(env: Env, workspaceId: string, accountId: string, 
       score: hit.score
     });
   }
-  return semanticCitations;
+  if (semanticCitations.length > 0) return semanticCitations;
+
+  // SQL LIKE fallback for structured/exact lookup misses.
+  const accountEmail = await resolveAccountEmail(env, workspaceId, accountId);
+  if (!accountEmail) return [];
+
+  const like = `%${query.replace(/[%_]/g, ' ').trim()}%`;
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT id, sent_at, subject, snippet,
+              COALESCE(json_extract(from_json, '$[0].address'), '') AS sender
+       FROM email_messages
+       WHERE workspace_id = ?
+         AND account_email = ?
+         AND (subject LIKE ? OR snippet LIKE ?)
+       ORDER BY datetime(COALESCE(sent_at, created_at)) DESC
+       LIMIT 6`
+    )
+    .bind(workspaceId, accountEmail, like, like)
+    .all<{ id: string; sent_at: string | null; subject: string | null; snippet: string | null; sender: string | null }>();
+
+  return (rows.results || []).map((row, idx) => ({
+    messageId: row.id,
+    date: row.sent_at,
+    from: row.sender || 'unknown',
+    subject: row.subject || '(no subject)',
+    score: Math.max(0, 1 - idx * 0.1)
+  }));
 }
 
 async function resolveAccountEmail(env: Env, workspaceId: string, accountId: string): Promise<string | null> {
