@@ -206,6 +206,23 @@ Validation endpoint:
 - `workers/shared/citation.ts`: centralized citation contract validator.
 - `workers/shared/events.ts`: run lifecycle event constants.
 
+## Access Service-Token Validation (CLI)
+
+Run end-to-end protected API validation with a Cloudflare Access service token:
+
+```bash
+export CF_ACCESS_CLIENT_ID="..."
+export CF_ACCESS_CLIENT_SECRET="..."
+./scripts/validate-api-e2e.sh
+```
+
+The script will:
+- resolve service principal via `/auth/whoami`
+- grant D1 permission for that principal
+- run `propose -> approve -> execute` and `propose -> reject`
+- run `POST /chat/query`
+- verify `action_events` and `run_search_audits` rows in D1
+
 ## Historical Backfill (Controlled)
 
 Use the Mac agent one-off backfill command. This is checkpointed and dedupe-safe.
