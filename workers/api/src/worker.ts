@@ -2770,6 +2770,13 @@ async function performSemanticSearch(
        WHERE mc.workspace_id = ?
          AND lower(mc.account_id) = lower(?)
          AND mc.vector_id IN (${placeholders})
+         AND NOT (
+           lower(mc.chunk_text) LIKE '%return-path:%'
+           OR lower(mc.chunk_text) LIKE '%received:%'
+           OR lower(mc.chunk_text) LIKE '%mime-version:%'
+           OR lower(mc.chunk_text) LIKE '%content-type:%'
+           OR lower(mc.chunk_text) LIKE '%content-transfer-encoding:%'
+         )
        LIMIT ?`
     )
     .bind(workspaceId, accountId, ...vectorIds, k * 3)

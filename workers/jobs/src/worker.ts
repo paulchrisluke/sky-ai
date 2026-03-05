@@ -34,6 +34,16 @@ export default {
       return json({ ok: true, processed });
     }
 
+    if (request.method === 'POST' && url.pathname === '/jobs/embeddings/reclean-noisy') {
+      if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
+      const body = (await request.json().catch(() => ({}))) as JsonRecord;
+      const limit = Math.max(1, Math.min(numberOr(body.limit) || 500, 5000));
+      const dryRun = body.dryRun === true;
+      const processNow = body.processNow === true;
+      const result = await recleanNoisyChunksAndQueue(env, { limit, dryRun, processNow });
+      return json({ ok: true, ...result });
+    }
+
     return json({ ok: false, error: 'Not found' }, 404);
   },
 
@@ -121,28 +131,49 @@ async function processSingleEmbeddingJob(
 
   const chunkRows = await env.SKY_DB
     .prepare(
-      `SELECT vector_id, chunk_text, metadata_json
+      `SELECT id, vector_id, chunk_text, metadata_json
        FROM memory_chunks
        WHERE source_record_id = ?
        ORDER BY CAST(COALESCE(json_extract(metadata_json, '$.chunkIndex'), 0) AS INTEGER) ASC`
     )
     .bind(sourceRecordId)
-    .all<{ vector_id: string | null; chunk_text: string; metadata_json: string | null }>();
-
-  const chunks = (chunkRows.results || []).filter((x) => x.chunk_text).map((x) => x.chunk_text);
-  if (chunks.length === 0) {
-    await markEmbeddingJobIndexed(env, job.id, Number(job.attempts || 0) + 1);
-    return { status: 'indexed', warning: null };
-  }
+    .all<{ id: string; vector_id: string | null; chunk_text: string; metadata_json: string | null }>();
 
   try {
+    const prepared = (chunkRows.results || []).map((row) => {
+      const cleaned = cleanEmailBody(row.chunk_text || '').replace(/\s+/g, ' ').trim();
+      return { ...row, cleaned };
+    });
+
+    for (const row of prepared) {
+      const original = (row.chunk_text || '').replace(/\s+/g, ' ').trim();
+      if (row.cleaned !== original) {
+        await env.SKY_DB
+          .prepare(`UPDATE memory_chunks SET chunk_text = ? WHERE id = ?`)
+          .bind(row.cleaned, row.id)
+          .run();
+      }
+    }
+
+    const vectorIds = prepared.map((x) => x.vector_id).filter((x): x is string => Boolean(x));
+    if (vectorIds.length > 0) {
+      await env.SKY_VECTORIZE.delete(vectorIds);
+    }
+
+    const validRows = prepared.filter((x) => Boolean(x.cleaned));
+    const chunks = validRows.map((x) => x.cleaned);
+    if (chunks.length === 0) {
+      await markEmbeddingJobIndexed(env, job.id, Number(job.attempts || 0) + 1);
+      return { status: 'indexed', warning: null };
+    }
+
     const targetDims = parseVectorDimensions(env);
     const embeddings = (await embedChunks(env, chunks)).map((v) => normalizeVectorDimensions(v, targetDims));
     await env.SKY_VECTORIZE.upsert(
       embeddings.map((values, index) => ({
-        id: chunkRows.results?.[index]?.vector_id || `${sourceRecordId}:${index}`,
+        id: validRows[index]?.vector_id || `${sourceRecordId}:${index}`,
         values,
-        metadata: parseJsonObject(chunkRows.results?.[index]?.metadata_json)
+        metadata: parseJsonObject(validRows[index]?.metadata_json)
       }))
     );
 
@@ -155,6 +186,102 @@ async function processSingleEmbeddingJob(
     await markEmbeddingJobRetry(env, job.id, nextAttempts, message.slice(0, 1500), backoffMinutes);
     return { status: 'retry', warning: message };
   }
+}
+
+async function recleanNoisyChunksAndQueue(
+  env: Env,
+  input: { limit: number; dryRun: boolean; processNow: boolean }
+): Promise<{
+  scanned: number;
+  changedChunks: number;
+  queuedSourceRecords: number;
+  processedNow: number;
+  dryRun: boolean;
+}> {
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT id, source_record_id, workspace_id, account_id, chunk_text
+       FROM memory_chunks
+       WHERE lower(chunk_text) LIKE '%return-path:%'
+          OR lower(chunk_text) LIKE '%received:%'
+          OR lower(chunk_text) LIKE '%mime-version:%'
+          OR lower(chunk_text) LIKE '%content-type:%'
+          OR lower(chunk_text) LIKE '%content-transfer-encoding:%'
+       LIMIT ?`
+    )
+    .bind(input.limit)
+    .all<{
+      id: string;
+      source_record_id: string;
+      workspace_id: string;
+      account_id: string | null;
+      chunk_text: string;
+    }>();
+
+  const affected = new Map<string, { workspaceId: string; accountId: string | null }>();
+  let changedChunks = 0;
+
+  for (const row of rows.results || []) {
+    const cleaned = cleanEmailBody(row.chunk_text).replace(/\s+/g, ' ').trim();
+    const original = row.chunk_text.replace(/\s+/g, ' ').trim();
+    if (!cleaned || cleaned === original) continue;
+
+    changedChunks += 1;
+    if (!input.dryRun) {
+      await env.SKY_DB
+        .prepare(`UPDATE memory_chunks SET chunk_text = ? WHERE id = ?`)
+        .bind(cleaned, row.id)
+        .run();
+      affected.set(row.source_record_id, { workspaceId: row.workspace_id, accountId: row.account_id });
+    }
+  }
+
+  let processedNow = 0;
+  if (!input.dryRun) {
+    for (const [sourceRecordId, scope] of affected.entries()) {
+      const updated = await env.SKY_DB
+        .prepare(
+          `UPDATE embedding_jobs
+           SET status = 'queued',
+               last_error = NULL,
+               next_attempt_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE source_record_id = ?`
+        )
+        .bind(sourceRecordId)
+        .run();
+
+      const changes = Number((updated as unknown as { meta?: { changes?: number } }).meta?.changes || 0);
+      if (changes === 0) {
+        await env.SKY_DB
+          .prepare(
+            `INSERT INTO embedding_jobs
+             (id, workspace_id, account_id, source_record_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'queued', 0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+          )
+          .bind(
+            crypto.randomUUID(),
+            scope.workspaceId,
+            scope.accountId,
+            sourceRecordId
+          )
+          .run();
+      }
+
+      if (input.processNow) {
+        const res = await processSingleEmbeddingJob(env, sourceRecordId);
+        if (res.status === 'indexed') processedNow += 1;
+      }
+    }
+  }
+
+  return {
+    scanned: Number((rows.results || []).length),
+    changedChunks,
+    queuedSourceRecords: input.dryRun ? 0 : affected.size,
+    processedNow,
+    dryRun: input.dryRun
+  };
 }
 
 async function markEmbeddingJobIndexed(env: Env, jobId: string, attempts: number): Promise<void> {
@@ -207,6 +334,29 @@ function hasEmbeddingProviderConfig(env: Env): boolean {
 
 function computeBackoffMinutes(attempts: number): number {
   return Math.min(240, Math.max(1, 2 ** Math.min(attempts, 8)));
+}
+
+function cleanEmailBody(raw: string): string {
+  const headerNames =
+    '(Return-Path|Received|MIME-Version|Content-Type|Content-Transfer-Encoding|X-[\\w-]+|Message-ID|Date|From|To|Cc|Bcc|Subject|Reply-To|Delivered-To|Authentication-Results|DKIM-Signature|ARC-[\\w-]+)';
+
+  let cleaned = raw
+    .replace(
+      /^(Return-Path|Received|MIME-Version|Content-Type|Content-Transfer-Encoding|X-[\w-]+|Message-ID|Date|From|To|Cc|Bcc|Subject|Reply-To|Delivered-To|Authentication-Results|DKIM-Signature|ARC-[\w-]+):.*$/gim,
+      ''
+    )
+    .replace(/^>.*$/gm, '')
+    .replace(/^-{3,}.*Forwarded.*-{3,}$/gim, '')
+    .replace(/^(unsubscribe|this email was sent|you are receiving|view in browser|privacy policy).*/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  cleaned = cleaned.replace(
+    new RegExp(`(?:^|\\s)${headerNames}:\\s*[^\\n]*?(?=(?:\\s${headerNames}:)|$)`, 'gi'),
+    ' '
+  );
+
+  return cleaned.trim();
 }
 
 function parseJsonObject(input: string | null | undefined): Record<string, unknown> {
@@ -357,6 +507,15 @@ async function authorizeHttpRequest(
 
 function stringOr(input: unknown): string | null {
   return typeof input === 'string' && input.trim() ? input.trim() : null;
+}
+
+function numberOr(input: unknown): number | null {
+  if (typeof input === 'number' && Number.isFinite(input)) return Math.trunc(input);
+  if (typeof input === 'string' && input.trim()) {
+    const n = Number(input);
+    if (Number.isFinite(n)) return Math.trunc(n);
+  }
+  return null;
 }
 
 function json(payload: JsonRecord, status = 200): Response {

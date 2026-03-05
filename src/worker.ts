@@ -709,21 +709,21 @@ function buildSnippet(payload: JsonRecord, subject: string): string {
   const bodyText = stringOr(payload.bodyText);
   const raw = stringOr(payload.rawRfc822);
   const candidate = bodyText || raw || subject;
-  return candidate.slice(0, 500);
+  return cleanEmailBody(candidate).slice(0, 500);
 }
 
 function buildChunkSource(payload: JsonRecord, subject: string, fallbackSnippet: string): string {
   const bodyText = stringOr(payload.bodyText);
-  if (bodyText) return bodyText.slice(0, MAX_CHUNK_SOURCE_CHARS);
+  if (bodyText) return cleanEmailBody(bodyText).slice(0, MAX_CHUNK_SOURCE_CHARS);
 
   const raw = stringOr(payload.rawRfc822);
-  if (raw) return raw.slice(0, MAX_CHUNK_SOURCE_CHARS);
+  if (raw) return cleanEmailBody(raw).slice(0, MAX_CHUNK_SOURCE_CHARS);
 
-  return `${subject}\n\n${fallbackSnippet}`.slice(0, MAX_CHUNK_SOURCE_CHARS);
+  return cleanEmailBody(`${subject}\n\n${fallbackSnippet}`).slice(0, MAX_CHUNK_SOURCE_CHARS);
 }
 
 function chunkText(text: string, size: number, overlap: number, maxChunks: number): string[] {
-  const normalized = text.replace(/\s+/g, ' ').trim();
+  const normalized = cleanEmailBody(text).replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
 
   const chunks: string[] = [];
@@ -736,6 +736,35 @@ function chunkText(text: string, size: number, overlap: number, maxChunks: numbe
   }
 
   return chunks;
+}
+
+function cleanEmailBody(raw: string): string {
+  const headerNames =
+    '(Return-Path|Received|MIME-Version|Content-Type|Content-Transfer-Encoding|X-[\\w-]+|Message-ID|Date|From|To|Cc|Bcc|Subject|Reply-To|Delivered-To|Authentication-Results|DKIM-Signature|ARC-[\\w-]+)';
+
+  let cleaned = raw
+    // Remove common transport and MIME headers.
+    .replace(
+      /^(Return-Path|Received|MIME-Version|Content-Type|Content-Transfer-Encoding|X-[\w-]+|Message-ID|Date|From|To|Cc|Bcc|Subject|Reply-To|Delivered-To|Authentication-Results|DKIM-Signature|ARC-[\w-]+):.*$/gim,
+      ''
+    )
+    // Remove quoted reply lines.
+    .replace(/^>.*$/gm, '')
+    // Remove forwarded-block markers.
+    .replace(/^-{3,}.*Forwarded.*-{3,}$/gim, '')
+    // Remove common footer boilerplate.
+    .replace(/^(unsubscribe|this email was sent|you are receiving|view in browser|privacy policy).*/gim, '')
+    // Collapse excessive line breaks.
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  // Handle already-flattened legacy chunks where header lines were collapsed to one line.
+  cleaned = cleaned.replace(
+    new RegExp(`(?:^|\\s)${headerNames}:\\s*[^\\n]*?(?=(?:\\s${headerNames}:)|$)`, 'gi'),
+    ' '
+  );
+
+  return cleaned.trim();
 }
 
 function buildSourceMessageKey(input: {
