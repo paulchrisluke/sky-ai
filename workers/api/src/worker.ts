@@ -2762,7 +2762,7 @@ async function performSemanticSearch(
           em.sent_at AS sent_at,
           COALESCE(json_extract(em.from_json, '$[0].address'), '') AS sender,
           em.subject AS subject,
-          em.snippet AS excerpt
+          mc.chunk_text AS excerpt
        FROM memory_chunks mc
        LEFT JOIN email_messages em
          ON em.id = json_extract(mc.metadata_json, '$.messageId')
@@ -2801,7 +2801,7 @@ async function performSemanticSearch(
         date: row.sent_at,
         from: row.sender || '',
         subject: row.subject || '(no subject)',
-        excerpt: row.excerpt || '',
+        excerpt: (row.excerpt || '').replace(/\s+/g, ' ').trim().slice(0, 200),
         score: Number(m.score || 0),
         chunk_id: m.id
       };
