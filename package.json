@@ -1,18 +1,19 @@
 {
   "name": "sky-ai",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Apps Script automation project for Sky AI",
+  "description": "Cloudflare-native Sky AI backend",
   "scripts": {
-    "clasp:login": "clasp login",
-    "clasp:status": "clasp status",
-    "clasp:push": "clasp push",
-    "clasp:pull": "clasp pull",
-    "secrets:load": "node scripts/load-secrets.mjs",
-    "secrets:validate": "clasp run validateSecrets"
+    "cf:login": "wrangler login",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy",
+    "cf:deploy:prod": "wrangler deploy --env prod",
+    "cf:d1:migrate:dev": "wrangler d1 migrations apply sky-ai-dev",
+    "cf:d1:migrate:prod": "wrangler d1 migrations apply sky-ai-prod --env prod"
   },
   "devDependencies": {
-    "@google/clasp": "^2.5.0"
+    "wrangler": "^4.6.0",
+    "typescript": "^5.8.2"
   },
   "engines": {
     "node": ">=20"

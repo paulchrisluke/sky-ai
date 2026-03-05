@@ -1,11 +1,9 @@
 node_modules/
-.clasp.json
-.clasp.dev.json
-.clasp.prod.json
-.clasprc.json
-*.log
+.wrangler/
+.dev.vars
+.dev.vars.*
 .env
 .env.*
 .secrets*
-!.secrets.local.example
+*.log
 .DS_Store

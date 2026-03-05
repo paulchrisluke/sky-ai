@@ -1,0 +1,51 @@
+name = "sky-ai"
+main = "src/worker.ts"
+compatibility_date = "2026-03-05"
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "dev"
+
+[[d1_databases]]
+binding = "SKY_DB"
+database_name = "sky-ai-dev"
+database_id = "REPLACE_DEV_D1_DATABASE_ID"
+migrations_dir = "db/migrations"
+
+[[r2_buckets]]
+binding = "SKY_ARTIFACTS"
+bucket_name = "sky-ai-artifacts-dev"
+
+[[vectorize]]
+binding = "SKY_VECTORIZE"
+index_name = "sky-ai-memory-dev"
+
+[triggers]
+crons = ["*/15 * * * *", "0 13 * * *"]
+
+[observability]
+enabled = true
+
+[env.prod]
+workers_dev = false
+route = { pattern = "sky-ai-api.example.com/*", zone_name = "example.com" }
+
+[env.prod.vars]
+ENVIRONMENT = "prod"
+
+[[env.prod.d1_databases]]
+binding = "SKY_DB"
+database_name = "sky-ai-prod"
+database_id = "REPLACE_PROD_D1_DATABASE_ID"
+migrations_dir = "db/migrations"
+
+[[env.prod.r2_buckets]]
+binding = "SKY_ARTIFACTS"
+bucket_name = "sky-ai-artifacts-prod"
+
+[[env.prod.vectorize]]
+binding = "SKY_VECTORIZE"
+index_name = "sky-ai-memory-prod"
+
+[env.prod.triggers]
+crons = ["*/15 * * * *", "0 13 * * *"]
