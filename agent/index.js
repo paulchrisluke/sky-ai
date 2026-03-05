@@ -35,6 +35,36 @@ function sanitizeAccountId(email) {
   return email.toLowerCase().replace(/[^a-z0-9]/g, '_');
 }
 
+function redact(value) {
+  if (!value) return value;
+  let text = String(value);
+  const secrets = [process.env.APPLE_APP_PASSWORD, process.env.WORKER_API_KEY].filter(Boolean);
+  for (const secret of secrets) {
+    if (!secret) continue;
+    text = text.split(secret).join('[REDACTED]');
+  }
+  return text;
+}
+
+function describeError(error) {
+  if (!(error instanceof Error)) {
+    return redact(String(error));
+  }
+
+  const parts = [
+    `message=${redact(error.message)}`
+  ];
+
+  if (error.code) parts.push(`code=${redact(error.code)}`);
+  if (error.responseStatus) parts.push(`responseStatus=${redact(error.responseStatus)}`);
+  if (error.responseText) parts.push(`responseText=${redact(error.responseText)}`);
+  if (error.executedCommand) parts.push(`executedCommand=${redact(error.executedCommand)}`);
+  if (error.serverResponseCode) parts.push(`serverResponseCode=${redact(error.serverResponseCode)}`);
+  if (error.status) parts.push(`status=${redact(error.status)}`);
+
+  return parts.join(' | ');
+}
+
 function loadState() {
   try {
     return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
@@ -214,7 +244,7 @@ async function loop() {
     try {
       await run();
     } catch (error) {
-      console.error('[email-sync] sync error', error instanceof Error ? error.message : String(error));
+      console.error('[email-sync] sync error', describeError(error));
     }
 
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
