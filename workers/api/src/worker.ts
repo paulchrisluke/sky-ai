@@ -2380,13 +2380,36 @@ async function queryCitations(env: Env, workspaceId: string, accountId: string, 
     .bind(workspaceId, accountEmail, like, like)
     .all<{ id: string; sent_at: string | null; subject: string | null; snippet: string | null; sender: string | null }>();
 
-  return (rows.results || []).map((row, idx) => ({
+  const lexical = (rows.results || []).map((row, idx) => ({
     messageId: row.id,
     date: row.sent_at,
     from: row.sender || 'unknown',
     subject: row.subject || '(no subject)',
     score: Math.max(0, 1 - idx * 0.1)
   }));
+  if (lexical.length > 0) return lexical;
+
+  // Fallback to semantic retrieval when lexical match misses singular/plural or wording variants.
+  const semanticHits = await performSemanticSearch(env, workspaceId, accountId, query, 6, {
+    workspaceId,
+    accountId,
+    operation: 'chat_find_email_retrieval',
+    endpoint: '/chat/query'
+  });
+  const seen = new Set<string>();
+  const semanticCitations: Citation[] = [];
+  for (const hit of semanticHits) {
+    if (seen.has(hit.message_id)) continue;
+    seen.add(hit.message_id);
+    semanticCitations.push({
+      messageId: hit.message_id,
+      date: hit.date,
+      from: hit.from || 'unknown',
+      subject: hit.subject || '(no subject)',
+      score: hit.score
+    });
+  }
+  return semanticCitations;
 }
 
 async function resolveAccountEmail(env: Env, workspaceId: string, accountId: string): Promise<string | null> {
