@@ -4,6 +4,7 @@
 AIG_ACCOUNT_ID="replace-me"
 AIG_GATEWAY_ID="sky-ai"
 OPENAI_MODEL="gpt-4o-mini"
+OPENAI_EMBEDDING_MODEL="text-embedding-3-small"
 OPENAI_API_KEY="replace-me"
 WORKER_API_KEY="replace-me"
 MAILBOX_SKYLERBAIRD_ME_COM="SkylerBaird@me.com"

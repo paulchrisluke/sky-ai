@@ -62,6 +62,23 @@ pm2 status
 pm2 logs email-sync --lines 100
 ```
 
+## 7) Optional historical backfill
+
+Run this one-off command to ingest older mail in a controlled, checkpointed way.
+
+```bash
+cd ~/sky-ai/agent
+npm run backfill -- --since=2024-01-01 --mailboxes=INBOX
+```
+
+Optional flags:
+
+- `--until=2024-12-31`
+- `--batchSize=25`
+- `--delayMs=250`
+
+Checkpoint state is written to `~/sky-ai/data/backfill-state.json`.
+
 ## Suggested sync interval
 
 Start with `POLL_INTERVAL_MS=60000` (60s). If rate-limited, move to `120000`-`300000`.

@@ -31,6 +31,7 @@ Set these local values in `.dev.vars`:
 - `AIG_ACCOUNT_ID`
 - `AIG_GATEWAY_ID`
 - `OPENAI_MODEL` (default `gpt-4o-mini`)
+- `OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`)
 - `OPENAI_API_KEY`
 - `WORKER_API_KEY` (required)
 - `MAILBOX_SKYLERBAIRD_ME_COM` (`SkylerBaird@me.com`)
@@ -65,6 +66,7 @@ Set non-secret AI Gateway vars in `wrangler.toml`:
 - `AIG_ACCOUNT_ID`
 - `AIG_GATEWAY_ID`
 - `OPENAI_MODEL`
+- `OPENAI_EMBEDDING_MODEL`
 
 Model switching:
 
@@ -101,6 +103,8 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
   - `POST /mail/send` (enqueue)
   - `GET /mail/outbound/next` (agent claim)
   - `POST /mail/outbound/result` (sent/failed ack)
+- Backfill queue endpoint:
+  - `POST /mail/backfill` (queues checkpointed historical ingest job metadata)
 
 ## Secret storage clarification
 

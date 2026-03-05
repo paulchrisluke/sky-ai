@@ -8,11 +8,22 @@ interface Env {
   AIG_ACCOUNT_ID?: string;
   AIG_GATEWAY_ID?: string;
   OPENAI_MODEL?: string;
+  OPENAI_EMBEDDING_MODEL?: string;
   MAILBOX_SKYLERBAIRD_ME_COM?: string;
   ENVIRONMENT: string;
 }
 
 type JsonRecord = Record<string, unknown>;
+
+type NormalizedAddress = {
+  email: string;
+  name: string | null;
+};
+
+const MAX_CHUNK_SOURCE_CHARS = 24000;
+const CHUNK_SIZE = 1200;
+const CHUNK_OVERLAP = 200;
+const MAX_CHUNKS_PER_MESSAGE = 24;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -25,6 +36,11 @@ export default {
     if (request.method === 'POST' && url.pathname === '/ingest/mail-thread') {
       if (!isAuthorized(request, env)) return unauthorized();
       return ingestMailThread(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/mail/backfill') {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return queueBackfillRun(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/mail/send') {
@@ -72,28 +88,320 @@ export default {
 async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
-  const threadId = stringOr(payload.threadId);
+  const accountEmail = (stringOr(payload.accountEmail) || 'unknown').toLowerCase();
+  const mailbox = stringOr(payload.mailbox) || 'INBOX';
+  const threadExternalId = stringOr(payload.threadId);
+  const providerUid = numberOr(payload.uid);
+  const providerMessageId = stringOr(payload.messageId);
+  const subject = stringOr(payload.subject) || '';
+  const sentAt = stringOr(payload.date);
 
-  if (!threadId) {
+  if (!threadExternalId) {
     return json({ ok: false, error: 'threadId is required' }, 400);
   }
 
-  const artifactKey = `mail/${workspaceId}/threads/${threadId}/${Date.now()}.json`;
-  await env.SKY_ARTIFACTS.put(artifactKey, JSON.stringify(payload), {
-    httpMetadata: { contentType: 'application/json' }
+  const sourceMessageKey = buildSourceMessageKey({
+    workspaceId,
+    accountEmail,
+    mailbox,
+    providerUid,
+    providerMessageId,
+    threadExternalId,
+    sentAt,
+    subject
   });
 
   await ensureWorkspace(env, workspaceId);
 
+  const existingMessage = await env.SKY_DB
+    .prepare(
+      `SELECT id FROM email_messages WHERE source_message_key = ? LIMIT 1`
+    )
+    .bind(sourceMessageKey)
+    .first<{ id: string }>();
+
+  if (existingMessage) {
+    return json({ ok: true, deduped: true, messageId: existingMessage.id, sourceMessageKey });
+  }
+
+  const threadId = await upsertEmailThread(env, {
+    workspaceId,
+    accountEmail,
+    mailbox,
+    threadExternalId,
+    subject,
+    sentAt
+  });
+
+  const artifactKey = `mail/${workspaceId}/threads/${threadExternalId}/${Date.now()}-${safeForKey(sourceMessageKey)}.json`;
+  await env.SKY_ARTIFACTS.put(artifactKey, JSON.stringify(payload), {
+    httpMetadata: { contentType: 'application/json' }
+  });
+
+  const artifactId = crypto.randomUUID();
   await env.SKY_DB
     .prepare(
       `INSERT INTO artifacts (id, workspace_id, source, source_id, r2_key, metadata_json, created_at)
        VALUES (?, ?, 'mail_thread', ?, ?, ?, CURRENT_TIMESTAMP)`
     )
-    .bind(crypto.randomUUID(), workspaceId, threadId, artifactKey, JSON.stringify({ ingestedBy: 'api' }))
+    .bind(
+      artifactId,
+      workspaceId,
+      threadExternalId,
+      artifactKey,
+      JSON.stringify({ ingestedBy: 'imap-agent', sourceMessageKey, accountEmail, mailbox })
+    )
     .run();
 
-  return json({ ok: true, artifactKey });
+  const recordId = crypto.randomUUID();
+  const snippet = buildSnippet(payload, subject);
+  await env.SKY_DB
+    .prepare(
+      `INSERT INTO normalized_records (id, workspace_id, record_type, source_artifact_id, body_json, created_at, updated_at)
+       VALUES (?, ?, 'email_message', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    )
+    .bind(
+      recordId,
+      workspaceId,
+      artifactId,
+      JSON.stringify({
+        accountEmail,
+        mailbox,
+        threadExternalId,
+        providerUid,
+        providerMessageId,
+        subject,
+        sentAt,
+        snippet
+      })
+    )
+    .run();
+
+  const messageId = crypto.randomUUID();
+  const fromAddresses = normalizeAddresses(payload.from);
+  const toAddresses = normalizeAddresses(payload.to);
+  const rawSource = stringOr(payload.rawRfc822) || '';
+  const rawSha256 = rawSource ? await sha256Hex(rawSource) : null;
+
+  await env.SKY_DB
+    .prepare(
+      `INSERT INTO email_messages
+       (id, workspace_id, thread_id, account_email, mailbox, provider_uid, provider_message_id, source_message_key, subject,
+        sent_at, from_json, to_json, snippet, artifact_id, raw_sha256, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    )
+    .bind(
+      messageId,
+      workspaceId,
+      threadId,
+      accountEmail,
+      mailbox,
+      providerUid,
+      providerMessageId,
+      sourceMessageKey,
+      subject || null,
+      sentAt,
+      JSON.stringify(fromAddresses),
+      JSON.stringify(toAddresses),
+      snippet,
+      artifactId,
+      rawSha256
+    )
+    .run();
+
+  await upsertParticipants(env, workspaceId, messageId, fromAddresses, 'from');
+  await upsertParticipants(env, workspaceId, messageId, toAddresses, 'to');
+  await updateThreadLastMessage(env, threadId, subject, sentAt);
+
+  const chunkSource = buildChunkSource(payload, subject, snippet);
+  const chunks = chunkText(chunkSource, CHUNK_SIZE, CHUNK_OVERLAP, MAX_CHUNKS_PER_MESSAGE);
+  let chunkCount = 0;
+  let embeddingWarning: string | null = null;
+
+  if (chunks.length > 0 && hasAiGatewayConfig(env)) {
+    try {
+      const embeddings = await callOpenAiEmbeddingsViaGateway(env, chunks);
+      await env.SKY_VECTORIZE.upsert(
+        embeddings.map((values, index) => ({
+          id: `${messageId}:${index}`,
+          values,
+          metadata: {
+            workspaceId,
+            messageId,
+            threadId,
+            mailbox,
+            accountEmail,
+            sentAt,
+            chunkIndex: index
+          }
+        }))
+      );
+
+      for (let i = 0; i < chunks.length; i += 1) {
+        await env.SKY_DB
+          .prepare(
+            `INSERT INTO memory_chunks (id, workspace_id, source_record_id, vector_id, chunk_text, metadata_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+          )
+          .bind(
+            crypto.randomUUID(),
+            workspaceId,
+            recordId,
+            `${messageId}:${i}`,
+            chunks[i],
+            JSON.stringify({ messageId, threadId, mailbox, accountEmail, sentAt, chunkIndex: i })
+          )
+          .run();
+      }
+      chunkCount = chunks.length;
+    } catch (error) {
+      embeddingWarning = error instanceof Error ? error.message : 'embedding_failed';
+    }
+  }
+
+  return json({
+    ok: true,
+    deduped: false,
+    messageId,
+    artifactKey,
+    sourceMessageKey,
+    chunksIndexed: chunkCount,
+    warning: embeddingWarning
+  });
+}
+
+async function upsertEmailThread(
+  env: Env,
+  input: {
+    workspaceId: string;
+    accountEmail: string;
+    mailbox: string;
+    threadExternalId: string;
+    subject: string;
+    sentAt: string | null;
+  }
+): Promise<string> {
+  await env.SKY_DB
+    .prepare(
+      `INSERT OR IGNORE INTO email_threads
+       (id, workspace_id, account_email, mailbox, thread_external_id, subject, first_message_at, last_message_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    )
+    .bind(
+      crypto.randomUUID(),
+      input.workspaceId,
+      input.accountEmail,
+      input.mailbox,
+      input.threadExternalId,
+      input.subject || null,
+      input.sentAt,
+      input.sentAt
+    )
+    .run();
+
+  const row = await env.SKY_DB
+    .prepare(
+      `SELECT id FROM email_threads
+       WHERE workspace_id = ? AND account_email = ? AND mailbox = ? AND thread_external_id = ?
+       LIMIT 1`
+    )
+    .bind(input.workspaceId, input.accountEmail, input.mailbox, input.threadExternalId)
+    .first<{ id: string }>();
+
+  if (!row) {
+    throw new Error('Failed to upsert thread');
+  }
+
+  return row.id;
+}
+
+async function updateThreadLastMessage(
+  env: Env,
+  threadId: string,
+  subject: string,
+  sentAt: string | null
+): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `UPDATE email_threads
+       SET subject = COALESCE(?, subject),
+           last_message_at = COALESCE(?, last_message_at),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(subject || null, sentAt, threadId)
+    .run();
+}
+
+async function upsertParticipants(
+  env: Env,
+  workspaceId: string,
+  messageId: string,
+  addresses: NormalizedAddress[],
+  role: 'from' | 'to'
+): Promise<void> {
+  for (const addr of addresses) {
+    const participantId = crypto.randomUUID();
+    await env.SKY_DB
+      .prepare(
+        `INSERT OR IGNORE INTO email_participants (id, workspace_id, email, display_name, created_at, updated_at)
+         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      )
+      .bind(participantId, workspaceId, addr.email, addr.name)
+      .run();
+
+    const participant = await env.SKY_DB
+      .prepare(`SELECT id FROM email_participants WHERE workspace_id = ? AND email = ? LIMIT 1`)
+      .bind(workspaceId, addr.email)
+      .first<{ id: string }>();
+
+    if (!participant) continue;
+
+    await env.SKY_DB
+      .prepare(
+        `INSERT OR IGNORE INTO email_message_participants
+         (id, workspace_id, message_id, participant_id, role, created_at)
+         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+      )
+      .bind(crypto.randomUUID(), workspaceId, messageId, participant.id, role)
+      .run();
+  }
+}
+
+async function queueBackfillRun(request: Request, env: Env): Promise<Response> {
+  const payload = (await request.json()) as JsonRecord;
+  const workspaceId = stringOr(payload.workspaceId) || 'default';
+  const accountEmail = (stringOr(payload.accountEmail) || 'unknown').toLowerCase();
+  const mailbox = stringOr(payload.mailbox) || 'INBOX';
+  const sinceDate = stringOr(payload.sinceDate);
+  const untilDate = stringOr(payload.untilDate);
+
+  if (!sinceDate) {
+    return json({ ok: false, error: 'sinceDate is required (YYYY-MM-DD)' }, 400);
+  }
+
+  await ensureWorkspace(env, workspaceId);
+
+  const id = crypto.randomUUID();
+  await env.SKY_DB
+    .prepare(
+      `INSERT INTO backfill_runs
+       (id, workspace_id, account_email, mailbox, since_date, until_date, status, checkpoint_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    )
+    .bind(id, workspaceId, accountEmail, mailbox, sinceDate, untilDate, JSON.stringify({ stagedBy: 'api' }))
+    .run();
+
+  await enqueueSyncJob(env, 'mailbox_backfill', {
+    backfillRunId: id,
+    workspaceId,
+    accountEmail,
+    mailbox,
+    sinceDate,
+    untilDate
+  });
+
+  return json({ ok: true, backfillRunId: id, status: 'queued' });
 }
 
 async function ensureWorkspace(env: Env, workspaceId: string): Promise<void> {
@@ -133,7 +441,7 @@ async function runAiGatewayTest(env: Env): Promise<Response> {
   }
 
   try {
-    const completion = await callOpenAiViaGateway(env, [
+    const completion = await callOpenAiChatViaGateway(env, [
       { role: 'user', content: 'Respond with exactly: AI Gateway OpenAI ready.' }
     ]);
     return json({ ok: true, provider: 'openai-via-aigateway', completion });
@@ -258,6 +566,99 @@ async function markOutboundMailResult(request: Request, env: Env): Promise<Respo
   return json({ ok: true, id, status: 'failed' });
 }
 
+function normalizeAddresses(input: unknown): NormalizedAddress[] {
+  if (!Array.isArray(input)) return [];
+
+  const out: NormalizedAddress[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const email = stringOr(record.address) || stringOr(record.email);
+    if (!email) continue;
+    out.push({ email: email.toLowerCase(), name: stringOr(record.name) });
+  }
+  return out;
+}
+
+function buildSnippet(payload: JsonRecord, subject: string): string {
+  const bodyText = stringOr(payload.bodyText);
+  const raw = stringOr(payload.rawRfc822);
+  const candidate = bodyText || raw || subject;
+  return candidate.slice(0, 500);
+}
+
+function buildChunkSource(payload: JsonRecord, subject: string, fallbackSnippet: string): string {
+  const bodyText = stringOr(payload.bodyText);
+  if (bodyText) return bodyText.slice(0, MAX_CHUNK_SOURCE_CHARS);
+
+  const raw = stringOr(payload.rawRfc822);
+  if (raw) return raw.slice(0, MAX_CHUNK_SOURCE_CHARS);
+
+  return `${subject}\n\n${fallbackSnippet}`.slice(0, MAX_CHUNK_SOURCE_CHARS);
+}
+
+function chunkText(text: string, size: number, overlap: number, maxChunks: number): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < normalized.length && chunks.length < maxChunks) {
+    const end = Math.min(normalized.length, start + size);
+    chunks.push(normalized.slice(start, end));
+    if (end >= normalized.length) break;
+    start = Math.max(0, end - overlap);
+  }
+
+  return chunks;
+}
+
+function buildSourceMessageKey(input: {
+  workspaceId: string;
+  accountEmail: string;
+  mailbox: string;
+  providerUid: number | null;
+  providerMessageId: string | null;
+  threadExternalId: string;
+  sentAt: string | null;
+  subject: string;
+}): string {
+  if (input.providerUid !== null) {
+    return `${input.workspaceId}:${input.accountEmail}:${input.mailbox}:uid:${input.providerUid}`;
+  }
+
+  if (input.providerMessageId) {
+    return `${input.workspaceId}:${input.accountEmail}:mid:${input.providerMessageId}`;
+  }
+
+  return `${input.workspaceId}:${input.accountEmail}:${input.mailbox}:thread:${input.threadExternalId}:${input.sentAt || ''}:${input.subject}`;
+}
+
+function safeForKey(input: string): string {
+  return input.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+function numberOr(input: unknown): number | null {
+  if (typeof input === 'number' && Number.isFinite(input)) {
+    return Math.trunc(input);
+  }
+
+  if (typeof input === 'string' && input.trim()) {
+    const n = Number(input);
+    if (Number.isFinite(n)) {
+      return Math.trunc(n);
+    }
+  }
+
+  return null;
+}
+
 function stringOr(input: unknown): string | null {
   return typeof input === 'string' && input.trim() ? input.trim() : null;
 }
@@ -276,7 +677,7 @@ function hasAiGatewayConfig(env: Env): boolean {
   return Boolean(env.OPENAI_API_KEY && env.AIG_ACCOUNT_ID && env.AIG_GATEWAY_ID);
 }
 
-async function callOpenAiViaGateway(
+async function callOpenAiChatViaGateway(
   env: Env,
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
 ): Promise<string> {
@@ -311,6 +712,45 @@ async function callOpenAiViaGateway(
     choices?: Array<{ message?: { content?: string } }>;
   };
   return body.choices?.[0]?.message?.content || '';
+}
+
+async function callOpenAiEmbeddingsViaGateway(env: Env, chunks: string[]): Promise<number[][]> {
+  const gatewayUrl =
+    `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/embeddings`;
+
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    authorization: `Bearer ${env.OPENAI_API_KEY as string}`
+  };
+
+  if (env.CF_AIG_AUTH_TOKEN) {
+    headers['cf-aig-authorization'] = `Bearer ${env.CF_AIG_AUTH_TOKEN}`;
+  }
+
+  const response = await fetch(gatewayUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
+      input: chunks
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Embedding request failed (${response.status}): ${text.slice(0, 500)}`);
+  }
+
+  const body = (await response.json()) as {
+    data?: Array<{ embedding?: number[] }>;
+  };
+
+  const vectors = (body.data || []).map((x) => x.embedding || []);
+  if (vectors.length !== chunks.length || vectors.some((v) => v.length === 0)) {
+    throw new Error('Embedding response did not match requested chunk count');
+  }
+
+  return vectors;
 }
 
 function json(payload: JsonRecord, status = 200): Response {
