@@ -2,15 +2,12 @@ interface Env {
   SKY_DB: D1Database;
   SKY_ARTIFACTS: R2Bucket;
   SKY_VECTORIZE: VectorizeIndex;
-  AI?: {
-    run(model: string, inputs: Record<string, unknown>): Promise<Record<string, unknown>>;
-  };
   WORKER_API_KEY?: string;
-  CLAUDE_API_KEY?: string;
+  OPENAI_API_KEY?: string;
   CF_AIG_AUTH_TOKEN?: string;
   AIG_ACCOUNT_ID?: string;
   AIG_GATEWAY_ID?: string;
-  CLAUDE_MODEL?: string;
+  OPENAI_MODEL?: string;
   MAILBOX_SKYLERBAIRD_ME_COM?: string;
   ENVIRONMENT: string;
 }
@@ -99,7 +96,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
 
 async function runTriage(env: Env): Promise<Response> {
   if (!hasAiGatewayConfig(env)) {
-    return json({ ok: true, noop: true, reason: 'missing_claude_api_key' });
+    return json({ ok: true, noop: true, reason: 'missing_openai_api_key' });
   }
 
   await enqueueSyncJob(env, 'triage_inbox', { source: 'api' });
@@ -108,7 +105,7 @@ async function runTriage(env: Env): Promise<Response> {
 
 async function runDailyBriefing(env: Env): Promise<Response> {
   if (!hasAiGatewayConfig(env)) {
-    return json({ ok: true, noop: true, reason: 'missing_claude_api_key' });
+    return json({ ok: true, noop: true, reason: 'missing_openai_api_key' });
   }
 
   await enqueueSyncJob(env, 'daily_briefing', { source: 'api' });
@@ -116,24 +113,23 @@ async function runDailyBriefing(env: Env): Promise<Response> {
 }
 
 async function runAiGatewayTest(env: Env): Promise<Response> {
-  if (!env.AI) {
+  if (!hasAiGatewayConfig(env)) {
     return json({
       ok: false,
-      error: 'Missing Workers AI binding (AI).'
+      error: 'Missing AI Gateway OpenAI configuration (OPENAI_API_KEY, AIG_ACCOUNT_ID, AIG_GATEWAY_ID).'
     }, 400);
   }
 
   try {
-    const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-      prompt: 'Respond with exactly: Workers AI ready.'
-    });
-
-    return json({ ok: true, provider: 'workers-ai', result });
+    const completion = await callOpenAiViaGateway(env, [
+      { role: 'user', content: 'Respond with exactly: AI Gateway OpenAI ready.' }
+    ]);
+    return json({ ok: true, provider: 'openai-via-aigateway', completion });
   } catch (error) {
     return json(
       {
         ok: false,
-        error: 'Workers AI test failed',
+        error: 'AI Gateway OpenAI test failed',
         details: error instanceof Error ? error.message : 'Unknown error'
       },
       500
@@ -265,20 +261,19 @@ function unauthorized(): Response {
 }
 
 function hasAiGatewayConfig(env: Env): boolean {
-  return Boolean(env.CLAUDE_API_KEY && env.AIG_ACCOUNT_ID && env.AIG_GATEWAY_ID);
+  return Boolean(env.OPENAI_API_KEY && env.AIG_ACCOUNT_ID && env.AIG_GATEWAY_ID);
 }
 
-async function callClaudeViaGateway(
+async function callOpenAiViaGateway(
   env: Env,
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
 ): Promise<string> {
   const gatewayUrl =
-    `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/anthropic/v1/messages`;
+    `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/chat/completions`;
 
   const headers: Record<string, string> = {
     'content-type': 'application/json',
-    'x-api-key': env.CLAUDE_API_KEY as string,
-    'anthropic-version': '2023-06-01'
+    authorization: `Bearer ${env.OPENAI_API_KEY as string}`
   };
 
   if (env.CF_AIG_AUTH_TOKEN) {
@@ -289,7 +284,7 @@ async function callClaudeViaGateway(
     method: 'POST',
     headers,
     body: JSON.stringify({
-      model: env.CLAUDE_MODEL || 'claude-sonnet-4-5',
+      model: env.OPENAI_MODEL || 'gpt-4o-mini',
       max_tokens: 120,
       messages
     })
@@ -301,10 +296,9 @@ async function callClaudeViaGateway(
   }
 
   const body = (await response.json()) as {
-    content?: Array<{ type?: string; text?: string }>;
+    choices?: Array<{ message?: { content?: string } }>;
   };
-  const textBlock = body.content?.find((part) => part.type === 'text' && part.text);
-  return textBlock?.text || '';
+  return body.choices?.[0]?.message?.content || '';
 }
 
 function json(payload: JsonRecord, status = 200): Response {

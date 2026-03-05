@@ -37,6 +37,7 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
    - update `wrangler.toml` with the returned DEV D1 `database_id`
    - `npx wrangler d1 migrations apply sky-ai-dev`
 4. Set dev secrets:
+   - `npx wrangler secret put OPENAI_API_KEY`
    - `npx wrangler secret put CF_AIG_AUTH_TOKEN` (optional)
    - `npx wrangler secret put WORKER_API_KEY` (required)
 5. Deploy:
@@ -56,14 +57,13 @@ Use the auto-generated Worker domain by default:
   - `cp .dev.vars.example .dev.vars`
 - `.dev.vars` is gitignored; `.dev.vars.example` is committed.
 - For deployed environments, use `wrangler secret put ...` (not `.dev.vars`).
-- Claude calls are routed via Cloudflare AI Gateway using:
+- OpenAI calls are routed via Cloudflare AI Gateway using:
   - `AIG_ACCOUNT_ID`
   - `AIG_GATEWAY_ID`
-  - `CLAUDE_MODEL`
-  - `CLAUDE_API_KEY`
+  - `OPENAI_MODEL`
+  - `OPENAI_API_KEY`
   - optional `CF_AIG_AUTH_TOKEN`
-- To switch models, change `CLAUDE_MODEL` and redeploy.
-- `/ai/test` currently uses Workers AI binding and does not require `CLAUDE_API_KEY`.
+- To switch models, change `OPENAI_MODEL` and redeploy.
 - Mailbox identity vars:
   - `MAILBOX_SKYLERBAIRD_ME_COM` (`SkylerBaird@me.com`)
 
@@ -72,13 +72,13 @@ Use the auto-generated Worker domain by default:
 - `wrangler secret put` is encrypted at rest by Cloudflare.
 - In the current setup, iCloud app-specific password is used only by the Mac agent (`agent/.env`).
 - Worker secret `WORKER_API_KEY` is required for agent <-> Worker auth.
-- `CLAUDE_API_KEY` is needed only when enabling Claude-based triage/briefing.
+- `OPENAI_API_KEY` is required for AI Gateway OpenAI-based triage/briefing and `/ai/test`.
 
 ## Status While Waiting On Skyler OAuth/Claude Key
 
 - Cloudflare backend can be deployed now.
-- `/tasks/triage` and `/briefings/daily` are safe no-op if `CLAUDE_API_KEY` is missing.
-- `/ai/test` verifies Workers AI binding.
+- `/tasks/triage` and `/briefings/daily` are safe no-op if `OPENAI_API_KEY` is missing.
+- `/ai/test` verifies OpenAI via Cloudflare AI Gateway.
 - iCloud mailbox sync can run now via the local Mac agent (`agent/`) with app-specific passwords.
 - Email capabilities now include:
   - Sync of `INBOX` and `Sent Messages` via IMAP

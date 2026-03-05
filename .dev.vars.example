@@ -3,8 +3,8 @@
 
 AIG_ACCOUNT_ID="replace-me"
 AIG_GATEWAY_ID="sky-ai"
-CLAUDE_MODEL="claude-sonnet-4-5"
-CLAUDE_API_KEY="replace-me"
+OPENAI_MODEL="gpt-4o-mini"
+OPENAI_API_KEY="replace-me"
 WORKER_API_KEY="replace-me"
 MAILBOX_SKYLERBAIRD_ME_COM="SkylerBaird@me.com"
 # Optional if AI Gateway auth is enforced:
