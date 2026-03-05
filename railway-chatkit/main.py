@@ -11,6 +11,8 @@ app = FastAPI()
 
 CLOUDFLARE_API_URL = os.environ.get("CLOUDFLARE_API_URL", "").rstrip("/")
 WORKER_API_KEY = os.environ.get("WORKER_API_KEY", "")
+CF_ACCESS_CLIENT_ID = os.environ.get("CF_ACCESS_CLIENT_ID", "")
+CF_ACCESS_CLIENT_SECRET = os.environ.get("CF_ACCESS_CLIENT_SECRET", "")
 DEFAULT_ACCOUNT_ID = os.environ.get("DEFAULT_ACCOUNT_ID", "skylerbaird@me.com").lower()
 DEFAULT_WORKSPACE_ID = os.environ.get("DEFAULT_WORKSPACE_ID", "default")
 
@@ -50,8 +52,10 @@ async def health() -> dict:
 
 @app.post("/chatkit")
 async def chatkit_endpoint(request: Request):
-    if not CLOUDFLARE_API_URL or not WORKER_API_KEY:
-        raise HTTPException(status_code=500, detail="Missing CLOUDFLARE_API_URL or WORKER_API_KEY")
+    if not CLOUDFLARE_API_URL:
+        raise HTTPException(status_code=500, detail="Missing CLOUDFLARE_API_URL")
+    if not WORKER_API_KEY and not (CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET):
+        raise HTTPException(status_code=500, detail="Set WORKER_API_KEY or CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET")
 
     payload = await request.json()
     if not isinstance(payload, dict):
@@ -77,12 +81,18 @@ async def chatkit_endpoint(request: Request):
 
     async with httpx.AsyncClient(timeout=45) as client:
         try:
+            headers = {
+                "Content-Type": "application/json"
+            }
+            if CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET:
+                headers["CF-Access-Client-Id"] = CF_ACCESS_CLIENT_ID
+                headers["CF-Access-Client-Secret"] = CF_ACCESS_CLIENT_SECRET
+            elif WORKER_API_KEY:
+                headers["Authorization"] = f"Bearer {WORKER_API_KEY}"
+
             resp = await client.post(
                 f"{CLOUDFLARE_API_URL}/chat/query",
-                headers={
-                    "Authorization": f"Bearer {WORKER_API_KEY}",
-                    "Content-Type": "application/json"
-                },
+                headers=headers,
                 json=cf_body
             )
             resp.raise_for_status()

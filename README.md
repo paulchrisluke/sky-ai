@@ -247,7 +247,9 @@ Deploy steps:
    - `main.py`
 3. Set Railway variables:
    - `CLOUDFLARE_API_URL=https://sky-ai-api.paulchrisluke.workers.dev`
-   - `WORKER_API_KEY=<worker_api_key>`
+   - `CF_ACCESS_CLIENT_ID=<access_service_token_client_id>`
+   - `CF_ACCESS_CLIENT_SECRET=<access_service_token_client_secret>`
+   - optional `WORKER_API_KEY=<worker_api_key>` (only if API key bypass is enabled)
    - optional `DEFAULT_ACCOUNT_ID` and `DEFAULT_WORKSPACE_ID`
 3. Verify after deploy:
    - `GET /health` returns `{"status":"healthy"}`
