@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 4 ]]; then
-  echo "Usage: $0 <d1_db_name> <subject> <workspace_id> <account_id> [email] [role] [status] [wrangler_config]"
+  echo "Usage: $0 <d1_db_name> <subject> <workspace_id> <account_id> [email] [role] [status] [wrangler_config] [local|remote]"
   echo "Example: $0 sky-ai-dev 123e4567-e89b-12d3-a456-426614174000 default skylerbaird_me_com user@example.com admin active wrangler.api.toml"
   exit 1
 fi
@@ -15,6 +15,7 @@ EMAIL="${5:-}"
 ROLE="${6:-admin}"
 STATUS="${7:-active}"
 WRANGLER_CONFIG="${8:-wrangler.api.toml}"
+TARGET="${9:-remote}"
 
 escape_sql() {
   printf "%s" "$1" | sed "s/'/''/g"
@@ -43,5 +44,9 @@ DO UPDATE SET
 "
 
 echo "Granting subject permission in D1 database '$DB_NAME' using config '$WRANGLER_CONFIG'..."
-npx wrangler d1 execute "$DB_NAME" --config "$WRANGLER_CONFIG" --command "$SQL"
+if [[ "$TARGET" == "local" ]]; then
+  npx wrangler d1 execute "$DB_NAME" --config "$WRANGLER_CONFIG" --command "$SQL"
+else
+  npx wrangler d1 execute "$DB_NAME" --config "$WRANGLER_CONFIG" --remote --command "$SQL"
+fi
 echo "Done."
