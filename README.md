@@ -137,6 +137,11 @@ Use the auto-generated Worker domain by default:
   - WS reconnect supports `lastEventId` query param on `/ws/chat`.
 - Search audit persistence:
   - Every chat run writes `run_search_audits` with intent/query/searched filters + citation status/count.
+- Ops endpoints:
+  - `GET /ops/account/status?workspaceId=...&accountId=...`
+  - `GET /ops/ingest-stats?workspaceId=...&accountId=...`
+  - `GET /ops/queue-stats?workspaceId=...&accountId=...`
+  - `GET /ops/extraction-stats?workspaceId=...&accountId=...`
 
 ## Access Auth (Step 3)
 
@@ -194,6 +199,12 @@ Validation endpoint:
   - scheduled sync/briefing job enqueue
 - Manual embedding drain:
   - `POST /jobs/embeddings/process`
+
+## Shared Core Modules
+
+- `workers/shared/account.ts`: account ID canonicalization helpers.
+- `workers/shared/citation.ts`: centralized citation contract validator.
+- `workers/shared/events.ts`: run lifecycle event constants.
 
 ## Historical Backfill (Controlled)
 

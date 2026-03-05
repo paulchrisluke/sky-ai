@@ -1,3 +1,5 @@
+import { normalizeAccountId } from '../workers/shared/account';
+
 interface Env {
   SKY_DB: D1Database;
   SKY_ARTIFACTS: R2Bucket;
@@ -75,8 +77,8 @@ export default {
 async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
-  const accountEmail = (stringOr(payload.accountEmail) || 'unknown').toLowerCase();
-  const accountId = (stringOr(payload.accountId) || accountEmail).toLowerCase();
+  const accountEmail = normalizeAccountId(stringOr(payload.accountEmail) || 'unknown');
+  const accountId = normalizeAccountId(stringOr(payload.accountId) || accountEmail);
   const mailbox = stringOr(payload.mailbox) || 'INBOX';
   const threadExternalId = stringOr(payload.threadId);
   const providerUid = numberOr(payload.uid);
@@ -348,7 +350,7 @@ async function upsertParticipants(
 async function queueBackfillRun(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
-  const accountEmail = (stringOr(payload.accountEmail) || 'unknown').toLowerCase();
+  const accountEmail = normalizeAccountId(stringOr(payload.accountEmail) || 'unknown');
   const mailbox = stringOr(payload.mailbox) || 'INBOX';
   const sinceDate = stringOr(payload.sinceDate);
   const untilDate = stringOr(payload.untilDate);
@@ -393,7 +395,7 @@ async function enqueueEmbeddingJob(
        (id, workspace_id, account_id, source_record_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'queued', 0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     )
-    .bind(crypto.randomUUID(), workspaceId, accountId.toLowerCase(), sourceRecordId)
+    .bind(crypto.randomUUID(), workspaceId, normalizeAccountId(accountId), sourceRecordId)
     .run();
 
   await enqueueEmbeddingQueueMessage(env, { sourceRecordId });
@@ -700,7 +702,7 @@ function normalizeAddresses(input: unknown): NormalizedAddress[] {
     const record = item as Record<string, unknown>;
     const email = stringOr(record.address) || stringOr(record.email);
     if (!email) continue;
-    out.push({ email: email.toLowerCase(), name: stringOr(record.name) });
+    out.push({ email: normalizeAccountId(email), name: stringOr(record.name) });
   }
   return out;
 }

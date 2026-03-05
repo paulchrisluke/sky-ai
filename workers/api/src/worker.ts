@@ -1,3 +1,7 @@
+import { normalizeAccountId } from '../../shared/account';
+import { enforceCitationContract } from '../../shared/citation';
+import { RUN_EVENT_TYPES } from '../../shared/events';
+
 interface Env {
   SKY_DB: D1Database;
   CHAT_COORDINATOR: DurableObjectNamespace;
@@ -86,6 +90,18 @@ export default {
 
     if (request.method === 'GET' && url.pathname === '/ops/account/status') {
       return getAccountOpsStatus(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/ops/ingest-stats') {
+      return getIngestStats(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/ops/queue-stats') {
+      return getQueueStats(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/ops/extraction-stats') {
+      return getExtractionStats(request, env);
     }
 
     return json({ ok: false, error: 'Not found' }, 404);
@@ -178,11 +194,11 @@ export class ChatCoordinator {
         workspaceId: context?.workspaceId || 'default',
         accountId: context?.accountId || 'unknown',
         runId,
-        eventType: 'run.cancelled',
+        eventType: RUN_EVENT_TYPES.CANCELLED,
         payload: { reason: 'user_cancelled' }
       });
       this.broadcast({
-        type: 'run.cancelled',
+        type: RUN_EVENT_TYPES.CANCELLED,
         sessionId,
         runId,
         reason: 'user_cancelled',
@@ -238,10 +254,10 @@ export class ChatCoordinator {
         workspaceId,
         accountId,
         runId,
-        eventType: 'run.started',
+        eventType: RUN_EVENT_TYPES.STARTED,
         payload: { query }
       });
-      this.broadcast({ type: 'run.started', sessionId, runId, eventId: startedEvent.id, lastEventId: startedEvent.cursor });
+      this.broadcast({ type: RUN_EVENT_TYPES.STARTED, sessionId, runId, eventId: startedEvent.id, lastEventId: startedEvent.cursor });
 
       const intent = detectIntent(query);
       await this.broadcastProgress(workspaceId, accountId, sessionId, runId, 'intent.detected', { intent });
@@ -299,7 +315,7 @@ export class ChatCoordinator {
         accountId,
         runId,
         turnId: assistantTurnId,
-        eventType: 'run.completed',
+        eventType: RUN_EVENT_TYPES.COMPLETED,
         payload: {
           intent: result.intent,
           citationStatus: result.citationStatus,
@@ -310,7 +326,7 @@ export class ChatCoordinator {
       });
 
       this.broadcast({
-        type: 'run.completed',
+        type: RUN_EVENT_TYPES.COMPLETED,
         sessionId,
         runId,
         eventId: completedEvent.id,
@@ -329,10 +345,10 @@ export class ChatCoordinator {
         workspaceId,
         accountId,
         runId,
-        eventType: 'run.failed',
+        eventType: RUN_EVENT_TYPES.FAILED,
         payload: { error: message }
       });
-      this.broadcast({ type: 'run.failed', sessionId, runId, error: message, eventId: failedEvent.id, lastEventId: failedEvent.cursor });
+      this.broadcast({ type: RUN_EVENT_TYPES.FAILED, sessionId, runId, error: message, eventId: failedEvent.id, lastEventId: failedEvent.cursor });
     } finally {
       this.sessionLocks.delete(sessionId);
       await this.state.storage.delete(`active:${sessionId}`);
@@ -357,11 +373,11 @@ export class ChatCoordinator {
         workspaceId: value.workspaceId,
         accountId: value.accountId,
         runId: value.runId,
-        eventType: 'run.failed',
+        eventType: RUN_EVENT_TYPES.FAILED,
         payload: { error: 'run_timeout_watchdog' }
       }).catch(() => {});
       this.broadcast({
-        type: 'run.failed',
+        type: RUN_EVENT_TYPES.FAILED,
         sessionId,
         runId: value.runId,
         error: 'run_timeout_watchdog',
@@ -390,11 +406,11 @@ export class ChatCoordinator {
       workspaceId,
       accountId,
       runId,
-      eventType: 'tool.progress',
+      eventType: RUN_EVENT_TYPES.TOOL_PROGRESS,
       payload: { stage, detail: detail || null }
     }).catch(() => {});
     this.broadcast({
-      type: 'tool.progress',
+      type: RUN_EVENT_TYPES.TOOL_PROGRESS,
       sessionId,
       runId,
       stage,
@@ -609,7 +625,7 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     accountId,
     runId,
     turnId: assistantTurnId,
-    eventType: 'run.completed',
+    eventType: RUN_EVENT_TYPES.COMPLETED,
     payload: {
       intent,
       citations: result.citations,
@@ -1219,6 +1235,183 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
   });
 }
 
+async function resolveOpsScope(
+  request: Request,
+  env: Env
+): Promise<{ ok: true; workspaceId: string; accountId: string } | { ok: false; response: Response }> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return { ok: false, response: auth.response };
+
+  const url = new URL(request.url);
+  const workspaceId = url.searchParams.get('workspaceId') || 'default';
+  let accountId = url.searchParams.get('accountId');
+  if (!accountId) return { ok: false, response: json({ ok: false, error: 'accountId is required' }, 400) };
+  accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+
+  const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+  if (!permission.ok) return { ok: false, response: permission.response };
+
+  return { ok: true, workspaceId, accountId };
+}
+
+async function getIngestStats(request: Request, env: Env): Promise<Response> {
+  const scope = await resolveOpsScope(request, env);
+  if (!scope.ok) return scope.response;
+  const { workspaceId, accountId } = scope;
+
+  const [total, last24h, latest] = await Promise.all([
+    env.SKY_DB
+      .prepare(`SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND account_id = ?`)
+      .bind(workspaceId, accountId)
+      .first<{ c: number }>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT COUNT(*) AS c
+         FROM email_messages
+         WHERE workspace_id = ?
+           AND account_id = ?
+           AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-24 hours')`
+      )
+      .bind(workspaceId, accountId)
+      .first<{ c: number }>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT MAX(created_at) AS last_ingested_at, MAX(sent_at) AS last_sent_at
+         FROM email_messages
+         WHERE workspace_id = ?
+           AND account_id = ?`
+      )
+      .bind(workspaceId, accountId)
+      .first<{ last_ingested_at: string | null; last_sent_at: string | null }>()
+  ]);
+
+  return json({
+    ok: true,
+    workspaceId,
+    accountId,
+    totals: {
+      messages: Number(total?.c || 0),
+      messagesLast24h: Number(last24h?.c || 0)
+    },
+    freshness: {
+      lastIngestedAt: latest?.last_ingested_at || null,
+      lastSentAt: latest?.last_sent_at || null
+    },
+    generatedAt: new Date().toISOString()
+  });
+}
+
+async function getQueueStats(request: Request, env: Env): Promise<Response> {
+  const scope = await resolveOpsScope(request, env);
+  if (!scope.ok) return scope.response;
+  const { workspaceId, accountId } = scope;
+
+  const row = await env.SKY_DB
+    .prepare(
+      `SELECT
+          SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
+          SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) AS retry,
+          SUM(CASE WHEN status = 'indexed' THEN 1 ELSE 0 END) AS indexed,
+          MIN(CASE WHEN status IN ('queued','retry') THEN next_attempt_at END) AS oldest_next_attempt_at
+       FROM embedding_jobs
+       WHERE workspace_id = ?
+         AND account_id = ?`
+    )
+    .bind(workspaceId, accountId)
+    .first<{ queued: number | null; retry: number | null; indexed: number | null; oldest_next_attempt_at: string | null }>();
+
+  return json({
+    ok: true,
+    workspaceId,
+    accountId,
+    embeddingQueue: {
+      queued: Number(row?.queued || 0),
+      retry: Number(row?.retry || 0),
+      indexed: Number(row?.indexed || 0),
+      oldestNextAttemptAt: row?.oldest_next_attempt_at || null
+    },
+    generatedAt: new Date().toISOString()
+  });
+}
+
+async function getExtractionStats(request: Request, env: Env): Promise<Response> {
+  const scope = await resolveOpsScope(request, env);
+  if (!scope.ok) return scope.response;
+  const { workspaceId, accountId } = scope;
+
+  const [taskQueue, followupQueue, decisionQueue, extractionRows, citationRows] = await Promise.all([
+    env.SKY_DB
+      .prepare(
+        `SELECT SUM(CASE WHEN review_state = 'needs_review' THEN 1 ELSE 0 END) AS c
+         FROM tasks
+         WHERE workspace_id = ? AND account_id = ?`
+      )
+      .bind(workspaceId, accountId)
+      .first<{ c: number | null }>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT SUM(CASE WHEN review_state = 'needs_review' THEN 1 ELSE 0 END) AS c
+         FROM followups
+         WHERE workspace_id = ? AND account_id = ?`
+      )
+      .bind(workspaceId, accountId)
+      .first<{ c: number | null }>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT SUM(CASE WHEN review_state = 'needs_review' THEN 1 ELSE 0 END) AS c
+         FROM decisions
+         WHERE workspace_id = ? AND account_id = ?`
+      )
+      .bind(workspaceId, accountId)
+      .first<{ c: number | null }>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT
+            SUM(CASE WHEN status = 'needs_review' THEN 1 ELSE 0 END) AS extractions_needs_review,
+            COUNT(*) AS extractions_total
+         FROM message_extractions
+         WHERE workspace_id = ? AND account_id = ?`
+      )
+      .bind(workspaceId, accountId)
+      .first<{ extractions_needs_review: number | null; extractions_total: number | null }>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT
+            SUM(CASE WHEN citation_status = 'sufficient' THEN 1 ELSE 0 END) AS sufficient_runs,
+            COUNT(*) AS total_runs
+         FROM run_search_audits
+         WHERE workspace_id = ?
+           AND account_id = ?
+           AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-7 days')`
+      )
+      .bind(workspaceId, accountId)
+      .first<{ sufficient_runs: number | null; total_runs: number | null }>()
+  ]);
+
+  const sufficient = Number(citationRows?.sufficient_runs || 0);
+  const totalRuns = Number(citationRows?.total_runs || 0);
+  const citationHitRate = totalRuns > 0 ? Number((sufficient / totalRuns).toFixed(4)) : null;
+
+  return json({
+    ok: true,
+    workspaceId,
+    accountId,
+    reviewQueue: {
+      tasksNeedsReview: Number(taskQueue?.c || 0),
+      followupsNeedsReview: Number(followupQueue?.c || 0),
+      decisionsNeedsReview: Number(decisionQueue?.c || 0),
+      extractionsNeedsReview: Number(extractionRows?.extractions_needs_review || 0),
+      extractionsTotal: Number(extractionRows?.extractions_total || 0)
+    },
+    citationQuality7d: {
+      sufficientRuns: sufficient,
+      totalRuns,
+      hitRate: citationHitRate
+    },
+    generatedAt: new Date().toISOString()
+  });
+}
+
 async function executeIntent(
   env: Env,
   ctx: { workspaceId: string; accountId: string },
@@ -1498,7 +1691,7 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
     .run();
 
   if (accountId.includes('@')) {
-    const accountEmail = accountId.toLowerCase();
+    const accountEmail = normalizeAccountId(accountId);
     await env.SKY_DB
       .prepare(
         `INSERT OR IGNORE INTO accounts (id, workspace_id, label, email, status, created_at, updated_at)
@@ -1510,7 +1703,7 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
     return accountEmail;
   }
 
-  const canonicalId = accountId.toLowerCase();
+  const canonicalId = normalizeAccountId(accountId);
   await env.SKY_DB
     .prepare(
       `INSERT OR IGNORE INTO accounts (id, workspace_id, label, email, status, created_at, updated_at)
@@ -1854,32 +2047,6 @@ function buildCitationEnforcedAnswer(
   return {
     answer: `Found relevant sources for: "${query}". Top references:\n${lines.join('\n')}`,
     citationStatus: 'sufficient',
-    searched
-  };
-}
-
-function enforceCitationContract(query: string, result: QueryResult): QueryResult {
-  const searched: JsonRecord = {
-    ...(objectOr(result.searched) || {}),
-    query,
-    intent: result.intent,
-    validator: 'citation_contract_v1'
-  };
-
-  if (result.citations.length > 0) {
-    return {
-      ...result,
-      citationStatus: 'sufficient',
-      searched
-    };
-  }
-
-  return {
-    ...result,
-    answer:
-      `Insufficient sources for a factual answer (${result.intent}). ` +
-      'I did not find citation-backed evidence for this request.',
-    citationStatus: 'insufficient',
     searched
   };
 }

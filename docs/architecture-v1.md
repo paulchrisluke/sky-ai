@@ -30,6 +30,13 @@ This document maps the locked decisions to implemented code.
   - `chat_citations`
   - `tool_calls`
 
+## Shared Core
+
+- Shared cross-worker modules live in `workers/shared/`:
+  - account canonicalization
+  - citation contract enforcement
+  - run event constants
+
 ## 3) Permanent Data Model
 
 - Existing permanent core remains:
@@ -89,6 +96,13 @@ This document maps the locked decisions to implemented code.
 - `ingest` worker (`wrangler.toml`): external ingest + outbound queue endpoints.
 - `api` worker (`wrangler.api.toml`): chat, briefing, actions, extraction orchestration.
 - `jobs` worker (`wrangler.jobs.toml`): queue consumers + cron-driven background jobs.
+
+## Ops Endpoints
+
+- `GET /ops/account/status`
+- `GET /ops/ingest-stats`
+- `GET /ops/queue-stats`
+- `GET /ops/extraction-stats`
 
 ## Auth + Authorization
 
