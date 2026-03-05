@@ -16,6 +16,16 @@ This project now uses Cloudflare as the long-term system of record.
 npx wrangler login
 ```
 
+## Local development secrets
+
+Use `.dev.vars` for local `wrangler dev` runs:
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+For deployed envs, always use `wrangler secret put`.
+
 ## 2) Provision DEV infrastructure
 
 ```bash

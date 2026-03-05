@@ -41,6 +41,14 @@ Cloudflare-native backend for Sky AI.
 6. Validate:
    - `curl "https://<worker-subdomain>.workers.dev/health"`
 
+## Local Dev Secrets
+
+- Use `.dev.vars` for local-only values with `wrangler dev`.
+- Start from template:
+  - `cp .dev.vars.example .dev.vars`
+- `.dev.vars` is gitignored; `.dev.vars.example` is committed.
+- For deployed environments, use `wrangler secret put ...` (not `.dev.vars`).
+
 ## Status While Waiting On Skyler OAuth/Claude Key
 
 - Cloudflare backend can be deployed now.

@@ -1,0 +1,8 @@
+# Copy to .dev.vars for local development.
+# Do not commit .dev.vars.
+
+GOOGLE_CLIENT_ID="replace-me"
+GOOGLE_CLIENT_SECRET="replace-me"
+GOOGLE_REDIRECT_URI="http://localhost:8787/oauth/callback"
+TOKEN_ENCRYPTION_KEY="replace-me"
+CLAUDE_API_KEY="replace-me"
