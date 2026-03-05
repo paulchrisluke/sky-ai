@@ -43,6 +43,12 @@ export default {
       return queueBackfillRun(request, env);
     }
 
+    if (request.method === 'POST' && url.pathname === '/embeddings/process') {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const processed = await processEmbeddingJobs(env, 20);
+      return json({ ok: true, processed });
+    }
+
     if (request.method === 'POST' && url.pathname === '/mail/send') {
       if (!isAuthorized(request, env)) return unauthorized();
       return queueOutboundMail(request, env);
@@ -76,11 +82,13 @@ export default {
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     if (controller.cron === '*/15 * * * *') {
       await enqueueSyncJob(env, 'mailbox_incremental_sync', { source: 'cron' });
+      await processEmbeddingJobs(env, 40);
       return;
     }
 
     if (controller.cron === '0 13 * * *') {
       await enqueueSyncJob(env, 'daily_briefing', { source: 'cron' });
+      await processEmbeddingJobs(env, 40);
     }
   }
 };
@@ -215,47 +223,36 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
 
   const chunkSource = buildChunkSource(payload, subject, snippet);
   const chunks = chunkText(chunkSource, CHUNK_SIZE, CHUNK_OVERLAP, MAX_CHUNKS_PER_MESSAGE);
-  let chunkCount = 0;
   let embeddingWarning: string | null = null;
+  let embeddingStatus: 'not_requested' | 'queued' | 'indexed' | 'retry' = 'not_requested';
 
-  if (chunks.length > 0 && hasAiGatewayConfig(env)) {
-    try {
-      const embeddings = await callOpenAiEmbeddingsViaGateway(env, chunks);
-      await env.SKY_VECTORIZE.upsert(
-        embeddings.map((values, index) => ({
-          id: `${messageId}:${index}`,
-          values,
-          metadata: {
-            workspaceId,
-            messageId,
-            threadId,
-            mailbox,
-            accountEmail,
-            sentAt,
-            chunkIndex: index
-          }
-        }))
-      );
+  if (chunks.length > 0) {
+    for (let i = 0; i < chunks.length; i += 1) {
+      await env.SKY_DB
+        .prepare(
+          `INSERT INTO memory_chunks (id, workspace_id, source_record_id, vector_id, chunk_text, metadata_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+        )
+        .bind(
+          crypto.randomUUID(),
+          workspaceId,
+          recordId,
+          `${messageId}:${i}`,
+          chunks[i],
+          JSON.stringify({ messageId, threadId, mailbox, accountEmail, sentAt, chunkIndex: i })
+        )
+        .run();
+    }
 
-      for (let i = 0; i < chunks.length; i += 1) {
-        await env.SKY_DB
-          .prepare(
-            `INSERT INTO memory_chunks (id, workspace_id, source_record_id, vector_id, chunk_text, metadata_json, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
-          )
-          .bind(
-            crypto.randomUUID(),
-            workspaceId,
-            recordId,
-            `${messageId}:${i}`,
-            chunks[i],
-            JSON.stringify({ messageId, threadId, mailbox, accountEmail, sentAt, chunkIndex: i })
-          )
-          .run();
-      }
-      chunkCount = chunks.length;
-    } catch (error) {
-      embeddingWarning = error instanceof Error ? error.message : 'embedding_failed';
+    await enqueueEmbeddingJob(env, workspaceId, recordId);
+    embeddingStatus = 'queued';
+
+    if (hasAiGatewayConfig(env)) {
+      const result = await processSingleEmbeddingJob(env, recordId);
+      embeddingStatus = result.status;
+      embeddingWarning = result.warning;
+    } else {
+      embeddingWarning = 'embedding_not_configured';
     }
   }
 
@@ -265,7 +262,8 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
     messageId,
     artifactKey,
     sourceMessageKey,
-    chunksIndexed: chunkCount,
+    chunksIndexed: embeddingStatus === 'indexed' ? chunks.length : 0,
+    embeddingStatus,
     warning: embeddingWarning
   });
 }
@@ -402,6 +400,142 @@ async function queueBackfillRun(request: Request, env: Env): Promise<Response> {
   });
 
   return json({ ok: true, backfillRunId: id, status: 'queued' });
+}
+
+async function enqueueEmbeddingJob(env: Env, workspaceId: string, sourceRecordId: string): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `INSERT OR IGNORE INTO embedding_jobs
+       (id, workspace_id, source_record_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
+       VALUES (?, ?, ?, 'queued', 0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    )
+    .bind(crypto.randomUUID(), workspaceId, sourceRecordId)
+    .run();
+}
+
+async function processEmbeddingJobs(env: Env, limit: number): Promise<number> {
+  const jobs = await env.SKY_DB
+    .prepare(
+      `SELECT id, source_record_id
+       FROM embedding_jobs
+       WHERE status IN ('queued', 'retry')
+         AND datetime(next_attempt_at) <= datetime(CURRENT_TIMESTAMP)
+       ORDER BY datetime(next_attempt_at) ASC
+       LIMIT ?`
+    )
+    .bind(Math.max(1, Math.min(limit, 100)))
+    .all<{ id: string; source_record_id: string }>();
+
+  const rows = jobs.results || [];
+  let processed = 0;
+  for (const job of rows) {
+    const result = await processSingleEmbeddingJob(env, job.source_record_id);
+    if (result.status === 'indexed') {
+      processed += 1;
+    }
+  }
+  return processed;
+}
+
+async function processSingleEmbeddingJob(
+  env: Env,
+  sourceRecordId: string
+): Promise<{ status: 'indexed' | 'retry'; warning: string | null }> {
+  const job = await env.SKY_DB
+    .prepare(
+      `SELECT id, workspace_id, attempts
+       FROM embedding_jobs
+       WHERE source_record_id = ?
+       LIMIT 1`
+    )
+    .bind(sourceRecordId)
+    .first<{ id: string; workspace_id: string; attempts: number }>();
+
+  if (!job) {
+    return { status: 'retry', warning: 'embedding_job_missing' };
+  }
+
+  if (!hasAiGatewayConfig(env)) {
+    const backoffMinutes = computeBackoffMinutes(Number(job.attempts || 0) + 1);
+    await markEmbeddingJobRetry(env, job.id, Number(job.attempts || 0) + 1, 'embedding_not_configured', backoffMinutes);
+    return { status: 'retry', warning: 'embedding_not_configured' };
+  }
+
+  const chunkRows = await env.SKY_DB
+    .prepare(
+      `SELECT vector_id, chunk_text, metadata_json
+       FROM memory_chunks
+       WHERE source_record_id = ?
+       ORDER BY CAST(COALESCE(json_extract(metadata_json, '$.chunkIndex'), 0) AS INTEGER) ASC`
+    )
+    .bind(sourceRecordId)
+    .all<{ vector_id: string | null; chunk_text: string; metadata_json: string | null }>();
+
+  const chunks = (chunkRows.results || []).filter((x) => x.chunk_text).map((x) => x.chunk_text);
+  if (chunks.length === 0) {
+    await markEmbeddingJobIndexed(env, job.id, Number(job.attempts || 0) + 1);
+    return { status: 'indexed', warning: null };
+  }
+
+  try {
+    const embeddings = await callOpenAiEmbeddingsViaGateway(env, chunks);
+    await env.SKY_VECTORIZE.upsert(
+      embeddings.map((values, index) => ({
+        id: chunkRows.results?.[index]?.vector_id || `${sourceRecordId}:${index}`,
+        values,
+        metadata: parseJsonObject(chunkRows.results?.[index]?.metadata_json)
+      }))
+    );
+
+    await markEmbeddingJobIndexed(env, job.id, Number(job.attempts || 0) + 1);
+    return { status: 'indexed', warning: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'embedding_failed';
+    const nextAttempts = Number(job.attempts || 0) + 1;
+    const backoffMinutes = computeBackoffMinutes(nextAttempts);
+    await markEmbeddingJobRetry(env, job.id, nextAttempts, message.slice(0, 1500), backoffMinutes);
+    return { status: 'retry', warning: message };
+  }
+}
+
+async function markEmbeddingJobIndexed(env: Env, jobId: string, attempts: number): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `UPDATE embedding_jobs
+       SET status = 'indexed',
+           attempts = ?,
+           last_error = NULL,
+           next_attempt_at = datetime(CURRENT_TIMESTAMP, '+3650 days'),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(attempts, jobId)
+    .run();
+}
+
+async function markEmbeddingJobRetry(
+  env: Env,
+  jobId: string,
+  attempts: number,
+  message: string,
+  backoffMinutes: number
+): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `UPDATE embedding_jobs
+       SET status = 'retry',
+           attempts = ?,
+           last_error = ?,
+           next_attempt_at = datetime(CURRENT_TIMESTAMP, ?),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(attempts, message, `+${backoffMinutes} minutes`, jobId)
+    .run();
+}
+
+function computeBackoffMinutes(attempts: number): number {
+  return Math.min(240, Math.max(1, 2 ** Math.min(attempts, 8)));
 }
 
 async function ensureWorkspace(env: Env, workspaceId: string): Promise<void> {
@@ -657,6 +791,19 @@ function numberOr(input: unknown): number | null {
   }
 
   return null;
+}
+
+function parseJsonObject(input: string | null | undefined): Record<string, unknown> {
+  if (!input) return {};
+  try {
+    const parsed = JSON.parse(input) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
 }
 
 function stringOr(input: unknown): string | null {

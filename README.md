@@ -19,6 +19,7 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 - `db/migrations/0001_init.sql`
 - `db/migrations/0002_outbound_messages.sql`
 - `db/migrations/0003_email_canonical_schema.sql`
+- `db/migrations/0004_embedding_jobs.sql`
 - `wrangler.toml`
 - `docs/cloudflare-setup.md`
 - `agent/index.js`
@@ -90,6 +91,14 @@ Use the auto-generated Worker domain by default:
   - Canonical persistence in D1 (`email_threads`, `email_messages`, participants)
   - Idempotent ingest keys (`source_message_key`) to prevent duplicates
   - Chunking + embedding + Vectorize indexing when AI Gateway credentials are set
+  - Embedding retry queue (`embedding_jobs`) with exponential backoff on quota/rate errors
+
+## Embedding Recovery
+
+- `POST /ingest/mail-thread` never fails due to embedding quota; it stores mail and marks embedding `retry`.
+- Cron drains embedding retries every 15 minutes.
+- You can manually trigger processing:
+  - `curl -X POST "https://<worker>.workers.dev/embeddings/process" -H "authorization: Bearer <WORKER_API_KEY>"`
 
 ## Historical Backfill (Controlled)
 

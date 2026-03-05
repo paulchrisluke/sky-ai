@@ -105,9 +105,12 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
   - `POST /mail/outbound/result` (sent/failed ack)
 - Backfill queue endpoint:
   - `POST /mail/backfill` (queues checkpointed historical ingest job metadata)
+- Embedding queue endpoint:
+  - `POST /embeddings/process` (manual drain for queued/retry embeddings)
 
 ## Secret storage clarification
 
 - `wrangler secret put` stores Worker secrets encrypted at rest by Cloudflare.
 - Those secrets are available to your Worker at runtime as plaintext environment values.
 - iCloud app-specific password is stored only in the local Mac agent `.env` file.
+- Embedding quota/rate failures are retried via D1 `embedding_jobs` and do not block mail ingest.
