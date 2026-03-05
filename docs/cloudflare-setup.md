@@ -32,6 +32,7 @@ Set these local values in `.dev.vars`:
 - `AIG_GATEWAY_ID`
 - `CLAUDE_MODEL` (optional, for Claude path)
 - `CLAUDE_API_KEY` (optional, for Claude path)
+- `WORKER_API_KEY` (required)
 - `MAILBOX_SKYLERBAIRD_ME_COM` (`SkylerBaird@me.com`)
 - optional: `CF_AIG_AUTH_TOKEN`
 

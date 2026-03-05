@@ -23,8 +23,6 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 - `agent/.env.example`
 - `agent/ecosystem.config.cjs`
 - `docs/mac-agent-setup.md`
-- `docs/tunnel-setup.md`
-- `tunnel/config.yml.example`
 
 ## Quickstart
 
@@ -40,7 +38,7 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
    - `npx wrangler d1 migrations apply sky-ai-dev`
 4. Set dev secrets:
    - `npx wrangler secret put CF_AIG_AUTH_TOKEN` (optional)
-   - `npx wrangler secret put WORKER_API_KEY` (recommended)
+   - `npx wrangler secret put WORKER_API_KEY` (required)
 5. Deploy:
    - `npx wrangler deploy`
 6. Validate:
@@ -73,7 +71,8 @@ Use the auto-generated Worker domain by default:
 
 - `wrangler secret put` is encrypted at rest by Cloudflare.
 - In the current setup, iCloud app-specific password is used only by the Mac agent (`agent/.env`).
-- Worker secrets currently needed are AI-related (`CLAUDE_API_KEY`, optional `CF_AIG_AUTH_TOKEN`).
+- Worker secret `WORKER_API_KEY` is required for agent <-> Worker auth.
+- `CLAUDE_API_KEY` is needed only when enabling Claude-based triage/briefing.
 
 ## Status While Waiting On Skyler OAuth/Claude Key
 
