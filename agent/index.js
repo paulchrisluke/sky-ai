@@ -105,28 +105,44 @@ async function syncAccount(account, state) {
       await client.mailboxOpen(mailbox, { readOnly: true });
 
       const lastUid = Number(accountState.mailboxes[mailbox]?.lastUid || 0);
+      const uidNext = Number(client.mailbox?.uidNext || 1);
       let maxSeenUid = lastUid;
-      const range = `${Math.max(1, lastUid + 1)}:*`;
+      const startUid = Math.max(1, lastUid + 1);
 
-      for await (const msg of client.fetch(range, {
-        uid: true,
-        envelope: true,
-        source: true,
-        internalDate: true
-      })) {
-        maxSeenUid = Math.max(maxSeenUid, msg.uid);
-        await postToWorker({
-          source: 'imap',
-          mailbox,
-          accountEmail: account.email,
-          threadId: String(msg.envelope?.messageId || msg.uid),
-          uid: msg.uid,
-          subject: msg.envelope?.subject || '',
-          from: msg.envelope?.from || [],
-          to: msg.envelope?.to || [],
-          date: msg.internalDate ? new Date(msg.internalDate).toISOString() : null,
-          rawRfc822: msg.source?.toString('utf8') || ''
-        });
+      // iCloud IMAP returns "Invalid message number" if FETCH range starts past uidNext.
+      if (startUid >= uidNext) {
+        accountState.mailboxes[mailbox] = { lastUid, syncedAt: new Date().toISOString() };
+        continue;
+      }
+
+      const range = `${startUid}:*`;
+
+      try {
+        for await (const msg of client.fetch(range, {
+          uid: true,
+          envelope: true,
+          source: true,
+          internalDate: true
+        })) {
+          maxSeenUid = Math.max(maxSeenUid, msg.uid);
+          await postToWorker({
+            source: 'imap',
+            mailbox,
+            accountEmail: account.email,
+            threadId: String(msg.envelope?.messageId || msg.uid),
+            uid: msg.uid,
+            subject: msg.envelope?.subject || '',
+            from: msg.envelope?.from || [],
+            to: msg.envelope?.to || [],
+            date: msg.internalDate ? new Date(msg.internalDate).toISOString() : null,
+            rawRfc822: msg.source?.toString('utf8') || ''
+          });
+        }
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        if (!/Invalid message number/i.test(text)) {
+          throw error;
+        }
       }
 
       accountState.mailboxes[mailbox] = { lastUid: maxSeenUid, syncedAt: new Date().toISOString() };
