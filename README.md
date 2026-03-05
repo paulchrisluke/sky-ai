@@ -34,8 +34,9 @@ Cloudflare-native backend for Sky AI.
    - `npx wrangler secret put GOOGLE_CLIENT_ID`
    - `npx wrangler secret put GOOGLE_CLIENT_SECRET`
    - `npx wrangler secret put GOOGLE_REDIRECT_URI`
-   - `npx wrangler secret put TOKEN_ENCRYPTION_KEY`
    - `npx wrangler secret put CLAUDE_API_KEY`
+   - `npx wrangler secret put GOOGLE_REFRESH_TOKEN_SKYLERBAIRD_ME_COM`
+   - `npx wrangler secret put GOOGLE_REFRESH_TOKEN_SKY_BOOSTEDSAFE_COM`
 5. Deploy:
    - `npx wrangler deploy`
 6. Validate:
@@ -54,12 +55,17 @@ Cloudflare-native backend for Sky AI.
   - `CLAUDE_MODEL`
   - `CLAUDE_API_KEY`
   - optional `CF_AIG_AUTH_TOKEN`
+- Mailbox identity vars:
+  - `MAILBOX_SKYLERBAIRD_ME_COM` (`SkylerBaird@me.com`)
+  - `MAILBOX_SKY_BOOSTEDSAFE_COM` (`Sky@boostedsafe.com`)
+- Mailbox refresh token vars:
+  - `GOOGLE_REFRESH_TOKEN_SKYLERBAIRD_ME_COM`
+  - `GOOGLE_REFRESH_TOKEN_SKY_BOOSTEDSAFE_COM`
 
 ## Secrets Clarification
 
 - `wrangler secret put` is encrypted at rest by Cloudflare.
-- If you store OAuth tokens in D1, encrypt them yourself before DB write.
-- `TOKEN_ENCRYPTION_KEY` is used for that application-level encryption.
+- For this single-tenant setup, mailbox refresh tokens are stored as Worker secrets (not in D1).
 
 ## Status While Waiting On Skyler OAuth/Claude Key
 
