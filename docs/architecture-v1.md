@@ -15,6 +15,8 @@ This document maps the locked decisions to implemented code.
 - HTTP fallback exists at `POST /chat/query`.
 - Replay endpoint for reconnect:
   - `GET /sessions/:session_id/events?since=<timestamp>&limit=<n>`
+  - `GET /sessions/:session_id/events?lastEventId=<cursor>&limit=<n>`
+  - `lastEventId` is the persisted `run_events` row cursor for lossless replay.
 
 ## 2) State and Concurrency
 

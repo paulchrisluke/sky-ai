@@ -131,6 +131,8 @@ Use the auto-generated Worker domain by default:
 - Durable Object coordinator class: `ChatCoordinator`
 - Event replay:
   - `GET /sessions/:sessionId/events?since=<timestamp>&limit=...`
+  - `GET /sessions/:sessionId/events?lastEventId=<rowid_cursor>&limit=...`
+  - WS reconnect supports `lastEventId` query param on `/ws/chat`.
 
 ## Access Auth (Step 3)
 
@@ -144,7 +146,7 @@ Use the auto-generated Worker domain by default:
 Current strict policy:
 
 - `api` worker requires Access JWT (`ACCESS_AUTH_ENABLED="true"` in `wrangler.api.toml`)
-- `ingest` and `jobs` still allow service API key auth for machine traffic
+- `ingest` and `jobs` also run with `ACCESS_AUTH_ENABLED="true"`; machine traffic uses API key bypass (`ALLOW_API_KEY_BYPASS="true"`)
 
 Set Worker vars for `api` (dev and prod):
 

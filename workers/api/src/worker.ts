@@ -119,8 +119,9 @@ export class ChatCoordinator {
 
       const sessionId = url.searchParams.get('sessionId');
       const since = url.searchParams.get('since');
+      const lastEventId = url.searchParams.get('lastEventId');
       if (sessionId) {
-        const replay = await loadRunEvents(this.env, sessionId, since, 200);
+        const replay = await loadRunEvents(this.env, sessionId, since, lastEventId, 200);
         for (const event of replay) {
           this.send(server, { type: 'replay.event', event });
         }
@@ -164,7 +165,22 @@ export class ChatCoordinator {
       this.sessionLocks.delete(sessionId);
       await this.state.storage.delete(`active:${sessionId}`);
       await clearSessionActiveRun(this.env, sessionId);
-      this.broadcast({ type: 'run.cancelled', sessionId, runId, reason: 'user_cancelled' });
+      const cancelledEvent = await appendRunEvent(this.env, {
+        sessionId,
+        workspaceId: context?.workspaceId || 'default',
+        accountId: context?.accountId || 'unknown',
+        runId,
+        eventType: 'run.cancelled',
+        payload: { reason: 'user_cancelled' }
+      });
+      this.broadcast({
+        type: 'run.cancelled',
+        sessionId,
+        runId,
+        reason: 'user_cancelled',
+        eventId: cancelledEvent.id,
+        lastEventId: cancelledEvent.cursor
+      });
       return;
     }
 
@@ -209,7 +225,7 @@ export class ChatCoordinator {
     await setSessionActiveRun(this.env, sessionId, runId);
 
     try {
-      await appendRunEvent(this.env, {
+      const startedEvent = await appendRunEvent(this.env, {
         sessionId,
         workspaceId,
         accountId,
@@ -217,7 +233,7 @@ export class ChatCoordinator {
         eventType: 'run.started',
         payload: { query }
       });
-      this.broadcast({ type: 'run.started', sessionId, runId });
+      this.broadcast({ type: 'run.started', sessionId, runId, eventId: startedEvent.id, lastEventId: startedEvent.cursor });
 
       const intent = detectIntent(query);
       await this.broadcastProgress(workspaceId, accountId, sessionId, runId, 'intent.detected', { intent });
@@ -256,7 +272,7 @@ export class ChatCoordinator {
         });
       }
 
-      await appendRunEvent(this.env, {
+      const completedEvent = await appendRunEvent(this.env, {
         sessionId,
         workspaceId,
         accountId,
@@ -276,6 +292,8 @@ export class ChatCoordinator {
         type: 'run.completed',
         sessionId,
         runId,
+        eventId: completedEvent.id,
+        lastEventId: completedEvent.cursor,
         turnId: assistantTurnId,
         intent: result.intent,
         answer: result.answer,
@@ -285,7 +303,7 @@ export class ChatCoordinator {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown_error';
-      await appendRunEvent(this.env, {
+      const failedEvent = await appendRunEvent(this.env, {
         sessionId,
         workspaceId,
         accountId,
@@ -293,7 +311,7 @@ export class ChatCoordinator {
         eventType: 'run.failed',
         payload: { error: message }
       });
-      this.broadcast({ type: 'run.failed', sessionId, runId, error: message });
+      this.broadcast({ type: 'run.failed', sessionId, runId, error: message, eventId: failedEvent.id, lastEventId: failedEvent.cursor });
     } finally {
       this.sessionLocks.delete(sessionId);
       await this.state.storage.delete(`active:${sessionId}`);
@@ -313,7 +331,7 @@ export class ChatCoordinator {
       const elapsed = now - Number(value.startedAt || 0);
       if (elapsed < timeoutMs) continue;
       const sessionId = key.replace('active:', '');
-      await appendRunEvent(this.env, {
+      const failedEvent = await appendRunEvent(this.env, {
         sessionId,
         workspaceId: value.workspaceId,
         accountId: value.accountId,
@@ -321,10 +339,20 @@ export class ChatCoordinator {
         eventType: 'run.failed',
         payload: { error: 'run_timeout_watchdog' }
       }).catch(() => {});
-      this.broadcast({ type: 'run.failed', sessionId, runId: value.runId, error: 'run_timeout_watchdog' });
+      this.broadcast({
+        type: 'run.failed',
+        sessionId,
+        runId: value.runId,
+        error: 'run_timeout_watchdog',
+        eventId: failedEvent?.id,
+        lastEventId: failedEvent?.cursor
+      });
       this.sessionLocks.delete(sessionId);
       await this.state.storage.delete(key);
       await clearSessionActiveRun(this.env, sessionId).catch(() => {});
+    }
+    if (active.size > 0) {
+      await this.state.storage.setAlarm(Date.now() + 60_000);
     }
   }
 
@@ -336,7 +364,7 @@ export class ChatCoordinator {
     stage: string,
     detail?: JsonRecord
   ): Promise<void> {
-    await appendRunEvent(this.env, {
+    const progressEvent = await appendRunEvent(this.env, {
       sessionId,
       workspaceId,
       accountId,
@@ -344,7 +372,15 @@ export class ChatCoordinator {
       eventType: 'tool.progress',
       payload: { stage, detail: detail || null }
     }).catch(() => {});
-    this.broadcast({ type: 'tool.progress', sessionId, runId, stage, detail: detail || null });
+    this.broadcast({
+      type: 'tool.progress',
+      sessionId,
+      runId,
+      stage,
+      detail: detail || null,
+      eventId: progressEvent?.id,
+      lastEventId: progressEvent?.cursor
+    });
   }
 
   private send(socket: WebSocket, payload: JsonRecord): void {
@@ -397,6 +433,7 @@ async function routeWebSocketToCoordinator(request: Request, env: Env): Promise<
   const accountId = url.searchParams.get('accountId');
   const sessionId = url.searchParams.get('sessionId');
   const since = url.searchParams.get('since');
+  const lastEventId = url.searchParams.get('lastEventId');
   const auth = await authorizeHttpRequest(request, env);
   if (!auth.ok) return auth.response;
 
@@ -416,6 +453,7 @@ async function routeWebSocketToCoordinator(request: Request, env: Env): Promise<
   connectUrl.searchParams.set('userId', auth.principal.email || auth.principal.subject);
   if (sessionId) connectUrl.searchParams.set('sessionId', sessionId);
   if (since) connectUrl.searchParams.set('since', since);
+  if (lastEventId) connectUrl.searchParams.set('lastEventId', lastEventId);
   return stub.fetch(new Request(connectUrl.toString(), request));
 }
 
@@ -434,8 +472,9 @@ async function getSessionEvents(request: Request, env: Env): Promise<Response> {
   const permission = await assertPermission(env, auth.principal, scope.workspace_id, scope.account_id);
   if (!permission.ok) return permission.response;
   const since = url.searchParams.get('since');
+  const lastEventId = url.searchParams.get('lastEventId');
   const limit = numberOr(url.searchParams.get('limit')) || 200;
-  const events = await loadRunEvents(env, sessionId, since, Math.min(Math.max(limit, 1), 1000));
+  const events = await loadRunEvents(env, sessionId, since, lastEventId, Math.min(Math.max(limit, 1), 1000));
   return json({ ok: true, sessionId, events });
 }
 
@@ -1299,20 +1338,6 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
 
   if (accountId.includes('@')) {
     const accountEmail = accountId.toLowerCase();
-    const existing = await env.SKY_DB
-      .prepare(
-        `SELECT id FROM accounts
-         WHERE workspace_id = ?
-           AND lower(email) = ?
-         LIMIT 1`
-      )
-      .bind(workspaceId, accountEmail)
-      .first<{ id: string }>();
-
-    if (existing?.id) {
-      return existing.id;
-    }
-
     await env.SKY_DB
       .prepare(
         `INSERT OR IGNORE INTO accounts (id, workspace_id, label, email, status, created_at, updated_at)
@@ -1380,14 +1405,33 @@ async function loadRunEvents(
   env: Env,
   sessionId: string,
   since: string | null,
+  lastEventId: string | null,
   limit: number
-): Promise<Array<{ id: string; run_id: string | null; turn_id: string | null; event_type: string; payload_json: string | null; created_at: string }>> {
+): Promise<Array<{ event_cursor: number; id: string; run_id: string | null; turn_id: string | null; event_type: string; payload_json: string | null; created_at: string }>> {
   const normalizedLimit = Math.min(Math.max(limit, 1), 1000);
+
+  if (lastEventId) {
+    const cursor = numberOr(lastEventId);
+    if (cursor) {
+      const result = await env.SKY_DB
+        .prepare(
+          `SELECT rowid AS event_cursor, id, run_id, turn_id, event_type, payload_json, created_at
+           FROM run_events
+           WHERE session_id = ?
+             AND rowid > ?
+           ORDER BY rowid ASC
+           LIMIT ?`
+        )
+        .bind(sessionId, cursor, normalizedLimit)
+        .all<{ event_cursor: number; id: string; run_id: string | null; turn_id: string | null; event_type: string; payload_json: string | null; created_at: string }>();
+      return result.results || [];
+    }
+  }
 
   if (since) {
     const result = await env.SKY_DB
       .prepare(
-        `SELECT id, run_id, turn_id, event_type, payload_json, created_at
+        `SELECT rowid AS event_cursor, id, run_id, turn_id, event_type, payload_json, created_at
          FROM run_events
          WHERE session_id = ?
            AND datetime(created_at) > datetime(?)
@@ -1395,20 +1439,20 @@ async function loadRunEvents(
          LIMIT ?`
       )
       .bind(sessionId, since, normalizedLimit)
-      .all<{ id: string; run_id: string | null; turn_id: string | null; event_type: string; payload_json: string | null; created_at: string }>();
+      .all<{ event_cursor: number; id: string; run_id: string | null; turn_id: string | null; event_type: string; payload_json: string | null; created_at: string }>();
     return result.results || [];
   }
 
   const result = await env.SKY_DB
     .prepare(
-      `SELECT id, run_id, turn_id, event_type, payload_json, created_at
+      `SELECT rowid AS event_cursor, id, run_id, turn_id, event_type, payload_json, created_at
        FROM run_events
        WHERE session_id = ?
-       ORDER BY datetime(created_at) DESC, id DESC
+       ORDER BY rowid DESC
        LIMIT ?`
     )
     .bind(sessionId, normalizedLimit)
-    .all<{ id: string; run_id: string | null; turn_id: string | null; event_type: string; payload_json: string | null; created_at: string }>();
+    .all<{ event_cursor: number; id: string; run_id: string | null; turn_id: string | null; event_type: string; payload_json: string | null; created_at: string }>();
 
   return (result.results || []).reverse();
 }
@@ -1459,15 +1503,16 @@ async function appendRunEvent(
     eventType: string;
     payload: JsonRecord;
   }
-): Promise<void> {
-  await env.SKY_DB
+): Promise<{ id: string; cursor: number }> {
+  const eventId = crypto.randomUUID();
+  const insert = await env.SKY_DB
     .prepare(
       `INSERT INTO run_events
        (id, session_id, workspace_id, account_id, run_id, turn_id, event_type, payload_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
     )
     .bind(
-      crypto.randomUUID(),
+      eventId,
       input.sessionId,
       input.workspaceId,
       input.accountId,
@@ -1486,6 +1531,7 @@ async function appendRunEvent(
     )
     .bind(input.sessionId)
     .run();
+  return { id: eventId, cursor: Number(insert.meta?.last_row_id || 0) };
 }
 
 async function insertCitations(
