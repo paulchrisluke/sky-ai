@@ -950,7 +950,11 @@ async function runExtraction(request: Request, env: Env): Promise<Response> {
   const rows = await env.SKY_DB
     .prepare(
       `SELECT em.id, em.thread_id, em.subject, em.snippet, em.sent_at,
-              COALESCE(json_extract(em.from_json, '$[0].address'), '') AS sender
+              COALESCE(
+                json_extract(em.from_json, '$[0].email'),
+                json_extract(em.from_json, '$[0].address'),
+                ''
+              ) AS sender
        FROM email_messages em
        LEFT JOIN message_extractions mx
          ON mx.workspace_id = em.workspace_id
@@ -1859,7 +1863,11 @@ async function buildThreadSummaryIntent(
   const rows = await env.SKY_DB
     .prepare(
       `SELECT id, sent_at, subject, snippet,
-              COALESCE(json_extract(from_json, '$[0].address'), '') AS sender
+              COALESCE(
+                json_extract(from_json, '$[0].email'),
+                json_extract(from_json, '$[0].address'),
+                ''
+              ) AS sender
        FROM email_messages
        WHERE workspace_id = ?
          AND (account_id = ? OR lower(account_email) = ?)
@@ -2011,7 +2019,11 @@ async function loadCitationsForMessages(
   const rows = await env.SKY_DB
     .prepare(
       `SELECT id, sent_at, subject,
-              COALESCE(json_extract(from_json, '$[0].address'), '') AS sender
+              COALESCE(
+                json_extract(from_json, '$[0].email'),
+                json_extract(from_json, '$[0].address'),
+                ''
+              ) AS sender
        FROM email_messages
        WHERE workspace_id = ?
          AND id IN (${placeholders})`
@@ -2392,7 +2404,11 @@ async function queryCitations(env: Env, workspaceId: string, accountId: string, 
   const rows = await env.SKY_DB
     .prepare(
       `SELECT id, sent_at, subject, snippet,
-              COALESCE(json_extract(from_json, '$[0].address'), '') AS sender
+              COALESCE(
+                json_extract(from_json, '$[0].email'),
+                json_extract(from_json, '$[0].address'),
+                ''
+              ) AS sender
        FROM email_messages
        WHERE workspace_id = ?
          AND account_email = ?
@@ -2783,7 +2799,11 @@ async function performSemanticSearch(
           json_extract(mc.metadata_json, '$.messageId') AS message_id,
           json_extract(mc.metadata_json, '$.threadId') AS thread_id,
           em.sent_at AS sent_at,
-          COALESCE(json_extract(em.from_json, '$[0].address'), '') AS sender,
+          COALESCE(
+            json_extract(em.from_json, '$[0].email'),
+            json_extract(em.from_json, '$[0].address'),
+            ''
+          ) AS sender,
           em.subject AS subject,
           mc.chunk_text AS excerpt
        FROM memory_chunks mc
