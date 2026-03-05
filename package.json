@@ -7,14 +7,19 @@
     "cf:login": "wrangler login",
     "cf:dev": "wrangler dev",
     "cf:dev:api": "wrangler dev --config wrangler.api.toml",
+    "cf:dev:jobs": "wrangler dev --config wrangler.jobs.toml",
     "cf:deploy": "wrangler deploy",
     "cf:deploy:api": "wrangler deploy --config wrangler.api.toml",
+    "cf:deploy:jobs": "wrangler deploy --config wrangler.jobs.toml",
     "cf:deploy:prod": "wrangler deploy --env prod",
     "cf:deploy:api:prod": "wrangler deploy --config wrangler.api.toml --env prod",
+    "cf:deploy:jobs:prod": "wrangler deploy --config wrangler.jobs.toml --env prod",
     "cf:d1:migrate:dev": "wrangler d1 migrations apply sky-ai-dev",
     "cf:d1:migrate:dev:api": "wrangler d1 migrations apply sky-ai-dev --config wrangler.api.toml",
+    "cf:d1:migrate:dev:jobs": "wrangler d1 migrations apply sky-ai-dev --config wrangler.jobs.toml",
     "cf:d1:migrate:prod": "wrangler d1 migrations apply sky-ai-prod --env prod",
-    "cf:d1:migrate:prod:api": "wrangler d1 migrations apply sky-ai-prod --config wrangler.api.toml --env prod"
+    "cf:d1:migrate:prod:api": "wrangler d1 migrations apply sky-ai-prod --config wrangler.api.toml --env prod",
+    "cf:d1:migrate:prod:jobs": "wrangler d1 migrations apply sky-ai-prod --config wrangler.jobs.toml --env prod"
   },
   "devDependencies": {
     "wrangler": "^4.6.0",

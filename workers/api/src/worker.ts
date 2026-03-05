@@ -43,6 +43,11 @@ export default {
       return runHttpChatQuery(request, env);
     }
 
+    if (request.method === 'GET' && /^\/sessions\/[^/]+\/events$/.test(url.pathname)) {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return getSessionEvents(url, env);
+    }
+
     if (request.method === 'POST' && url.pathname === '/extraction/run') {
       if (!isAuthorized(request, env)) return unauthorized();
       return runExtraction(request, env);
@@ -94,6 +99,15 @@ export class ChatCoordinator {
       server.accept();
       this.sockets.add(server);
 
+      const sessionId = url.searchParams.get('sessionId');
+      const since = url.searchParams.get('since');
+      if (sessionId) {
+        const replay = await loadRunEvents(this.env, sessionId, since, 200);
+        for (const event of replay) {
+          this.send(server, { type: 'replay.event', event });
+        }
+      }
+
       server.addEventListener('message', async (event: MessageEvent) => {
         await this.handleSocketMessage(server, event.data);
       });
@@ -114,7 +128,26 @@ export class ChatCoordinator {
       return;
     }
 
-    if (stringOr(payload.type) !== 'run.query') {
+    const msgType = stringOr(payload.type);
+    if (msgType === 'run.cancel') {
+      const sessionId = stringOr(payload.sessionId);
+      if (!sessionId) {
+        this.send(socket, { type: 'run.failed', error: 'sessionId is required for cancel' });
+        return;
+      }
+      const runId = this.sessionLocks.get(sessionId);
+      if (!runId) {
+        this.send(socket, { type: 'run.cancelled', sessionId, runId: null, reason: 'no_active_run' });
+        return;
+      }
+      this.sessionLocks.delete(sessionId);
+      await this.state.storage.delete(`active:${sessionId}`);
+      await clearSessionActiveRun(this.env, sessionId);
+      this.broadcast({ type: 'run.cancelled', sessionId, runId, reason: 'user_cancelled' });
+      return;
+    }
+
+    if (msgType !== 'run.query') {
       this.send(socket, { type: 'run.failed', error: 'unsupported_message_type' });
       return;
     }
@@ -145,6 +178,14 @@ export class ChatCoordinator {
 
     const runId = crypto.randomUUID();
     this.sessionLocks.set(sessionId, runId);
+    await this.state.storage.put(`active:${sessionId}`, {
+      runId,
+      workspaceId,
+      accountId,
+      startedAt: Date.now()
+    });
+    await this.state.storage.setAlarm(Date.now() + 60_000);
+    await setSessionActiveRun(this.env, sessionId, runId);
 
     try {
       await appendRunEvent(this.env, {
@@ -234,6 +275,35 @@ export class ChatCoordinator {
       this.broadcast({ type: 'run.failed', sessionId, runId, error: message });
     } finally {
       this.sessionLocks.delete(sessionId);
+      await this.state.storage.delete(`active:${sessionId}`);
+      await clearSessionActiveRun(this.env, sessionId);
+    }
+  }
+
+  async alarm(): Promise<void> {
+    const now = Date.now();
+    const timeoutMs = 2 * 60 * 1000;
+    const active = await this.state.storage.list<{ runId: string; workspaceId: string; accountId: string; startedAt: number }>({
+      prefix: 'active:'
+    });
+
+    for (const [key, value] of active) {
+      if (!value) continue;
+      const elapsed = now - Number(value.startedAt || 0);
+      if (elapsed < timeoutMs) continue;
+      const sessionId = key.replace('active:', '');
+      await appendRunEvent(this.env, {
+        sessionId,
+        workspaceId: value.workspaceId,
+        accountId: value.accountId,
+        runId: value.runId,
+        eventType: 'run.failed',
+        payload: { error: 'run_timeout_watchdog' }
+      }).catch(() => {});
+      this.broadcast({ type: 'run.failed', sessionId, runId: value.runId, error: 'run_timeout_watchdog' });
+      this.sessionLocks.delete(sessionId);
+      await this.state.storage.delete(key);
+      await clearSessionActiveRun(this.env, sessionId).catch(() => {});
     }
   }
 
@@ -304,6 +374,8 @@ async function routeWebSocketToCoordinator(request: Request, env: Env): Promise<
   const url = new URL(request.url);
   const workspaceId = url.searchParams.get('workspaceId') || 'default';
   const accountId = url.searchParams.get('accountId');
+  const sessionId = url.searchParams.get('sessionId');
+  const since = url.searchParams.get('since');
 
   if (!accountId) {
     return json({ ok: false, error: 'accountId query parameter is required' }, 400);
@@ -314,7 +386,19 @@ async function routeWebSocketToCoordinator(request: Request, env: Env): Promise<
   const stub = env.CHAT_COORDINATOR.get(id);
   const connectUrl = new URL(request.url);
   connectUrl.pathname = '/connect';
+  if (sessionId) connectUrl.searchParams.set('sessionId', sessionId);
+  if (since) connectUrl.searchParams.set('since', since);
   return stub.fetch(new Request(connectUrl.toString(), request));
+}
+
+async function getSessionEvents(url: URL, env: Env): Promise<Response> {
+  const parts = url.pathname.split('/');
+  const sessionId = parts[2];
+  if (!sessionId) return json({ ok: false, error: 'sessionId missing' }, 400);
+  const since = url.searchParams.get('since');
+  const limit = numberOr(url.searchParams.get('limit')) || 200;
+  const events = await loadRunEvents(env, sessionId, since, Math.min(Math.max(limit, 1), 1000));
+  return json({ ok: true, sessionId, events });
 }
 
 async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
@@ -1095,6 +1179,65 @@ async function ensureSession(
     .run();
 }
 
+async function setSessionActiveRun(env: Env, sessionId: string, runId: string): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `UPDATE chat_sessions
+       SET active_run_id = ?, last_event_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(runId, sessionId)
+    .run();
+}
+
+async function clearSessionActiveRun(env: Env, sessionId: string): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `UPDATE chat_sessions
+       SET active_run_id = NULL, last_event_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(sessionId)
+    .run();
+}
+
+async function loadRunEvents(
+  env: Env,
+  sessionId: string,
+  since: string | null,
+  limit: number
+): Promise<Array<{ id: string; run_id: string | null; turn_id: string | null; event_type: string; payload_json: string | null; created_at: string }>> {
+  const normalizedLimit = Math.min(Math.max(limit, 1), 1000);
+
+  if (since) {
+    const result = await env.SKY_DB
+      .prepare(
+        `SELECT id, run_id, turn_id, event_type, payload_json, created_at
+         FROM run_events
+         WHERE session_id = ?
+           AND datetime(created_at) > datetime(?)
+         ORDER BY datetime(created_at) ASC, id ASC
+         LIMIT ?`
+      )
+      .bind(sessionId, since, normalizedLimit)
+      .all<{ id: string; run_id: string | null; turn_id: string | null; event_type: string; payload_json: string | null; created_at: string }>();
+    return result.results || [];
+  }
+
+  const result = await env.SKY_DB
+    .prepare(
+      `SELECT id, run_id, turn_id, event_type, payload_json, created_at
+       FROM run_events
+       WHERE session_id = ?
+       ORDER BY datetime(created_at) DESC, id DESC
+       LIMIT ?`
+    )
+    .bind(sessionId, normalizedLimit)
+    .all<{ id: string; run_id: string | null; turn_id: string | null; event_type: string; payload_json: string | null; created_at: string }>();
+
+  return (result.results || []).reverse();
+}
+
 async function insertTurn(
   env: Env,
   input: {
@@ -1158,6 +1301,15 @@ async function appendRunEvent(
       input.eventType,
       JSON.stringify(input.payload)
     )
+    .run();
+
+  await env.SKY_DB
+    .prepare(
+      `UPDATE chat_sessions
+       SET last_event_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(input.sessionId)
     .run();
 }
 

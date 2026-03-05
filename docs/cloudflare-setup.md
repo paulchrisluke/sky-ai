@@ -4,7 +4,9 @@ This project now uses Cloudflare as the long-term system of record.
 
 ## What this stack owns
 
-- Worker API (`src/worker.ts`): ingestion, triage queueing, briefing queueing
+- Ingest Worker (`src/worker.ts`): ingestion + outbound mail queue API
+- API Worker (`workers/api/src/worker.ts`): chat, briefing, extraction, action approvals
+- Jobs Worker (`workers/jobs/src/worker.ts`): queue consumer + cron background processing
 - D1 (`SKY_DB`): normalized entities and job state
 - R2 (`SKY_ARTIFACTS`): raw source artifacts
 - Vectorize (`SKY_VECTORIZE`): memory index
@@ -78,6 +80,8 @@ Model switching:
 
 ```bash
 npx wrangler deploy
+npx wrangler deploy --config wrangler.api.toml
+npx wrangler deploy --config wrangler.jobs.toml
 ```
 
 ## 5) Validate
@@ -107,7 +111,7 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
 - Backfill queue endpoint:
   - `POST /mail/backfill` (queues checkpointed historical ingest job metadata)
 - Embedding queue endpoint:
-  - `POST /embeddings/process` (manual drain for queued/retry embeddings)
+  - `POST /jobs/embeddings/process` on the jobs worker (manual drain for queued/retry embeddings)
 
 ## Secret storage clarification
 

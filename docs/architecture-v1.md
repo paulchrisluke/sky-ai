@@ -6,12 +6,21 @@ This document maps the locked decisions to implemented code.
 
 - Browser <-> API Worker: WebSocket endpoint `/ws/chat`.
 - Durable Object `ChatCoordinator` receives socket messages (`run.query`) and emits run lifecycle events.
+- Event protocol now includes:
+  - `run.started`
+  - `tool.progress`
+  - `run.completed`
+  - `run.failed`
+  - `run.cancelled`
 - HTTP fallback exists at `POST /chat/query`.
+- Replay endpoint for reconnect:
+  - `GET /sessions/:session_id/events?since=<timestamp>&limit=<n>`
 
 ## 2) State and Concurrency
 
 - DO run lock: one active run per `session_id`.
 - DO rate limit: 20 requests / 5 minutes per session.
+- DO alarm watchdog marks stale active runs as failed (`run_timeout_watchdog`).
 - Persistent state in D1:
   - `chat_sessions`
   - `chat_turns`
@@ -73,6 +82,6 @@ This document maps the locked decisions to implemented code.
 
 ## Current Worker Split
 
-- `ingest` path is still the existing root worker (`wrangler.toml`).
-- New `api` worker is introduced (`wrangler.api.toml`).
-- `jobs` worker split is pending next phase.
+- `ingest` worker (`wrangler.toml`): external ingest + outbound queue endpoints.
+- `api` worker (`wrangler.api.toml`): chat, briefing, actions, extraction orchestration.
+- `jobs` worker (`wrangler.jobs.toml`): queue consumers + cron-driven background jobs.

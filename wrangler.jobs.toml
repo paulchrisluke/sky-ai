@@ -1,5 +1,5 @@
-name = "sky-ai"
-main = "src/worker.ts"
+name = "sky-ai-jobs"
+main = "workers/jobs/src/worker.ts"
 compatibility_date = "2026-03-05"
 workers_dev = true
 
@@ -7,7 +7,6 @@ workers_dev = true
 ENVIRONMENT = "dev"
 AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
 AIG_GATEWAY_ID = "sky-ai"
-OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 [[d1_databases]]
@@ -16,30 +15,27 @@ database_name = "sky-ai-dev"
 database_id = "4d6853be-e6da-45df-b054-afd2207413e6"
 migrations_dir = "db/migrations"
 
-[[r2_buckets]]
-binding = "SKY_ARTIFACTS"
-bucket_name = "sky-ai-artifacts-dev"
-
 [[vectorize]]
 binding = "SKY_VECTORIZE"
 index_name = "sky-ai-memory-dev"
 
-[[queues.producers]]
-binding = "EMBEDDING_QUEUE"
+[[queues.consumers]]
 queue = "sky-ai-embeddings-dev"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
 
-[observability]
-enabled = true
+[triggers]
+crons = ["*/15 * * * *", "0 13 * * *"]
 
 [env.prod]
 workers_dev = false
-route = { pattern = "sky-ai-api.example.com/*", zone_name = "example.com" }
+route = { pattern = "sky-ai-jobs.example.com/*", zone_name = "example.com" }
 
 [env.prod.vars]
 ENVIRONMENT = "prod"
 AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
 AIG_GATEWAY_ID = "sky-ai"
-OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 [[env.prod.d1_databases]]
@@ -48,14 +44,15 @@ database_name = "sky-ai-prod"
 database_id = "e0dc4ec1-26d5-46db-819d-a416bb76c7ec"
 migrations_dir = "db/migrations"
 
-[[env.prod.r2_buckets]]
-binding = "SKY_ARTIFACTS"
-bucket_name = "sky-ai-artifacts-prod"
-
 [[env.prod.vectorize]]
 binding = "SKY_VECTORIZE"
 index_name = "sky-ai-memory-prod"
 
-[[env.prod.queues.producers]]
-binding = "EMBEDDING_QUEUE"
+[[env.prod.queues.consumers]]
 queue = "sky-ai-embeddings-prod"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 5
+
+[env.prod.triggers]
+crons = ["*/15 * * * *", "0 13 * * *"]

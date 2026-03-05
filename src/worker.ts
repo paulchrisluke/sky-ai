@@ -48,12 +48,6 @@ export default {
       return queueBackfillRun(request, env);
     }
 
-    if (request.method === 'POST' && url.pathname === '/embeddings/process') {
-      if (!isAuthorized(request, env)) return unauthorized();
-      const processed = await processEmbeddingJobs(env, 20);
-      return json({ ok: true, processed });
-    }
-
     if (request.method === 'POST' && url.pathname === '/mail/send') {
       if (!isAuthorized(request, env)) return unauthorized();
       return queueOutboundMail(request, env);
@@ -69,42 +63,7 @@ export default {
       return markOutboundMailResult(request, env);
     }
 
-    if (request.method === 'POST' && url.pathname === '/tasks/triage') {
-      return runTriage(env);
-    }
-
-    if (request.method === 'POST' && url.pathname === '/briefings/daily') {
-      return runDailyBriefing(env);
-    }
-
-    if (request.method === 'POST' && url.pathname === '/ai/test') {
-      return runAiGatewayTest(env);
-    }
-
     return json({ ok: false, error: 'Not found' }, 404);
-  },
-
-  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-    if (controller.cron === '*/15 * * * *') {
-      await enqueueSyncJob(env, 'mailbox_incremental_sync', { source: 'cron' });
-      await processEmbeddingJobs(env, 40);
-      return;
-    }
-
-    if (controller.cron === '0 13 * * *') {
-      await enqueueSyncJob(env, 'daily_briefing', { source: 'cron' });
-      await processEmbeddingJobs(env, 40);
-    }
-  },
-
-  async queue(batch: { messages?: Array<{ body?: unknown }> }, env: Env): Promise<void> {
-    const messages = batch.messages || [];
-    for (const msg of messages) {
-      const body = (msg.body || {}) as Record<string, unknown>;
-      const sourceRecordId = stringOr(body.sourceRecordId);
-      if (!sourceRecordId) continue;
-      await processSingleEmbeddingJob(env, sourceRecordId);
-    }
   }
 };
 

@@ -17,6 +17,7 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 - `src/worker.ts`
 - `src/types.d.ts`
 - `workers/api/src/worker.ts`
+- `workers/jobs/src/worker.ts`
 - `db/migrations/0001_init.sql`
 - `db/migrations/0002_outbound_messages.sql`
 - `db/migrations/0003_email_canonical_schema.sql`
@@ -26,6 +27,7 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 - `db/migrations/0007_action_extraction_and_briefing.sql`
 - `wrangler.toml`
 - `wrangler.api.toml`
+- `wrangler.jobs.toml`
 - `docs/cloudflare-setup.md`
 - `agent/index.js`
 - `agent/.env.example`
@@ -53,6 +55,7 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 6. Deploy:
    - `npx wrangler deploy`
    - `npx wrangler deploy --config wrangler.api.toml`
+   - `npx wrangler deploy --config wrangler.jobs.toml`
 7. Validate:
    - `curl "https://<worker-subdomain>.workers.dev/health"`
 
@@ -112,6 +115,7 @@ Use the auto-generated Worker domain by default:
 - API worker health: `GET /health`
 - Citation-required chat:
   - `GET /ws/chat?workspaceId=default&accountId=<account_id>` (websocket)
+  - WS events: `run.started`, `tool.progress`, `run.completed`, `run.failed`, `run.cancelled`
   - `POST /chat/query`
   - Intents supported now:
     - `today_actions`
@@ -124,6 +128,18 @@ Use the auto-generated Worker domain by default:
   - `POST /actions/propose`
   - `POST /actions/approve`
 - Durable Object coordinator class: `ChatCoordinator`
+- Event replay:
+  - `GET /sessions/:sessionId/events?since=<timestamp>&limit=...`
+
+## Jobs Worker
+
+- Worker URL: `https://sky-ai-jobs.paulchrisluke.workers.dev`
+- Owns queue consumer + cron processing:
+  - embedding queue consumption
+  - embedding retry draining
+  - scheduled sync/briefing job enqueue
+- Manual embedding drain:
+  - `POST /jobs/embeddings/process`
 
 ## Historical Backfill (Controlled)
 
