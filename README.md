@@ -39,7 +39,6 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
    - update `wrangler.toml` with the returned DEV D1 `database_id`
    - `npx wrangler d1 migrations apply sky-ai-dev`
 4. Set dev secrets:
-   - `npx wrangler secret put CLAUDE_API_KEY`
    - `npx wrangler secret put CF_AIG_AUTH_TOKEN` (optional)
    - `npx wrangler secret put WORKER_API_KEY` (recommended)
 5. Deploy:
@@ -66,6 +65,7 @@ Use the auto-generated Worker domain by default:
   - `CLAUDE_API_KEY`
   - optional `CF_AIG_AUTH_TOKEN`
 - To switch models, change `CLAUDE_MODEL` and redeploy.
+- `/ai/test` currently uses Workers AI binding and does not require `CLAUDE_API_KEY`.
 - Mailbox identity vars:
   - `MAILBOX_SKYLERBAIRD_ME_COM` (`SkylerBaird@me.com`)
 
@@ -79,7 +79,7 @@ Use the auto-generated Worker domain by default:
 
 - Cloudflare backend can be deployed now.
 - `/tasks/triage` and `/briefings/daily` are safe no-op if `CLAUDE_API_KEY` is missing.
-- `/ai/test` verifies Claude routing through AI Gateway once configured.
+- `/ai/test` verifies Workers AI binding.
 - iCloud mailbox sync can run now via the local Mac agent (`agent/`) with app-specific passwords.
 - Email capabilities now include:
   - Sync of `INBOX` and `Sent Messages` via IMAP

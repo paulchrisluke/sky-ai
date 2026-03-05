@@ -2,6 +2,9 @@ interface Env {
   SKY_DB: D1Database;
   SKY_ARTIFACTS: R2Bucket;
   SKY_VECTORIZE: VectorizeIndex;
+  AI?: {
+    run(model: string, inputs: Record<string, unknown>): Promise<Record<string, unknown>>;
+  };
   WORKER_API_KEY?: string;
   CLAUDE_API_KEY?: string;
   CF_AIG_AUTH_TOKEN?: string;
@@ -113,23 +116,24 @@ async function runDailyBriefing(env: Env): Promise<Response> {
 }
 
 async function runAiGatewayTest(env: Env): Promise<Response> {
-  if (!hasAiGatewayConfig(env)) {
+  if (!env.AI) {
     return json({
       ok: false,
-      error: 'Missing AI Gateway configuration (CLAUDE_API_KEY, AIG_ACCOUNT_ID, AIG_GATEWAY_ID).'
+      error: 'Missing Workers AI binding (AI).'
     }, 400);
   }
 
   try {
-    const completion = await callClaudeViaGateway(env, [
-      { role: 'user', content: 'Respond with: AI gateway ready.' }
-    ]);
-    return json({ ok: true, completion });
+    const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+      prompt: 'Respond with exactly: Workers AI ready.'
+    });
+
+    return json({ ok: true, provider: 'workers-ai', result });
   } catch (error) {
     return json(
       {
         ok: false,
-        error: 'AI Gateway test failed',
+        error: 'Workers AI test failed',
         details: error instanceof Error ? error.message : 'Unknown error'
       },
       500

@@ -30,8 +30,8 @@ Set these local values in `.dev.vars`:
 
 - `AIG_ACCOUNT_ID`
 - `AIG_GATEWAY_ID`
-- `CLAUDE_MODEL` (default `claude-sonnet-4-5`)
-- `CLAUDE_API_KEY`
+- `CLAUDE_MODEL` (optional, for Claude path)
+- `CLAUDE_API_KEY` (optional, for Claude path)
 - `MAILBOX_SKYLERBAIRD_ME_COM` (`SkylerBaird@me.com`)
 - optional: `CF_AIG_AUTH_TOKEN`
 
@@ -54,10 +54,11 @@ npx wrangler d1 migrations apply sky-ai-dev
 ## 3) Push secrets (DEV)
 
 ```bash
-npx wrangler secret put CLAUDE_API_KEY
 npx wrangler secret put CF_AIG_AUTH_TOKEN
 npx wrangler secret put WORKER_API_KEY
 ```
+
+`CLAUDE_API_KEY` is optional for now because `/ai/test` uses Workers AI binding.
 
 Set non-secret AI Gateway vars in `wrangler.toml`:
 
@@ -95,7 +96,7 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
 
 - `POST /tasks/triage` and `POST /briefings/daily` return safe no-op if `CLAUDE_API_KEY` is missing.
 - Mail sync runs via Mac IMAP agent (`agent/`) for now.
-- Test gateway wiring with `POST /ai/test`.
+- Test Workers AI wiring with `POST /ai/test`.
 - Outbound mail queue endpoints are:
   - `POST /mail/send` (enqueue)
   - `GET /mail/outbound/next` (agent claim)

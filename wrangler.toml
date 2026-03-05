@@ -6,7 +6,7 @@ workers_dev = true
 [vars]
 ENVIRONMENT = "dev"
 AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
-AIG_GATEWAY_ID = "REPLACE_WITH_GATEWAY_ID"
+AIG_GATEWAY_ID = "sky-ai"
 CLAUDE_MODEL = "claude-sonnet-4-5"
 
 [[d1_databases]]
@@ -29,6 +29,9 @@ crons = ["*/15 * * * *", "0 13 * * *"]
 [observability]
 enabled = true
 
+[ai]
+binding = "AI"
+
 [env.prod]
 workers_dev = false
 route = { pattern = "sky-ai-api.example.com/*", zone_name = "example.com" }
@@ -36,7 +39,7 @@ route = { pattern = "sky-ai-api.example.com/*", zone_name = "example.com" }
 [env.prod.vars]
 ENVIRONMENT = "prod"
 AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
-AIG_GATEWAY_ID = "REPLACE_WITH_GATEWAY_ID"
+AIG_GATEWAY_ID = "sky-ai"
 CLAUDE_MODEL = "claude-sonnet-4-5"
 
 [[env.prod.d1_databases]]
