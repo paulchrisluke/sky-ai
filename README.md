@@ -142,6 +142,8 @@ Use the auto-generated Worker domain by default:
   - `GET /ops/ingest-stats?workspaceId=...&accountId=...`
   - `GET /ops/queue-stats?workspaceId=...&accountId=...`
   - `GET /ops/extraction-stats?workspaceId=...&accountId=...`
+  - `GET /ops/triage-stats?workspaceId=...&accountId=...`
+  - Triage data is persisted per thread in `email_threads.classification_json`
 
 ## Access Auth (Step 3)
 

@@ -26,6 +26,17 @@ type NormalizedAddress = {
   name: string | null;
 };
 
+type ThreadClassification = {
+  priority: 'P0' | 'P1' | 'P2' | 'P3';
+  category: 'customer_support' | 'vendor' | 'legal' | 'financial' | 'personal';
+  needs_reply: boolean;
+  sentiment: 'urgent' | 'neutral' | 'positive';
+  suggested_action: 'reply' | 'archive' | 'forward' | 'escalate';
+  confidence: number;
+  classifier_version: string;
+  reasons: string[];
+};
+
 type EmbeddingQueueMessage = {
   sourceRecordId: string;
 };
@@ -203,8 +214,16 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   await upsertParticipants(env, workspaceId, messageId, fromAddresses, 'from');
   await upsertParticipants(env, workspaceId, messageId, toAddresses, 'to');
   await updateThreadLastMessage(env, threadId, subject, sentAt);
-
   const chunkSource = buildChunkSource(payload, subject, snippet);
+  const classification = classifyEmailThread({
+    subject,
+    snippet,
+    bodyText: chunkSource,
+    from: fromAddresses.map((x) => x.email),
+    mailbox
+  });
+  await upsertThreadClassification(env, threadId, classification);
+
   const chunks = chunkText(chunkSource, CHUNK_SIZE, CHUNK_OVERLAP, MAX_CHUNKS_PER_MESSAGE);
   let embeddingWarning: string | null = null;
   let embeddingStatus: 'not_requested' | 'queued' | 'indexed' | 'retry' = 'not_requested';
@@ -308,6 +327,30 @@ async function updateThreadLastMessage(
     )
     .bind(subject || null, sentAt, threadId)
     .run();
+}
+
+async function upsertThreadClassification(
+  env: Env,
+  threadId: string,
+  classification: ThreadClassification
+): Promise<void> {
+  try {
+    await env.SKY_DB
+      .prepare(
+        `UPDATE email_threads
+         SET classification_json = ?,
+             classification_updated_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+      )
+      .bind(JSON.stringify(classification), threadId)
+      .run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown';
+    if (!/no such column/i.test(message)) {
+      throw error;
+    }
+  }
 }
 
 async function upsertParticipants(
@@ -720,6 +763,103 @@ function buildChunkSource(payload: JsonRecord, subject: string, fallbackSnippet:
   if (raw) return cleanEmailBody(raw).slice(0, MAX_CHUNK_SOURCE_CHARS);
 
   return cleanEmailBody(`${subject}\n\n${fallbackSnippet}`).slice(0, MAX_CHUNK_SOURCE_CHARS);
+}
+
+function classifyEmailThread(input: {
+  subject: string;
+  snippet: string;
+  bodyText: string;
+  from: string[];
+  mailbox: string;
+}): ThreadClassification {
+  const text = `${input.subject}\n${input.snippet}\n${input.bodyText}`.toLowerCase();
+  const senderText = input.from.join(' ').toLowerCase();
+  const reasons: string[] = [];
+
+  const has = (patterns: RegExp[]): boolean => patterns.some((p) => p.test(text));
+
+  const urgentPatterns = [/\burgent\b/, /\basap\b/, /\bimmediately\b/, /\bcritical\b/, /\baction required\b/, /\boverdue\b/];
+  const positivePatterns = [/\bthank(s| you)?\b/, /\bappreciate\b/, /\bgreat\b/, /\bawesome\b/, /\bexcited\b/, /\blove\b/];
+  const replyPatterns = [/\?/, /\bplease (reply|respond|confirm|review)\b/, /\bcan you\b/, /\blet me know\b/, /\bfollow up\b/];
+
+  const customerSupportPatterns = [
+    /\bcustomer\b/,
+    /\bsupport\b/,
+    /\bhelp\b/,
+    /\bissue\b/,
+    /\bproblem\b/,
+    /\breturn\b/,
+    /\bwarranty\b/,
+    /\btracking\b/,
+    /\border\b/
+  ];
+  const vendorPatterns = [
+    /\bvendor\b/,
+    /\bsupplier\b/,
+    /\bmanufacturer\b/,
+    /\bpo\b/,
+    /\bpurchase order\b/,
+    /\bshipment\b/,
+    /\binventory\b/
+  ];
+  const legalPatterns = [/\bcontract\b/, /\bagreement\b/, /\bnda\b/, /\blegal\b/, /\battorney\b/, /\bcounsel\b/, /\bcompliance\b/];
+  const financialPatterns = [/\binvoice\b/, /\bpayment\b/, /\brefund\b/, /\bchargeback\b/, /\bbilling\b/, /\btax\b/, /\breceipt\b/];
+  const personalPatterns = [
+    /\bwife\b/,
+    /\bfamily\b/,
+    /\bdad\b/,
+    /\bmom\b/,
+    /\bkid(s)?\b/,
+    /\bbirthday\b/,
+    /\bvalentine\b/,
+    /\bdoctor\b/,
+    /\bdinner\b/
+  ];
+
+  let category: ThreadClassification['category'] = 'customer_support';
+  if (has(legalPatterns)) category = 'legal';
+  else if (has(financialPatterns)) category = 'financial';
+  else if (has(vendorPatterns)) category = 'vendor';
+  else if (has(personalPatterns) || /\bme\.com\b/.test(senderText)) category = 'personal';
+  else if (has(customerSupportPatterns)) category = 'customer_support';
+  reasons.push(`category:${category}`);
+
+  const urgent = has(urgentPatterns);
+  const needsReply = has(replyPatterns) || /inbox/i.test(input.mailbox);
+  const positive = !urgent && has(positivePatterns);
+
+  let sentiment: ThreadClassification['sentiment'] = 'neutral';
+  if (urgent) sentiment = 'urgent';
+  else if (positive) sentiment = 'positive';
+  reasons.push(`sentiment:${sentiment}`);
+
+  let priority: ThreadClassification['priority'] = 'P3';
+  if (urgent) priority = 'P0';
+  else if (needsReply && (category === 'legal' || category === 'financial')) priority = 'P1';
+  else if (needsReply || category === 'customer_support') priority = 'P2';
+  reasons.push(`priority:${priority}`);
+
+  let suggestedAction: ThreadClassification['suggested_action'] = 'archive';
+  if (urgent) suggestedAction = 'escalate';
+  else if (needsReply) suggestedAction = 'reply';
+  else if (category === 'financial' || category === 'legal') suggestedAction = 'forward';
+  reasons.push(`suggested_action:${suggestedAction}`);
+
+  let confidence = 0.55;
+  if (urgent) confidence += 0.2;
+  if (needsReply) confidence += 0.1;
+  if (category !== 'customer_support') confidence += 0.1;
+
+  return {
+    priority,
+    category,
+    needs_reply: needsReply,
+    sentiment,
+    suggested_action: suggestedAction,
+    confidence: Math.min(0.95, Number(confidence.toFixed(2))),
+    classifier_version: 'triage-heuristic-v1',
+    reasons
+  };
 }
 
 function chunkText(text: string, size: number, overlap: number, maxChunks: number): string[] {

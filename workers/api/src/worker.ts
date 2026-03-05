@@ -167,6 +167,10 @@ export default {
       return getUsageStats(request, env);
     }
 
+    if (request.method === 'GET' && url.pathname === '/ops/triage-stats') {
+      return getTriageStats(request, env);
+    }
+
     return json({ ok: false, error: 'Not found' }, 404);
   }
 };
@@ -1795,6 +1799,85 @@ async function getUsageStats(request: Request, env: Env): Promise<Response> {
       responseUnits: Number(row.response_units || 0),
       estimatedCostUsd: Number(Number(row.estimated_cost_usd || 0).toFixed(6))
     })),
+    generatedAt: new Date().toISOString()
+  });
+}
+
+async function getTriageStats(request: Request, env: Env): Promise<Response> {
+  const scope = await resolveOpsScope(request, env);
+  if (!scope.ok) return scope.response;
+  const { workspaceId, accountId } = scope;
+
+  const [priorityRows, categoryRows, replyRows, sentimentRows] = await Promise.all([
+    env.SKY_DB
+      .prepare(
+        `SELECT COALESCE(json_extract(classification_json, '$.priority'), 'unknown') AS key, COUNT(*) AS c
+         FROM email_threads
+         WHERE workspace_id = ?
+           AND lower(account_id) = lower(?)
+           AND classification_json IS NOT NULL
+         GROUP BY key
+         ORDER BY c DESC`
+      )
+      .bind(workspaceId, accountId)
+      .all<{ key: string; c: number }>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT COALESCE(json_extract(classification_json, '$.category'), 'unknown') AS key, COUNT(*) AS c
+         FROM email_threads
+         WHERE workspace_id = ?
+           AND lower(account_id) = lower(?)
+           AND classification_json IS NOT NULL
+         GROUP BY key
+         ORDER BY c DESC`
+      )
+      .bind(workspaceId, accountId)
+      .all<{ key: string; c: number }>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT COALESCE(CAST(json_extract(classification_json, '$.needs_reply') AS INTEGER), 0) AS key, COUNT(*) AS c
+         FROM email_threads
+         WHERE workspace_id = ?
+           AND lower(account_id) = lower(?)
+           AND classification_json IS NOT NULL
+         GROUP BY key
+         ORDER BY c DESC`
+      )
+      .bind(workspaceId, accountId)
+      .all<{ key: number; c: number }>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT COALESCE(json_extract(classification_json, '$.sentiment'), 'unknown') AS key, COUNT(*) AS c
+         FROM email_threads
+         WHERE workspace_id = ?
+           AND lower(account_id) = lower(?)
+           AND classification_json IS NOT NULL
+         GROUP BY key
+         ORDER BY c DESC`
+      )
+      .bind(workspaceId, accountId)
+      .all<{ key: string; c: number }>()
+  ]);
+
+  const toMap = (rows: Array<{ key: string | number; c: number }>): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const row of rows) out[String(row.key)] = Number(row.c || 0);
+    return out;
+  };
+
+  return json({
+    ok: true,
+    workspaceId,
+    accountId,
+    triage: {
+      byPriority: toMap(priorityRows.results || []),
+      byCategory: toMap(categoryRows.results || []),
+      bySentiment: toMap(sentimentRows.results || []),
+      needsReply: {
+        true: Number((replyRows.results || []).find((x) => Number(x.key) === 1)?.c || 0),
+        false: Number((replyRows.results || []).find((x) => Number(x.key) === 0)?.c || 0)
+      }
+    },
     generatedAt: new Date().toISOString()
   });
 }
