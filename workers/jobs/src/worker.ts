@@ -2,6 +2,10 @@ interface Env {
   SKY_DB: D1Database;
   SKY_VECTORIZE: VectorizeIndex;
   WORKER_API_KEY?: string;
+  ACCESS_AUTH_ENABLED?: string;
+  ACCESS_AUD?: string;
+  ACCESS_ISSUER?: string;
+  ACCESS_JWKS_URL?: string;
   OPENAI_API_KEY?: string;
   CF_AIG_AUTH_TOKEN?: string;
   AIG_ACCOUNT_ID?: string;
@@ -21,7 +25,7 @@ export default {
     }
 
     if (request.method === 'POST' && url.pathname === '/jobs/embeddings/process') {
-      if (!isAuthorized(request, env)) return unauthorized();
+      if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
       const processed = await processEmbeddingJobs(env, 200);
       return json({ ok: true, processed });
     }
@@ -240,14 +244,118 @@ async function callOpenAiEmbeddingsViaGateway(env: Env, chunks: string[]): Promi
   return vectors;
 }
 
-function isAuthorized(request: Request, env: Env): boolean {
-  if (!env.WORKER_API_KEY) return true;
-  const auth = request.headers.get('authorization') || '';
-  return auth === `Bearer ${env.WORKER_API_KEY}`;
-}
-
 function unauthorized(): Response {
   return json({ ok: false, error: 'unauthorized' }, 401);
+}
+
+const JOBS_AUTH_CACHE: {
+  jwksUrl?: string;
+  expiresAt?: number;
+  keysByKid?: Record<string, JsonWebKey>;
+} = {};
+
+async function authorizeHttpRequest(
+  request: Request,
+  env: Env
+): Promise<{ ok: true } | { ok: false }> {
+  const apiKey = extractBearerToken(request);
+  if (env.WORKER_API_KEY && apiKey === env.WORKER_API_KEY) return { ok: true };
+
+  if (env.ACCESS_AUTH_ENABLED !== 'true') {
+    return env.WORKER_API_KEY ? { ok: false } : { ok: true };
+  }
+
+  const jwt = request.headers.get('cf-access-jwt-assertion') || apiKey;
+  if (!jwt) return { ok: false };
+
+  try {
+    await verifyAccessJwt(jwt, env);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+async function verifyAccessJwt(token: string, env: Env): Promise<void> {
+  const [encodedHeader, encodedPayload, encodedSig] = token.split('.');
+  if (!encodedHeader || !encodedPayload || !encodedSig) throw new Error('malformed_jwt');
+  const header = JSON.parse(decodeBase64Url(encodedHeader)) as { kid?: string; alg?: string };
+  if (header.alg !== 'RS256' || !header.kid) throw new Error('unsupported_alg_or_missing_kid');
+
+  const jwks = await getJwks(env);
+  const jwk = jwks[header.kid];
+  if (!jwk) throw new Error('jwks_kid_not_found');
+
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify']
+  );
+
+  const signed = new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`);
+  const signature = decodeBase64UrlToBytes(encodedSig);
+  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, signed);
+  if (!valid) throw new Error('invalid_signature');
+
+  const claims = JSON.parse(decodeBase64Url(encodedPayload)) as Record<string, unknown>;
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof claims.exp !== 'number' || claims.exp <= now) throw new Error('expired');
+  if (typeof claims.nbf === 'number' && claims.nbf > now) throw new Error('not_yet_valid');
+
+  if (env.ACCESS_ISSUER && typeof claims.iss === 'string') {
+    if (claims.iss.replace(/\/+$/, '') !== env.ACCESS_ISSUER.replace(/\/+$/, '')) throw new Error('issuer_mismatch');
+  }
+
+  if (env.ACCESS_AUD) {
+    const aud = claims.aud;
+    const ok = typeof aud === 'string' ? aud === env.ACCESS_AUD : Array.isArray(aud) && aud.includes(env.ACCESS_AUD);
+    if (!ok) throw new Error('audience_mismatch');
+  }
+}
+
+async function getJwks(env: Env): Promise<Record<string, JsonWebKey>> {
+  const jwksUrl = env.ACCESS_JWKS_URL || (env.ACCESS_ISSUER ? `${env.ACCESS_ISSUER.replace(/\/+$/, '')}/cdn-cgi/access/certs` : null);
+  if (!jwksUrl) throw new Error('missing_jwks_url');
+
+  const now = Date.now();
+  if (JOBS_AUTH_CACHE.jwksUrl === jwksUrl && JOBS_AUTH_CACHE.expiresAt && JOBS_AUTH_CACHE.expiresAt > now && JOBS_AUTH_CACHE.keysByKid) {
+    return JOBS_AUTH_CACHE.keysByKid;
+  }
+
+  const res = await fetch(jwksUrl, { method: 'GET' });
+  if (!res.ok) throw new Error('jwks_fetch_failed');
+  const body = (await res.json()) as { keys?: JsonWebKey[] };
+  const out: Record<string, JsonWebKey> = {};
+  for (const key of body.keys || []) {
+    if (key.kid) out[key.kid] = key;
+  }
+
+  JOBS_AUTH_CACHE.jwksUrl = jwksUrl;
+  JOBS_AUTH_CACHE.keysByKid = out;
+  JOBS_AUTH_CACHE.expiresAt = now + 10 * 60 * 1000;
+  return out;
+}
+
+function extractBearerToken(request: Request): string | null {
+  const auth = request.headers.get('authorization') || '';
+  const match = auth.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : null;
+}
+
+function decodeBase64Url(input: string): string {
+  const bytes = decodeBase64UrlToBytes(input);
+  return new TextDecoder().decode(bytes);
+}
+
+function decodeBase64UrlToBytes(input: string): Uint8Array {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+  const bin = atob(padded);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  return bytes;
 }
 
 function stringOr(input: unknown): string | null {

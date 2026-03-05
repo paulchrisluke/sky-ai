@@ -85,3 +85,13 @@ This document maps the locked decisions to implemented code.
 - `ingest` worker (`wrangler.toml`): external ingest + outbound queue endpoints.
 - `api` worker (`wrangler.api.toml`): chat, briefing, actions, extraction orchestration.
 - `jobs` worker (`wrangler.jobs.toml`): queue consumers + cron-driven background jobs.
+
+## Auth + Authorization
+
+- Cloudflare Access JWT verification is implemented for HTTP endpoints across:
+  - ingest worker
+  - api worker
+  - jobs worker
+- D1 table `access_subject_permissions` defines explicit access grants:
+  - `subject -> workspace_id/account_id` (+ role/status)
+- API data routes check permission before returning account-scoped data.

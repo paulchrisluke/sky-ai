@@ -5,6 +5,8 @@ workers_dev = true
 
 [vars]
 ENVIRONMENT = "dev"
+ACCESS_AUTH_ENABLED = "false"
+ALLOW_API_KEY_BYPASS = "false"
 
 [[d1_databases]]
 binding = "SKY_DB"
@@ -26,6 +28,8 @@ route = { pattern = "sky-ai-api.example.com/*", zone_name = "example.com" }
 
 [env.prod.vars]
 ENVIRONMENT = "prod"
+ACCESS_AUTH_ENABLED = "false"
+ALLOW_API_KEY_BYPASS = "false"
 
 [[env.prod.d1_databases]]
 binding = "SKY_DB"

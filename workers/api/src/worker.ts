@@ -2,6 +2,11 @@ interface Env {
   SKY_DB: D1Database;
   CHAT_COORDINATOR: DurableObjectNamespace;
   WORKER_API_KEY?: string;
+  ACCESS_AUTH_ENABLED?: string;
+  ACCESS_AUD?: string;
+  ACCESS_ISSUER?: string;
+  ACCESS_JWKS_URL?: string;
+  ALLOW_API_KEY_BYPASS?: string;
   ENVIRONMENT?: string;
 }
 
@@ -25,6 +30,12 @@ type QueryResult = {
   searched: JsonRecord;
 };
 
+type AuthPrincipal = {
+  type: 'access' | 'service' | 'anonymous';
+  subject: string;
+  email: string | null;
+};
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -34,37 +45,30 @@ export default {
     }
 
     if (request.method === 'GET' && url.pathname === '/ws/chat') {
-      if (!isAuthorized(request, env)) return unauthorized();
       return routeWebSocketToCoordinator(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/chat/query') {
-      if (!isAuthorized(request, env)) return unauthorized();
       return runHttpChatQuery(request, env);
     }
 
     if (request.method === 'GET' && /^\/sessions\/[^/]+\/events$/.test(url.pathname)) {
-      if (!isAuthorized(request, env)) return unauthorized();
-      return getSessionEvents(url, env);
+      return getSessionEvents(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/extraction/run') {
-      if (!isAuthorized(request, env)) return unauthorized();
       return runExtraction(request, env);
     }
 
     if (request.method === 'GET' && url.pathname === '/briefing/today') {
-      if (!isAuthorized(request, env)) return unauthorized();
-      return getTodayBriefing(url, env);
+      return getTodayBriefing(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/actions/propose') {
-      if (!isAuthorized(request, env)) return unauthorized();
       return proposeAction(request, env);
     }
 
     if (request.method === 'POST' && url.pathname === '/actions/approve') {
-      if (!isAuthorized(request, env)) return unauthorized();
       return approveAction(request, env);
     }
 
@@ -77,12 +81,14 @@ export class ChatCoordinator {
   private env: Env;
   private sockets: Set<WebSocket>;
   private sessionLocks: Map<string, string>;
+  private socketContexts: Map<WebSocket, { workspaceId: string; accountId: string; userId: string }>;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
     this.sockets = new Set();
     this.sessionLocks = new Map();
+    this.socketContexts = new Map();
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -98,6 +104,10 @@ export class ChatCoordinator {
       const server = pair[1];
       server.accept();
       this.sockets.add(server);
+      const workspaceId = url.searchParams.get('workspaceId') || 'default';
+      const accountId = url.searchParams.get('accountId') || 'unknown';
+      const userId = url.searchParams.get('userId') || 'anonymous';
+      this.socketContexts.set(server, { workspaceId, accountId, userId });
 
       const sessionId = url.searchParams.get('sessionId');
       const since = url.searchParams.get('since');
@@ -111,7 +121,10 @@ export class ChatCoordinator {
       server.addEventListener('message', async (event: MessageEvent) => {
         await this.handleSocketMessage(server, event.data);
       });
-      server.addEventListener('close', () => this.sockets.delete(server));
+      server.addEventListener('close', () => {
+        this.sockets.delete(server);
+        this.socketContexts.delete(server);
+      });
 
       return new Response(null, { status: 101, webSocket: client });
     }
@@ -152,9 +165,10 @@ export class ChatCoordinator {
       return;
     }
 
-    const workspaceId = stringOr(payload.workspaceId) || 'default';
-    let accountId = stringOr(payload.accountId);
-    const userId = stringOr(payload.userId) || 'anonymous';
+    const context = this.socketContexts.get(socket);
+    const workspaceId = context?.workspaceId || 'default';
+    const accountId = context?.accountId;
+    const userId = context?.userId || 'anonymous';
     const sessionId = stringOr(payload.sessionId) || crypto.randomUUID();
     const query = stringOr(payload.query);
 
@@ -163,7 +177,6 @@ export class ChatCoordinator {
       return;
     }
 
-    accountId = await ensureWorkspaceAndAccount(this.env, workspaceId, accountId);
     await ensureSession(this.env, { sessionId, workspaceId, accountId, userId });
 
     if (!(await this.checkRateLimit(sessionId))) {
@@ -376,25 +389,42 @@ async function routeWebSocketToCoordinator(request: Request, env: Env): Promise<
   const accountId = url.searchParams.get('accountId');
   const sessionId = url.searchParams.get('sessionId');
   const since = url.searchParams.get('since');
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
 
   if (!accountId) {
     return json({ ok: false, error: 'accountId query parameter is required' }, 400);
   }
 
   const canonicalAccountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  const permission = await assertPermission(env, auth.principal, workspaceId, canonicalAccountId);
+  if (!permission.ok) return permission.response;
   const id = env.CHAT_COORDINATOR.idFromName(`${workspaceId}:${canonicalAccountId}`);
   const stub = env.CHAT_COORDINATOR.get(id);
   const connectUrl = new URL(request.url);
   connectUrl.pathname = '/connect';
+  connectUrl.searchParams.set('workspaceId', workspaceId);
+  connectUrl.searchParams.set('accountId', canonicalAccountId);
+  connectUrl.searchParams.set('userId', auth.principal.email || auth.principal.subject);
   if (sessionId) connectUrl.searchParams.set('sessionId', sessionId);
   if (since) connectUrl.searchParams.set('since', since);
   return stub.fetch(new Request(connectUrl.toString(), request));
 }
 
-async function getSessionEvents(url: URL, env: Env): Promise<Response> {
+async function getSessionEvents(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+  const url = new URL(request.url);
   const parts = url.pathname.split('/');
   const sessionId = parts[2];
   if (!sessionId) return json({ ok: false, error: 'sessionId missing' }, 400);
+  const scope = await env.SKY_DB
+    .prepare(`SELECT workspace_id, account_id FROM chat_sessions WHERE id = ? LIMIT 1`)
+    .bind(sessionId)
+    .first<{ workspace_id: string; account_id: string }>();
+  if (!scope) return json({ ok: false, error: 'session_not_found' }, 404);
+  const permission = await assertPermission(env, auth.principal, scope.workspace_id, scope.account_id);
+  if (!permission.ok) return permission.response;
   const since = url.searchParams.get('since');
   const limit = numberOr(url.searchParams.get('limit')) || 200;
   const events = await loadRunEvents(env, sessionId, since, Math.min(Math.max(limit, 1), 1000));
@@ -402,6 +432,8 @@ async function getSessionEvents(url: URL, env: Env): Promise<Response> {
 }
 
 async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
   let accountId = stringOr(payload.accountId);
@@ -414,6 +446,8 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
   }
 
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+  if (!permission.ok) return permission.response;
   await ensureSession(env, { sessionId, workspaceId, accountId, userId });
 
   const runId = crypto.randomUUID();
@@ -483,6 +517,8 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
 }
 
 async function runExtraction(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
   let accountId = stringOr(payload.accountId);
@@ -493,6 +529,8 @@ async function runExtraction(request: Request, env: Env): Promise<Response> {
   }
 
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+  if (!permission.ok) return permission.response;
   const accountEmail = await resolveAccountEmail(env, workspaceId, accountId);
   if (!accountEmail) {
     return json({ ok: false, error: 'account email could not be resolved for accountId' }, 400);
@@ -646,7 +684,10 @@ async function runExtraction(request: Request, env: Env): Promise<Response> {
   });
 }
 
-async function getTodayBriefing(url: URL, env: Env): Promise<Response> {
+async function getTodayBriefing(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+  const url = new URL(request.url);
   const workspaceId = url.searchParams.get('workspaceId') || 'default';
   let accountId = url.searchParams.get('accountId');
 
@@ -655,7 +696,17 @@ async function getTodayBriefing(url: URL, env: Env): Promise<Response> {
   }
 
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+  if (!permission.ok) return permission.response;
+  const briefing = await loadTodayBriefingData(env, workspaceId, accountId);
+  return json({ ok: true, ...briefing });
+}
 
+async function loadTodayBriefingData(
+  env: Env,
+  workspaceId: string,
+  accountId: string
+): Promise<{ date: string; workspaceId: string; accountId: string; actions: JsonRecord[]; citations: Citation[]; note: string }> {
   const tasks = await env.SKY_DB
     .prepare(
       `SELECT id, title, priority, due_at, source_message_id, confidence_score, review_state
@@ -734,21 +785,22 @@ async function getTodayBriefing(url: URL, env: Env): Promise<Response> {
     citations.push(c);
   }
 
-  return json({
-    ok: true,
+  return {
     date: toDateOnly(today),
     workspaceId,
     accountId,
-    actions: ranked,
+    actions: ranked as unknown as JsonRecord[],
     citations,
     note:
       ranked.length === 0
         ? 'No open extracted actions yet. Run POST /extraction/run first.'
         : 'Prioritized by urgency, due date, and confidence.'
-  });
+  };
 }
 
 async function proposeAction(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
   let accountId = stringOr(payload.accountId);
@@ -762,6 +814,8 @@ async function proposeAction(request: Request, env: Env): Promise<Response> {
   }
 
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
+  const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+  if (!permission.ok) return permission.response;
 
   const actionId = crypto.randomUUID();
   const approvalToken = crypto.randomUUID();
@@ -799,6 +853,8 @@ async function proposeAction(request: Request, env: Env): Promise<Response> {
 }
 
 async function approveAction(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
   const payload = (await request.json()) as JsonRecord;
   const approvedBy = stringOr(payload.userId) || 'unknown';
   const confirm = payload.confirm === true;
@@ -824,6 +880,13 @@ async function approveAction(request: Request, env: Env): Promise<Response> {
         .first<{ id: string; status: string; expires_at: string | null }>();
 
   if (!row) return json({ ok: false, error: 'action_not_found' }, 404);
+  const actionScope = await env.SKY_DB
+    .prepare(`SELECT workspace_id, account_id FROM proposed_actions WHERE id = ? LIMIT 1`)
+    .bind(row.id)
+    .first<{ workspace_id: string; account_id: string }>();
+  if (!actionScope) return json({ ok: false, error: 'action_scope_missing' }, 404);
+  const permission = await assertPermission(env, auth.principal, actionScope.workspace_id, actionScope.account_id);
+  if (!permission.ok) return permission.response;
   if (row.status !== 'proposed') return json({ ok: false, error: `action_not_approvable:${row.status}` }, 409);
   if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) {
     return json({ ok: false, error: 'approval_token_expired' }, 409);
@@ -885,13 +948,9 @@ async function buildTodayActionsIntent(
   workspaceId: string,
   accountId: string
 ): Promise<{ answer: string; citations: Citation[]; searched: JsonRecord }> {
-  const briefingRes = await getTodayBriefing(
-    new URL(`https://local/briefing/today?workspaceId=${encodeURIComponent(workspaceId)}&accountId=${encodeURIComponent(accountId)}`),
-    env
-  );
-  const body = (await briefingRes.json()) as JsonRecord;
+  const body = await loadTodayBriefingData(env, workspaceId, accountId);
   const actions = arrayOr(body.actions);
-  const citations = (arrayOr(body.citations) || []) as unknown as Citation[];
+  const citations = body.citations;
 
   if (!actions || actions.length === 0) {
     return {
@@ -1435,14 +1494,168 @@ function arrayOr(input: unknown): unknown[] | null {
   return Array.isArray(input) ? input : null;
 }
 
-function isAuthorized(request: Request, env: Env): boolean {
-  if (!env.WORKER_API_KEY) return true;
-  const auth = request.headers.get('authorization') || '';
-  return auth === `Bearer ${env.WORKER_API_KEY}`;
+const AUTH_CACHE: {
+  jwksUrl?: string;
+  expiresAt?: number;
+  keysByKid?: Record<string, JsonWebKey>;
+} = {};
+
+async function authorizeHttpRequest(
+  request: Request,
+  env: Env
+): Promise<{ ok: true; principal: AuthPrincipal } | { ok: false; response: Response }> {
+  const apiKey = extractBearerToken(request);
+  if (env.WORKER_API_KEY && apiKey === env.WORKER_API_KEY && env.ALLOW_API_KEY_BYPASS === 'true') {
+    return { ok: true, principal: { type: 'service', subject: 'service:worker_api_key', email: null } };
+  }
+
+  if (env.ACCESS_AUTH_ENABLED !== 'true') {
+    if (env.WORKER_API_KEY) {
+      return { ok: false, response: json({ ok: false, error: 'unauthorized' }, 401) };
+    }
+    return { ok: true, principal: { type: 'anonymous', subject: 'anonymous', email: null } };
+  }
+
+  const jwt = request.headers.get('cf-access-jwt-assertion') || extractBearerToken(request);
+  if (!jwt) {
+    return { ok: false, response: json({ ok: false, error: 'missing_access_jwt' }, 401) };
+  }
+
+  try {
+    const claims = await verifyAccessJwt(jwt, env);
+    return {
+      ok: true,
+      principal: {
+        type: 'access',
+        subject: String(claims.sub),
+        email: typeof claims.email === 'string' ? claims.email : null
+      }
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      response: json({ ok: false, error: 'invalid_access_jwt', detail: error instanceof Error ? error.message : 'invalid' }, 401)
+    };
+  }
 }
 
-function unauthorized(): Response {
-  return json({ ok: false, error: 'unauthorized' }, 401);
+async function assertPermission(
+  env: Env,
+  principal: AuthPrincipal,
+  workspaceId: string,
+  accountId: string
+): Promise<{ ok: true } | { ok: false; response: Response }> {
+  if (principal.type === 'service' || principal.type === 'anonymous') return { ok: true };
+
+  const row = await env.SKY_DB
+    .prepare(
+      `SELECT id
+       FROM access_subject_permissions
+       WHERE subject = ?
+         AND workspace_id = ?
+         AND status = 'active'
+         AND (account_id = ? OR account_id = '*')
+       LIMIT 1`
+    )
+    .bind(principal.subject, workspaceId, accountId)
+    .first<{ id: string }>();
+
+  if (!row) {
+    return { ok: false, response: json({ ok: false, error: 'forbidden' }, 403) };
+  }
+
+  return { ok: true };
+}
+
+async function verifyAccessJwt(token: string, env: Env): Promise<Record<string, unknown>> {
+  const [encodedHeader, encodedPayload, encodedSig] = token.split('.');
+  if (!encodedHeader || !encodedPayload || !encodedSig) {
+    throw new Error('malformed_jwt');
+  }
+
+  const header = JSON.parse(decodeBase64Url(encodedHeader)) as { kid?: string; alg?: string };
+  if (header.alg !== 'RS256' || !header.kid) {
+    throw new Error('unsupported_jwt_alg_or_missing_kid');
+  }
+
+  const jwks = await getJwks(env);
+  const jwk = jwks[header.kid];
+  if (!jwk) throw new Error('jwks_kid_not_found');
+
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify']
+  );
+
+  const signed = new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`);
+  const signature = decodeBase64UrlToBytes(encodedSig);
+  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, signed);
+  if (!valid) throw new Error('jwt_signature_invalid');
+
+  const claims = JSON.parse(decodeBase64Url(encodedPayload)) as Record<string, unknown>;
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof claims.exp !== 'number' || claims.exp <= now) throw new Error('jwt_expired');
+  if (typeof claims.nbf === 'number' && claims.nbf > now) throw new Error('jwt_not_yet_valid');
+
+  if (env.ACCESS_ISSUER && typeof claims.iss === 'string') {
+    const iss = claims.iss.replace(/\/+$/, '');
+    const expected = env.ACCESS_ISSUER.replace(/\/+$/, '');
+    if (iss !== expected) throw new Error('jwt_issuer_mismatch');
+  }
+
+  if (env.ACCESS_AUD) {
+    const aud = claims.aud;
+    const ok = typeof aud === 'string' ? aud === env.ACCESS_AUD : Array.isArray(aud) && aud.includes(env.ACCESS_AUD);
+    if (!ok) throw new Error('jwt_audience_mismatch');
+  }
+
+  if (typeof claims.sub !== 'string' || !claims.sub) throw new Error('jwt_missing_sub');
+  return claims;
+}
+
+async function getJwks(env: Env): Promise<Record<string, JsonWebKey>> {
+  const jwksUrl = env.ACCESS_JWKS_URL || (env.ACCESS_ISSUER ? `${env.ACCESS_ISSUER.replace(/\/+$/, '')}/cdn-cgi/access/certs` : null);
+  if (!jwksUrl) throw new Error('missing_access_jwks_url_or_issuer');
+
+  const now = Date.now();
+  if (AUTH_CACHE.jwksUrl === jwksUrl && AUTH_CACHE.expiresAt && AUTH_CACHE.expiresAt > now && AUTH_CACHE.keysByKid) {
+    return AUTH_CACHE.keysByKid;
+  }
+
+  const res = await fetch(jwksUrl, { method: 'GET' });
+  if (!res.ok) throw new Error(`jwks_fetch_failed_${res.status}`);
+  const body = (await res.json()) as { keys?: JsonWebKey[] };
+  const keys: Record<string, JsonWebKey> = {};
+  for (const key of body.keys || []) {
+    if (key.kid) keys[key.kid] = key;
+  }
+  AUTH_CACHE.jwksUrl = jwksUrl;
+  AUTH_CACHE.keysByKid = keys;
+  AUTH_CACHE.expiresAt = now + 10 * 60 * 1000;
+  return keys;
+}
+
+function extractBearerToken(request: Request): string | null {
+  const auth = request.headers.get('authorization') || '';
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : null;
+}
+
+function decodeBase64Url(input: string): string {
+  const bytes = decodeBase64UrlToBytes(input);
+  return new TextDecoder().decode(bytes);
+}
+
+function decodeBase64UrlToBytes(input: string): Uint8Array {
+  const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 function stringOr(input: unknown): string | null {

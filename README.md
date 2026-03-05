@@ -25,6 +25,7 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 - `db/migrations/0005_chat_sessions_and_actions.sql`
 - `db/migrations/0006_account_id_on_email_memory.sql`
 - `db/migrations/0007_action_extraction_and_briefing.sql`
+- `db/migrations/0008_access_subject_permissions.sql`
 - `wrangler.toml`
 - `wrangler.api.toml`
 - `wrangler.jobs.toml`
@@ -130,6 +131,31 @@ Use the auto-generated Worker domain by default:
 - Durable Object coordinator class: `ChatCoordinator`
 - Event replay:
   - `GET /sessions/:sessionId/events?since=<timestamp>&limit=...`
+
+## Access Auth (Step 3)
+
+- Implemented in all HTTP workers (`ingest`, `api`, `jobs`):
+  - Cloudflare Access JWT verification (RS256 via JWKS)
+  - Optional API key bypass for service traffic
+- Authorization mapping table:
+  - `access_subject_permissions` (migration `0008`)
+  - `subject -> workspace_id/account_id` with active status
+
+Enable it by setting Worker vars:
+
+- `ACCESS_AUTH_ENABLED="true"`
+- `ACCESS_ISSUER="https://<your-team>.cloudflareaccess.com"`
+- `ACCESS_AUD="<access-audience-tag>"`
+- optional `ACCESS_JWKS_URL` (defaults to `${ACCESS_ISSUER}/cdn-cgi/access/certs`)
+
+Grant an Access subject permission (example):
+
+```sql
+INSERT INTO access_subject_permissions
+  (id, subject, email, workspace_id, account_id, role, status, created_at, updated_at)
+VALUES
+  ('perm-1', 'access-sub-uuid', 'user@example.com', 'default', 'skylerbaird@me.com', 'admin', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+```
 
 ## Jobs Worker
 

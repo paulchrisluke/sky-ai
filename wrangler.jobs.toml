@@ -8,6 +8,8 @@ ENVIRONMENT = "dev"
 AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
 AIG_GATEWAY_ID = "sky-ai"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+ACCESS_AUTH_ENABLED = "false"
+ALLOW_API_KEY_BYPASS = "true"
 
 [[d1_databases]]
 binding = "SKY_DB"
@@ -37,6 +39,8 @@ ENVIRONMENT = "prod"
 AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
 AIG_GATEWAY_ID = "sky-ai"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+ACCESS_AUTH_ENABLED = "false"
+ALLOW_API_KEY_BYPASS = "true"
 
 [[env.prod.d1_databases]]
 binding = "SKY_DB"
