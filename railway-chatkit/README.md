@@ -1,18 +1,23 @@
-# Railway ChatKit Skeleton
+# Railway ChatKit Bridge
 
-Minimal FastAPI service for initial Railway deployment.
+Deploy this directory as a Railway service.
 
-## Local run
+## Required Railway variables
 
-```bash
-cd railway-chatkit
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
+- `CLOUDFLARE_API_URL` (example: `https://sky-ai-api.paulchrisluke.workers.dev`)
+- `WORKER_API_KEY`
+- `DEFAULT_ACCOUNT_ID` (optional, default `skylerbaird@me.com`)
+- `DEFAULT_WORKSPACE_ID` (optional, default `default`)
 
 ## Endpoints
 
 - `GET /health`
 - `POST /chatkit`
+
+## Example request
+
+```bash
+curl -X POST "$RAILWAY_URL/chatkit" \
+  -H "content-type: application/json" \
+  -d '{"query":"What emails do I have about contracts?","threadId":"test-thread-001"}'
+```

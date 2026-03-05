@@ -239,11 +239,16 @@ A starter FastAPI service for Railway is included at `railway-chatkit/`.
 
 Deploy steps:
 
-1. Create a new Railway project from the `railway-chatkit` folder.
+1. Create Railway service from this repo.
+2. Set Railway service `Root Directory` to `railway-chatkit`.
 2. Railway will use:
    - `Procfile`
    - `requirements.txt`
    - `main.py`
+3. Set Railway variables:
+   - `CLOUDFLARE_API_URL=https://sky-ai-api.paulchrisluke.workers.dev`
+   - `WORKER_API_KEY=<worker_api_key>`
+   - optional `DEFAULT_ACCOUNT_ID` and `DEFAULT_WORKSPACE_ID`
 3. Verify after deploy:
    - `GET /health` returns `{"status":"healthy"}`
-   - `POST /chatkit` returns `{"status":"ok","message":"ChatKit endpoint ready"}`
+   - `POST /chatkit` returns answer/citations/proposals from `POST /chat/query`
