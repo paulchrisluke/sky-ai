@@ -99,6 +99,35 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
 - set PROD secrets using `npx wrangler secret put <NAME> --env prod`
 - deploy with `npx wrangler deploy --env prod`
 
+## 7) Cloudflare Access (API auth)
+
+No custom keypair generation is needed. Cloudflare Access issues and signs JWTs.
+
+1. In Zero Trust, create a Self-hosted Access application for:
+- `sky-ai-api.<your-domain>` or your `workers.dev` API hostname
+2. Create an allow policy for your user(s).
+3. Copy:
+- Issuer: `https://<team>.cloudflareaccess.com`
+- Audience tag (`aud`) from the Access app.
+4. Set API worker secrets:
+
+```bash
+npx wrangler secret put ACCESS_ISSUER --config wrangler.api.toml
+npx wrangler secret put ACCESS_AUD --config wrangler.api.toml
+npx wrangler secret put ACCESS_ISSUER --config wrangler.api.toml --env prod
+npx wrangler secret put ACCESS_AUD --config wrangler.api.toml --env prod
+```
+
+5. Grant D1 permissions for each Access subject:
+
+```bash
+./scripts/grant-access-subject.sh sky-ai-dev <access-subject> default <account_id> <email> admin active
+```
+
+6. Verify auth:
+- `GET /auth/whoami`
+- `GET /auth/whoami?workspaceId=default&accountId=<account_id>`
+
 ## Notes while waiting for Skyler OAuth/Claude key
 
 - `POST /tasks/triage` and `POST /briefings/daily` return safe no-op if `OPENAI_API_KEY` is missing.

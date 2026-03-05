@@ -52,6 +52,10 @@ export default {
       return runHttpChatQuery(request, env);
     }
 
+    if (request.method === 'GET' && url.pathname === '/auth/whoami') {
+      return getAuthWhoami(request, env);
+    }
+
     if (request.method === 'GET' && /^\/sessions\/[^/]+\/events$/.test(url.pathname)) {
       return getSessionEvents(request, env);
     }
@@ -429,6 +433,40 @@ async function getSessionEvents(request: Request, env: Env): Promise<Response> {
   const limit = numberOr(url.searchParams.get('limit')) || 200;
   const events = await loadRunEvents(env, sessionId, since, Math.min(Math.max(limit, 1), 1000));
   return json({ ok: true, sessionId, events });
+}
+
+async function getAuthWhoami(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+
+  const workspaceId = (new URL(request.url)).searchParams.get('workspaceId');
+  if (!workspaceId) {
+    const permissions = await listPermissions(env, auth.principal);
+    return json({
+      ok: true,
+      principal: auth.principal,
+      permissions
+    });
+  }
+
+  const accountId = (new URL(request.url)).searchParams.get('accountId');
+  if (!accountId) {
+    const permissions = await listPermissions(env, auth.principal, workspaceId);
+    return json({
+      ok: true,
+      principal: auth.principal,
+      permissions
+    });
+  }
+
+  const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+  return json({
+    ok: true,
+    principal: auth.principal,
+    authorized: permission.ok,
+    workspaceId,
+    accountId
+  }, permission.ok ? 200 : 403);
 }
 
 async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
@@ -1565,6 +1603,42 @@ async function assertPermission(
   }
 
   return { ok: true };
+}
+
+async function listPermissions(
+  env: Env,
+  principal: AuthPrincipal,
+  workspaceId?: string
+): Promise<Array<{ workspaceId: string; accountId: string; role: string; status: string }>> {
+  if (principal.type !== 'access') return [];
+
+  const rows = workspaceId
+    ? await env.SKY_DB
+        .prepare(
+          `SELECT workspace_id, account_id, role, status
+           FROM access_subject_permissions
+           WHERE subject = ?
+             AND workspace_id = ?
+           ORDER BY workspace_id, account_id`
+        )
+        .bind(principal.subject, workspaceId)
+        .all<{ workspace_id: string; account_id: string; role: string; status: string }>()
+    : await env.SKY_DB
+        .prepare(
+          `SELECT workspace_id, account_id, role, status
+           FROM access_subject_permissions
+           WHERE subject = ?
+           ORDER BY workspace_id, account_id`
+        )
+        .bind(principal.subject)
+        .all<{ workspace_id: string; account_id: string; role: string; status: string }>();
+
+  return (rows.results || []).map((r) => ({
+    workspaceId: r.workspace_id,
+    accountId: r.account_id,
+    role: r.role,
+    status: r.status
+  }));
 }
 
 async function verifyAccessJwt(token: string, env: Env): Promise<Record<string, unknown>> {

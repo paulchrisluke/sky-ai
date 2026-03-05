@@ -141,12 +141,24 @@ Use the auto-generated Worker domain by default:
   - `access_subject_permissions` (migration `0008`)
   - `subject -> workspace_id/account_id` with active status
 
-Enable it by setting Worker vars:
+Current strict policy:
+
+- `api` worker requires Access JWT (`ACCESS_AUTH_ENABLED="true"` in `wrangler.api.toml`)
+- `ingest` and `jobs` still allow service API key auth for machine traffic
+
+Set Worker vars for `api` (dev and prod):
 
 - `ACCESS_AUTH_ENABLED="true"`
 - `ACCESS_ISSUER="https://<your-team>.cloudflareaccess.com"`
 - `ACCESS_AUD="<access-audience-tag>"`
 - optional `ACCESS_JWKS_URL` (defaults to `${ACCESS_ISSUER}/cdn-cgi/access/certs`)
+
+Set vars with Wrangler:
+
+- `npx wrangler secret put ACCESS_ISSUER --config wrangler.api.toml`
+- `npx wrangler secret put ACCESS_AUD --config wrangler.api.toml`
+- `npx wrangler secret put ACCESS_ISSUER --config wrangler.api.toml --env prod`
+- `npx wrangler secret put ACCESS_AUD --config wrangler.api.toml --env prod`
 
 Grant an Access subject permission (example):
 
@@ -156,6 +168,16 @@ INSERT INTO access_subject_permissions
 VALUES
   ('perm-1', 'access-sub-uuid', 'user@example.com', 'default', 'skylerbaird@me.com', 'admin', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 ```
+
+Or use helper script:
+
+- `./scripts/grant-access-subject.sh sky-ai-dev <access-subject> default <account_id> <email> admin active`
+
+Validation endpoint:
+
+- `GET /auth/whoami`
+- `GET /auth/whoami?workspaceId=default`
+- `GET /auth/whoami?workspaceId=default&accountId=<account_id>`
 
 ## Jobs Worker
 

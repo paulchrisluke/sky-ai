@@ -92,6 +92,10 @@ This document maps the locked decisions to implemented code.
   - ingest worker
   - api worker
   - jobs worker
+- Strict mode is enabled for `api` routes by default.
 - D1 table `access_subject_permissions` defines explicit access grants:
   - `subject -> workspace_id/account_id` (+ role/status)
 - API data routes check permission before returning account-scoped data.
+- Auth introspection endpoint:
+  - `GET /auth/whoami` (principal + grants)
+  - `GET /auth/whoami?workspaceId=...&accountId=...` (explicit authorization check)
