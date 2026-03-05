@@ -48,9 +48,22 @@ Cloudflare-native backend for Sky AI.
   - `cp .dev.vars.example .dev.vars`
 - `.dev.vars` is gitignored; `.dev.vars.example` is committed.
 - For deployed environments, use `wrangler secret put ...` (not `.dev.vars`).
+- Claude calls are routed via Cloudflare AI Gateway using:
+  - `AIG_ACCOUNT_ID`
+  - `AIG_GATEWAY_ID`
+  - `CLAUDE_MODEL`
+  - `CLAUDE_API_KEY`
+  - optional `CF_AIG_AUTH_TOKEN`
+
+## Secrets Clarification
+
+- `wrangler secret put` is encrypted at rest by Cloudflare.
+- If you store OAuth tokens in D1, encrypt them yourself before DB write.
+- `TOKEN_ENCRYPTION_KEY` is used for that application-level encryption.
 
 ## Status While Waiting On Skyler OAuth/Claude Key
 
 - Cloudflare backend can be deployed now.
 - `/tasks/triage` and `/briefings/daily` are safe no-op if `CLAUDE_API_KEY` is missing.
+- `/ai/test` verifies Claude routing through AI Gateway once configured.
 - Next implementation step: Google OAuth + sync pipeline directly in Worker.

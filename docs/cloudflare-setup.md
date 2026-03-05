@@ -26,6 +26,14 @@ cp .dev.vars.example .dev.vars
 
 For deployed envs, always use `wrangler secret put`.
 
+Set these local values in `.dev.vars`:
+
+- `AIG_ACCOUNT_ID`
+- `AIG_GATEWAY_ID`
+- `CLAUDE_MODEL` (default `claude-sonnet-4-5`)
+- `CLAUDE_API_KEY`
+- optional: `CF_AIG_AUTH_TOKEN`
+
 ## 2) Provision DEV infrastructure
 
 ```bash
@@ -50,7 +58,14 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 npx wrangler secret put GOOGLE_REDIRECT_URI
 npx wrangler secret put TOKEN_ENCRYPTION_KEY
 npx wrangler secret put CLAUDE_API_KEY
+npx wrangler secret put CF_AIG_AUTH_TOKEN
 ```
+
+Set non-secret AI Gateway vars in `wrangler.toml`:
+
+- `AIG_ACCOUNT_ID`
+- `AIG_GATEWAY_ID`
+- `CLAUDE_MODEL`
 
 ## 4) Deploy DEV worker
 
@@ -77,3 +92,10 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
 
 - `POST /tasks/triage` and `POST /briefings/daily` return safe no-op if `CLAUDE_API_KEY` is missing.
 - Gmail/Calendar OAuth sync wiring should be built directly in Cloudflare next.
+- Test gateway wiring with `POST /ai/test`.
+
+## Secret storage clarification
+
+- `wrangler secret put` stores Worker secrets encrypted at rest by Cloudflare.
+- Those secrets are available to your Worker at runtime as plaintext environment values.
+- `TOKEN_ENCRYPTION_KEY` is still needed to encrypt OAuth tokens before persisting them in D1.

@@ -5,6 +5,9 @@ workers_dev = true
 
 [vars]
 ENVIRONMENT = "dev"
+AIG_ACCOUNT_ID = "REPLACE_WITH_ACCOUNT_ID"
+AIG_GATEWAY_ID = "REPLACE_WITH_GATEWAY_ID"
+CLAUDE_MODEL = "claude-sonnet-4-5"
 
 [[d1_databases]]
 binding = "SKY_DB"
@@ -32,6 +35,9 @@ route = { pattern = "sky-ai-api.example.com/*", zone_name = "example.com" }
 
 [env.prod.vars]
 ENVIRONMENT = "prod"
+AIG_ACCOUNT_ID = "REPLACE_WITH_ACCOUNT_ID"
+AIG_GATEWAY_ID = "REPLACE_WITH_GATEWAY_ID"
+CLAUDE_MODEL = "claude-sonnet-4-5"
 
 [[env.prod.d1_databases]]
 binding = "SKY_DB"
