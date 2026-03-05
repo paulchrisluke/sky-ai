@@ -79,8 +79,10 @@ This document maps the locked decisions to implemented code.
 
 - No auto-execution.
 - `POST /actions/propose` creates `proposed` records with approval token.
-- `POST /actions/approve` only changes status to `approved`.
-- Execution is intentionally separate.
+- `POST /actions/approve` transitions `proposed -> approved`.
+- `POST /actions/reject` transitions `proposed|approved -> rejected`.
+- `POST /actions/execute` transitions `approved -> executed`.
+- Immutable lifecycle audit events are written to `action_events`.
 
 ## Current Worker Split
 
@@ -101,3 +103,13 @@ This document maps the locked decisions to implemented code.
 - Auth introspection endpoint:
   - `GET /auth/whoami` (principal + grants)
   - `GET /auth/whoami?workspaceId=...&accountId=...` (explicit authorization check)
+
+## Citation Contract Validation
+
+- Final chat responses are validated centrally by `citation_contract_v1`.
+- Factual response with zero citations is auto-converted to `insufficient_sources`.
+- Every run persists audit metadata in `run_search_audits`:
+  - intent
+  - query
+  - searched filters metadata
+  - citation status/count

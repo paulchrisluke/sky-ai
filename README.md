@@ -128,11 +128,15 @@ Use the auto-generated Worker domain by default:
 - Approval-only actions:
   - `POST /actions/propose`
   - `POST /actions/approve`
+  - `POST /actions/reject`
+  - `POST /actions/execute`
 - Durable Object coordinator class: `ChatCoordinator`
 - Event replay:
   - `GET /sessions/:sessionId/events?since=<timestamp>&limit=...`
   - `GET /sessions/:sessionId/events?lastEventId=<rowid_cursor>&limit=...`
   - WS reconnect supports `lastEventId` query param on `/ws/chat`.
+- Search audit persistence:
+  - Every chat run writes `run_search_audits` with intent/query/searched filters + citation status/count.
 
 ## Access Auth (Step 3)
 

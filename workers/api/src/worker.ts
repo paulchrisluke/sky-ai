@@ -76,6 +76,14 @@ export default {
       return approveAction(request, env);
     }
 
+    if (request.method === 'POST' && url.pathname === '/actions/reject') {
+      return rejectAction(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/actions/execute') {
+      return executeAction(request, env);
+    }
+
     if (request.method === 'GET' && url.pathname === '/ops/account/status') {
       return getAccountOpsStatus(request, env);
     }
@@ -249,7 +257,8 @@ export class ChatCoordinator {
         citationStatus: 'not_applicable'
       });
 
-      const result = await executeIntent(this.env, { workspaceId, accountId }, query, intent);
+      const rawResult = await executeIntent(this.env, { workspaceId, accountId }, query, intent);
+      const result = enforceCitationContract(query, rawResult);
 
       const assistantTurnId = await insertTurn(this.env, {
         sessionId,
@@ -271,6 +280,18 @@ export class ChatCoordinator {
           citations: result.citations
         });
       }
+
+      await insertRunSearchAudit(this.env, {
+        sessionId,
+        runId,
+        workspaceId,
+        accountId,
+        query,
+        intent: result.intent,
+        citationStatus: result.citationStatus,
+        citationsCount: result.citations.length,
+        searched: result.searched
+      });
 
       const completedEvent = await appendRunEvent(this.env, {
         sessionId,
@@ -546,7 +567,8 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     citationStatus: 'not_applicable'
   });
 
-  const result = await executeIntent(env, { workspaceId, accountId }, query, intent);
+  const rawResult = await executeIntent(env, { workspaceId, accountId }, query, intent);
+  const result = enforceCitationContract(query, rawResult);
 
   const assistantTurnId = await insertTurn(env, {
     sessionId,
@@ -568,6 +590,18 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
       citations: result.citations
     });
   }
+
+  await insertRunSearchAudit(env, {
+    sessionId,
+    runId,
+    workspaceId,
+    accountId,
+    query,
+    intent: result.intent,
+    citationStatus: result.citationStatus,
+    citationsCount: result.citations.length,
+    searched: result.searched
+  });
 
   await appendRunEvent(env, {
     sessionId,
@@ -922,6 +956,15 @@ async function proposeAction(request: Request, env: Env): Promise<Response> {
     )
     .run();
 
+  await appendActionEvent(env, {
+    actionId,
+    workspaceId,
+    accountId,
+    eventType: 'proposed',
+    actor: auth.principal.email || auth.principal.subject,
+    payload: { actionType, sessionId, turnId }
+  });
+
   return json({
     ok: true,
     action: {
@@ -983,7 +1026,125 @@ async function approveAction(request: Request, env: Env): Promise<Response> {
     .bind(approvedBy, row.id)
     .run();
 
+  await appendActionEvent(env, {
+    actionId: row.id,
+    workspaceId: actionScope.workspace_id,
+    accountId: actionScope.account_id,
+    eventType: 'approved',
+    actor: approvedBy,
+    payload: { approvedAt: new Date().toISOString() }
+  });
+
   return json({ ok: true, action: { id: row.id, status: 'approved', nextStep: 'manual_or_separate_executor_required' } });
+}
+
+async function rejectAction(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+  const payload = (await request.json()) as JsonRecord;
+  const rejectedBy = stringOr(payload.userId) || auth.principal.email || auth.principal.subject;
+  const actionId = stringOr(payload.actionId);
+  const approvalToken = stringOr(payload.approvalToken);
+  const reason = stringOr(payload.reason) || 'rejected_by_user';
+
+  if (!actionId && !approvalToken) {
+    return json({ ok: false, error: 'actionId or approvalToken is required' }, 400);
+  }
+
+  const row = actionId
+    ? await env.SKY_DB
+        .prepare(`SELECT id, status FROM proposed_actions WHERE id = ? LIMIT 1`)
+        .bind(actionId)
+        .first<{ id: string; status: string }>()
+    : await env.SKY_DB
+        .prepare(`SELECT id, status FROM proposed_actions WHERE approval_token = ? LIMIT 1`)
+        .bind(approvalToken)
+        .first<{ id: string; status: string }>();
+
+  if (!row) return json({ ok: false, error: 'action_not_found' }, 404);
+  const actionScope = await env.SKY_DB
+    .prepare(`SELECT workspace_id, account_id FROM proposed_actions WHERE id = ? LIMIT 1`)
+    .bind(row.id)
+    .first<{ workspace_id: string; account_id: string }>();
+  if (!actionScope) return json({ ok: false, error: 'action_scope_missing' }, 404);
+  const permission = await assertPermission(env, auth.principal, actionScope.workspace_id, actionScope.account_id);
+  if (!permission.ok) return permission.response;
+
+  if (!['proposed', 'approved'].includes(row.status)) {
+    return json({ ok: false, error: `action_not_rejectable:${row.status}` }, 409);
+  }
+
+  await env.SKY_DB
+    .prepare(
+      `UPDATE proposed_actions
+       SET status = 'rejected',
+           rejected_by = ?,
+           rejected_at = CURRENT_TIMESTAMP,
+           rejection_reason = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(rejectedBy, reason, row.id)
+    .run();
+
+  await appendActionEvent(env, {
+    actionId: row.id,
+    workspaceId: actionScope.workspace_id,
+    accountId: actionScope.account_id,
+    eventType: 'rejected',
+    actor: rejectedBy,
+    payload: { reason }
+  });
+
+  return json({ ok: true, action: { id: row.id, status: 'rejected', reason } });
+}
+
+async function executeAction(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+  const payload = (await request.json()) as JsonRecord;
+  const executedBy = stringOr(payload.userId) || auth.principal.email || auth.principal.subject;
+  const actionId = stringOr(payload.actionId);
+  const result = objectOr(payload.result) || {};
+
+  if (!actionId) return json({ ok: false, error: 'actionId is required' }, 400);
+
+  const row = await env.SKY_DB
+    .prepare(`SELECT id, status, workspace_id, account_id FROM proposed_actions WHERE id = ? LIMIT 1`)
+    .bind(actionId)
+    .first<{ id: string; status: string; workspace_id: string; account_id: string }>();
+
+  if (!row) return json({ ok: false, error: 'action_not_found' }, 404);
+  const permission = await assertPermission(env, auth.principal, row.workspace_id, row.account_id);
+  if (!permission.ok) return permission.response;
+
+  if (row.status !== 'approved') {
+    return json({ ok: false, error: `action_not_executable:${row.status}` }, 409);
+  }
+
+  await env.SKY_DB
+    .prepare(
+      `UPDATE proposed_actions
+       SET status = 'executed',
+           executed_by = ?,
+           executed_at = CURRENT_TIMESTAMP,
+           execution_result_json = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .bind(executedBy, JSON.stringify(result), row.id)
+    .run();
+
+  await appendActionEvent(env, {
+    actionId: row.id,
+    workspaceId: row.workspace_id,
+    accountId: row.account_id,
+    eventType: 'executed',
+    actor: executedBy,
+    payload: result
+  });
+
+  return json({ ok: true, action: { id: row.id, status: 'executed' } });
 }
 
 async function getAccountOpsStatus(request: Request, env: Env): Promise<Response> {
@@ -1534,6 +1695,70 @@ async function appendRunEvent(
   return { id: eventId, cursor: Number(insert.meta?.last_row_id || 0) };
 }
 
+async function appendActionEvent(
+  env: Env,
+  input: {
+    actionId: string;
+    workspaceId: string;
+    accountId: string;
+    eventType: 'proposed' | 'approved' | 'rejected' | 'executed';
+    actor: string | null;
+    payload: JsonRecord;
+  }
+): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `INSERT INTO action_events
+       (id, action_id, workspace_id, account_id, event_type, actor, payload_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    )
+    .bind(
+      crypto.randomUUID(),
+      input.actionId,
+      input.workspaceId,
+      input.accountId,
+      input.eventType,
+      input.actor,
+      JSON.stringify(input.payload || {})
+    )
+    .run();
+}
+
+async function insertRunSearchAudit(
+  env: Env,
+  input: {
+    sessionId: string;
+    runId: string;
+    workspaceId: string;
+    accountId: string;
+    intent: QueryIntent;
+    query: string;
+    citationStatus: 'sufficient' | 'insufficient';
+    citationsCount: number;
+    searched: JsonRecord;
+  }
+): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `INSERT INTO run_search_audits
+       (id, session_id, run_id, workspace_id, account_id, intent, query_text, citation_required, citation_status, citations_count, searched_json, validator_version, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'v1', CURRENT_TIMESTAMP)`
+    )
+    .bind(
+      crypto.randomUUID(),
+      input.sessionId,
+      input.runId,
+      input.workspaceId,
+      input.accountId,
+      input.intent,
+      input.query,
+      input.citationStatus,
+      Math.max(0, Math.trunc(input.citationsCount)),
+      JSON.stringify(input.searched || {})
+    )
+    .run();
+}
+
 async function insertCitations(
   env: Env,
   input: {
@@ -1629,6 +1854,32 @@ function buildCitationEnforcedAnswer(
   return {
     answer: `Found relevant sources for: "${query}". Top references:\n${lines.join('\n')}`,
     citationStatus: 'sufficient',
+    searched
+  };
+}
+
+function enforceCitationContract(query: string, result: QueryResult): QueryResult {
+  const searched: JsonRecord = {
+    ...(objectOr(result.searched) || {}),
+    query,
+    intent: result.intent,
+    validator: 'citation_contract_v1'
+  };
+
+  if (result.citations.length > 0) {
+    return {
+      ...result,
+      citationStatus: 'sufficient',
+      searched
+    };
+  }
+
+  return {
+    ...result,
+    answer:
+      `Insufficient sources for a factual answer (${result.intent}). ` +
+      'I did not find citation-backed evidence for this request.',
+    citationStatus: 'insufficient',
     searched
   };
 }
