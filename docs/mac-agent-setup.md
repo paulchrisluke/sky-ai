@@ -37,7 +37,7 @@ pm2 startup
 
 Run the command printed by `pm2 startup` (it usually needs `sudo`).
 
-## 4) Install Cloudflare Tunnel as service
+## 4) (Optional) Install Cloudflare Tunnel as service
 
 1. Create tunnel in Cloudflare Zero Trust.
 2. Copy tunnel token.
@@ -64,3 +64,7 @@ launchctl list | rg -i cloudflared
 ## Suggested sync interval
 
 Start with `POLL_INTERVAL_MS=60000` (60s). If rate-limited, move to 120000-300000.
+
+## Notes
+
+- If your Mac agent only needs outbound calls to `workers.dev`, tunnel is not required.

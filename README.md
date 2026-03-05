@@ -46,6 +46,11 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 6. Validate:
    - `curl "https://<worker-subdomain>.workers.dev/health"`
 
+Use the auto-generated Worker domain by default:
+
+- `https://sky-ai.paulchrisluke.workers.dev`
+- No custom DNS hostname is required for normal API use.
+
 ## Local Dev Secrets
 
 - Use `.dev.vars` for local-only values with `wrangler dev`.

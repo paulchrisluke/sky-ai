@@ -1,5 +1,8 @@
 # Cloudflare Tunnel Setup (Your Account)
 
+Tunnel is optional for this project when using `*.workers.dev`.
+Only use this if you need inbound access to a local service behind your firewall.
+
 This repo tracks the tunnel config template, while tunnel identity/token remain account-side secrets.
 
 ## 1) Authenticate cloudflared
