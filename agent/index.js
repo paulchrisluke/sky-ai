@@ -148,12 +148,18 @@ async function syncAccount(account, state) {
       const range = `${startUid}:*`;
 
       try {
-        for await (const msg of client.fetch(range, {
-          uid: true,
-          envelope: true,
-          source: true,
-          internalDate: true
-        })) {
+        for await (const msg of client.fetch(
+          range,
+          {
+            uid: true,
+            envelope: true,
+            source: true,
+            internalDate: true
+          },
+          {
+            uid: true
+          }
+        )) {
           maxSeenUid = Math.max(maxSeenUid, msg.uid);
           await postToWorker({
             source: 'imap',
