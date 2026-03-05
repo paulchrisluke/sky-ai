@@ -1,0 +1,16 @@
+{
+  "name": "sky-ai-mailbox-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Mac mailbox sync agent for Sky AI",
+  "scripts": {
+    "start": "node index.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:save": "pm2 save"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "imapflow": "^1.1.1"
+  }
+}

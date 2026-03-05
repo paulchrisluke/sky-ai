@@ -1,6 +1,6 @@
 # sky-ai
 
-Cloudflare-native backend for Sky AI.
+Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 
 ## Architecture
 
@@ -9,6 +9,8 @@ Cloudflare-native backend for Sky AI.
 - R2: raw artifacts
 - Vectorize: memory retrieval index
 - Workers Cron: scheduled sync/briefing jobs
+- Mac Mailbox Agent (`agent/`): IMAP sync from iCloud mailboxes to Worker ingest endpoint
+- PM2 + cloudflared on Mac: process persistence and always-on secure connectivity
 
 ## Project Layout
 
@@ -17,6 +19,10 @@ Cloudflare-native backend for Sky AI.
 - `db/migrations/0001_init.sql`
 - `wrangler.toml`
 - `docs/cloudflare-setup.md`
+- `agent/index.js`
+- `agent/.env.example`
+- `agent/ecosystem.config.cjs`
+- `docs/mac-agent-setup.md`
 
 ## Quickstart
 
@@ -72,4 +78,4 @@ Cloudflare-native backend for Sky AI.
 - Cloudflare backend can be deployed now.
 - `/tasks/triage` and `/briefings/daily` are safe no-op if `CLAUDE_API_KEY` is missing.
 - `/ai/test` verifies Claude routing through AI Gateway once configured.
-- Next implementation step: Google OAuth + sync pipeline directly in Worker.
+- iCloud mailbox sync can run now via the local Mac agent (`agent/`) with app-specific passwords.
