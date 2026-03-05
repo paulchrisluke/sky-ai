@@ -83,6 +83,8 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
     httpMetadata: { contentType: 'application/json' }
   });
 
+  await ensureWorkspace(env, workspaceId);
+
   await env.SKY_DB
     .prepare(
       `INSERT INTO artifacts (id, workspace_id, source, source_id, r2_key, metadata_json, created_at)
@@ -92,6 +94,16 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
     .run();
 
   return json({ ok: true, artifactKey });
+}
+
+async function ensureWorkspace(env: Env, workspaceId: string): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `INSERT OR IGNORE INTO workspaces (id, name, status, created_at, updated_at)
+       VALUES (?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    )
+    .bind(workspaceId, workspaceId)
+    .run();
 }
 
 async function runTriage(env: Env): Promise<Response> {
