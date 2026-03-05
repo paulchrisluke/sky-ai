@@ -1,0 +1,18 @@
+{
+  "name": "sky-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Apps Script automation project for Sky AI",
+  "scripts": {
+    "clasp:login": "clasp login",
+    "clasp:status": "clasp status",
+    "clasp:push": "clasp push",
+    "clasp:pull": "clasp pull"
+  },
+  "devDependencies": {
+    "@google/clasp": "^2.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
