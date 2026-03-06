@@ -3503,45 +3503,12 @@ Return a JSON array where each item includes type,title,risk_level,citations. Fo
     proposalsIn = [];
   }
 
-  if (proposalsIn.length === 0) {
-    const q = input.query.toLowerCase();
-    const autoCandidate = findAutoReplyCandidate(input.hits);
-    if (autoCandidate) {
-      const deterministicBody = buildDeterministicAckBody(autoCandidate, accountOwnerName);
-      proposalsIn = [
-        {
-          type: 'reply_email',
-          title: `Draft reply for: ${autoCandidate.subject || 'Follow up required'}`,
-          draft_payload: {
-            to: autoCandidate.from,
-            subject: formatReplySubject(autoCandidate.subject),
-            thread_id: autoCandidate.thread_id,
-            message_id: autoCandidate.message_id,
-            body: deterministicBody,
-            needs_draft: false
-          },
-          risk_level: autoCandidate.score >= 0.75 ? 'high' : 'med',
-          citations: [autoCandidate.message_id],
-          reply_body: deterministicBody
-        }
-      ];
-    } else if ((q.includes('reply') || q.includes('urgent') || q.includes('refund') || q.includes('follow up')) && input.hits.length > 0) {
-      const first = input.hits[0];
-      proposalsIn = [
-        {
-          type: 'reply_email',
-          title: `Draft reply for: ${first.subject}`,
-          draft_payload: {
-            to: first.from,
-            subject: first.subject,
-            thread_id: first.thread_id,
-            message_id: first.message_id,
-            needs_draft: true
-          },
-          risk_level: q.includes('urgent') ? 'high' : 'med',
-          citations: [first.message_id]
-        }
-      ];
+  const existingMessageIds = collectProposalMessageIds(proposalsIn);
+  const actionableHits = input.hits.filter((hit) => isLikelyActionable(hit));
+  for (const hit of actionableHits) {
+    if (!existingMessageIds.has(hit.message_id)) {
+      proposalsIn.push(createFallbackReplyProposal(hit, accountOwnerName));
+      existingMessageIds.add(hit.message_id);
     }
   }
 
@@ -3771,6 +3738,39 @@ function sanitizeAckTopic(subject?: string | null): string {
   if (!subject) return 'this request';
   const normalized = subject.replace(/^re:\s*/i, '').trim();
   return normalized.length > 0 ? normalized : 'this request';
+}
+
+function collectProposalMessageIds(
+  proposals: Array<{ citations?: string[]; draft_payload?: JsonRecord; draft_payload_json?: JsonRecord }>
+): Set<string> {
+  const ids = new Set<string>();
+  for (const proposal of proposals) {
+    const citationIds = Array.isArray(proposal.citations) ? proposal.citations : [];
+    citationIds.forEach((id) => ids.add(String(id)));
+    const payload = proposal.draft_payload_json || proposal.draft_payload;
+    const payloadMessageId = typeof payload?.message_id === 'string' ? payload.message_id : null;
+    if (payloadMessageId) ids.add(payloadMessageId);
+  }
+  return ids;
+}
+
+function createFallbackReplyProposal(hit: SearchResult, ownerName: string) {
+  const deterministicBody = buildDeterministicAckBody(hit, ownerName);
+  return {
+    type: 'reply_email',
+    title: `Draft reply for: ${hit.subject || 'Follow up required'}`,
+    draft_payload: {
+      to: hit.from,
+      subject: formatReplySubject(hit.subject),
+      thread_id: hit.thread_id,
+      message_id: hit.message_id,
+      body: deterministicBody,
+      needs_draft: false
+    },
+    risk_level: hit.score >= 0.75 ? 'high' : 'med',
+    citations: [hit.message_id],
+    reply_body: deterministicBody
+  };
 }
 
 function json(payload: JsonRecord, status = 200): Response {
