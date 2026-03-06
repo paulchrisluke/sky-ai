@@ -51,7 +51,7 @@ type Citation = {
   score: number;
 };
 
-type QueryIntent = 'today_actions' | 'find_email' | 'thread_summary';
+type QueryIntent = 'find_email' | 'thread_summary';
 
 type QueryResult = {
   intent: QueryIntent;
@@ -356,7 +356,7 @@ export class ChatCoordinator {
         citationStatus: 'not_applicable'
       });
 
-      const rawResult = await executeIntent(this.env, { workspaceId, accountId }, query, intent);
+      const rawResult = await executeIntent(this.env, { workspaceId, accountId }, query, intent, runId);
       const result = enforceCitationContract(query, rawResult);
 
       const assistantTurnId = await insertTurn(this.env, {
@@ -666,9 +666,27 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     citationStatus: 'not_applicable'
   });
 
-  const rawResult = await executeIntent(env, { workspaceId, accountId }, query, intent);
-  const result = enforceCitationContract(query, rawResult);
+  let result: QueryResult;
   let proposals: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }> = [];
+  if (intent === 'find_email') {
+    const unified = await executeUnifiedFindEmailQuery(env, {
+      workspaceId,
+      accountId,
+      query,
+      runId,
+      includeProposals: true
+    });
+    result = enforceCitationContract(query, {
+      intent,
+      answer: unified.answer,
+      citations: unified.citations,
+      searched: unified.searched
+    });
+    proposals = unified.proposals;
+  } else {
+    const rawResult = await executeIntent(env, { workspaceId, accountId }, query, intent, runId);
+    result = enforceCitationContract(query, rawResult);
+  }
 
   const assistantTurnId = await insertTurn(env, {
     sessionId,
@@ -719,31 +737,7 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
     }
   });
 
-  // Proposal extraction for /chat/query to keep Railway and API behavior consistent.
-  try {
-    const proposalHits = await performSemanticSearch(env, workspaceId, accountId, query, 10, {
-      workspaceId,
-      accountId,
-      runId,
-      operation: 'chat_query_proposal_retrieval',
-      endpoint: '/chat/query'
-    });
-    console.log(
-      `[chat.query] proposal_extraction start runId=${runId} intent=${intent} hits=${proposalHits.length} query=${query.slice(0, 120)}`
-    );
-    proposals = await extractAndPersistProposals(env, {
-      workspaceId,
-      accountId,
-      agentId: null,
-      query,
-      answer: result.answer,
-      hits: proposalHits
-    });
-    console.log(`[chat.query] proposal_extraction done runId=${runId} proposals=${proposals.length}`);
-  } catch (error) {
-    console.log(
-      `[chat.query] proposal_extraction error runId=${runId} error=${error instanceof Error ? error.message : 'unknown'}`
-    );
+  if (intent !== 'find_email') {
     proposals = [];
   }
 
@@ -1320,10 +1314,13 @@ async function loadTodayBriefingData(
   const citationMap = await loadCitationsForMessages(env, workspaceId, accountId, messageIds);
 
   const citations: Citation[] = [];
+  const seenCitationIds = new Set<string>();
   for (const item of ranked) {
     if (!item.sourceMessageId) continue;
+    if (seenCitationIds.has(item.sourceMessageId)) continue;
     const c = citationMap.get(item.sourceMessageId);
     if (!c) continue;
+    seenCitationIds.add(item.sourceMessageId);
     citations.push(c);
   }
 
@@ -2054,19 +2051,9 @@ async function executeIntent(
   env: Env,
   ctx: { workspaceId: string; accountId: string },
   query: string,
-  intent: QueryIntent
+  intent: QueryIntent,
+  runId: string
 ): Promise<QueryResult> {
-  if (intent === 'today_actions') {
-    const briefing = await buildTodayActionsIntent(env, ctx.workspaceId, ctx.accountId);
-    return {
-      intent,
-      answer: briefing.answer,
-      citations: briefing.citations,
-      citationStatus: briefing.citations.length > 0 ? 'sufficient' : 'insufficient',
-      searched: briefing.searched
-    };
-  }
-
   if (intent === 'thread_summary') {
     const summary = await buildThreadSummaryIntent(env, ctx.workspaceId, ctx.accountId, query);
     return {
@@ -2078,39 +2065,19 @@ async function executeIntent(
     };
   }
 
-  const citations = await queryCitations(env, ctx.workspaceId, ctx.accountId, query);
-  const result = buildCitationEnforcedAnswer(query, citations);
+  const unified = await executeUnifiedFindEmailQuery(env, {
+    workspaceId: ctx.workspaceId,
+    accountId: ctx.accountId,
+    query,
+    runId,
+    includeProposals: false
+  });
   return {
     intent,
-    answer: result.answer,
-    citations,
-    citationStatus: result.citationStatus,
-    searched: result.searched
-  };
-}
-
-async function buildTodayActionsIntent(
-  env: Env,
-  workspaceId: string,
-  accountId: string
-): Promise<{ answer: string; citations: Citation[]; searched: JsonRecord }> {
-  const body = await loadTodayBriefingData(env, workspaceId, accountId);
-  const actions = arrayOr(body.actions);
-  const citations = body.citations;
-
-  if (!actions || actions.length === 0) {
-    return {
-      answer: 'Insufficient sources for today_actions. No extracted open tasks/followups found yet.',
-      citations: [],
-      searched: { intent: 'today_actions', sourceTables: ['tasks', 'followups'], accountId }
-    };
-  }
-
-  const top = actions.slice(0, 5).map((a, i) => `${i + 1}. ${stringOr((a as JsonRecord).text) || 'untitled action'}`);
-  return {
-    answer: `Top actions for today:\n${top.join('\n')}`,
-    citations,
-    searched: { intent: 'today_actions', sourceTables: ['tasks', 'followups'], accountId }
+    answer: unified.answer,
+    citations: unified.citations,
+    citationStatus: unified.citations.length > 0 ? 'sufficient' : 'insufficient',
+    searched: unified.searched
   };
 }
 
@@ -2187,13 +2154,19 @@ async function buildThreadSummaryIntent(
 
 function detectIntent(query: string): QueryIntent {
   const q = query.toLowerCase();
-  if ((q.includes('what') && q.includes('today') && (q.includes('need') || q.includes('action'))) || q.includes('today actions')) {
-    return 'today_actions';
-  }
   if (q.includes('thread summary') || q.includes('summarize thread')) {
     return 'thread_summary';
   }
   return 'find_email';
+}
+
+function isDailyBriefingQuery(query: string): boolean {
+  const q = query.toLowerCase();
+  return (
+    (q.includes('today') && (q.includes('attention') || q.includes('priority') || q.includes('urgent') || q.includes('need'))) ||
+    q.includes('today actions') ||
+    q.includes('daily briefing')
+  );
 }
 
 function extractActionSignals(text: string, sentAt: string | null, sender: string, accountId: string): {
@@ -2942,6 +2915,7 @@ function getModelPricing(
   }
 
   if (p === 'workers_ai') {
+    if (m === '@cf/meta/llama-3.3-70b-instruct-fp8-fast') return { inputPer1m: 0.29, outputPer1m: 2.25 };
     const inCost = Number(env.WORKERS_AI_INPUT_COST_PER_1M || '');
     const outCost = Number(env.WORKERS_AI_OUTPUT_COST_PER_1M || '');
     if (Number.isFinite(inCost) && Number.isFinite(outCost) && (inCost > 0 || outCost > 0)) {
@@ -3199,7 +3173,7 @@ async function performSemanticSearch(
           em.subject AS subject,
           mc.chunk_text AS excerpt
        FROM memory_chunks mc
-       LEFT JOIN email_messages em
+       JOIN email_messages em
          ON em.id = json_extract(mc.metadata_json, '$.messageId')
         AND em.workspace_id = mc.workspace_id
        WHERE mc.workspace_id = ?
@@ -3381,16 +3355,26 @@ async function callWorkersAiChat(
   usageContext?: UsageContext
 ): Promise<string> {
   if (!env.AI) throw new Error('workers_ai_chat_not_bound');
-  const model = env.WORKERS_AI_CHAT_MODEL || '@cf/meta/llama-3.1-8b-instruct';
-  const prompt = messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
-  const suffix = responseFormat?.type === 'json_object' ? '\n\nReturn valid JSON only.' : '';
+  const model = env.WORKERS_AI_CHAT_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+  const modelMessages =
+    responseFormat?.type === 'json_object'
+      ? [
+          ...messages,
+          {
+            role: 'system' as const,
+            content: 'Return valid JSON only. Do not include any text before or after the JSON object.'
+          }
+        ]
+      : messages;
+  const usagePrompt = modelMessages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
   const out = (await env.AI.run(model, {
-    prompt: `${prompt}${suffix}`,
-    max_tokens: 700
+    messages: modelMessages,
+    max_tokens: 1500,
+    ...(responseFormat ? { response_format: responseFormat } : {})
   }, workersAiGatewayOptions(env))) as { response?: string; result?: { response?: string } };
   const text = out.response || out.result?.response || '';
   if (!text.trim()) throw new Error('workers_ai_chat_empty_response');
-  const reqUnits = estimateTextUnits(prompt);
+  const reqUnits = estimateTextUnits(usagePrompt);
   const respUnits = estimateTextUnits(text);
   await recordUsageEvent(env, {
     workspaceId: usageContext?.workspaceId,
@@ -3408,19 +3392,48 @@ async function callWorkersAiChat(
   return text.trim();
 }
 
-async function extractAndPersistProposals(
+type ExtractedProposal = {
+  action_type?: string;
+  title?: string;
+  recommendation?: string;
+  reply_body?: string;
+  risk_level?: string;
+  citations?: string[];
+};
+
+async function executeUnifiedFindEmailQuery(
   env: Env,
   input: {
     workspaceId: string;
     accountId: string;
-    agentId: string | null;
     query: string;
-    answer: string;
-    hits: SearchResult[];
+    runId: string;
+    includeProposals?: boolean;
   }
-): Promise<
-  Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string; _source?: 'llm' | 'fallback' }>
-> {
+): Promise<{
+  answer: string;
+  citations: Citation[];
+  searched: JsonRecord;
+  proposals: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }>;
+}> {
+  const includeProposals = input.includeProposals === true;
+  const isDailyBriefing = isDailyBriefingQuery(input.query);
+  const hits = await performSemanticSearch(env, input.workspaceId, input.accountId, input.query, 10, {
+    workspaceId: input.workspaceId,
+    accountId: input.accountId,
+    runId: input.runId,
+    operation: 'chat_query_unified_retrieval',
+    endpoint: '/chat/query'
+  });
+  if (hits.length === 0) {
+    return {
+      answer: 'Insufficient sources for a factual answer. I searched indexed email content and did not find high-confidence matches.',
+      citations: [],
+      searched: { intent: 'find_email', mode: isDailyBriefing ? 'daily_briefing' : 'default', strategy: 'vector_search+llm_unified', k: 10, hits: 0 },
+      proposals: []
+    };
+  }
+
   const ownerRow = await env.SKY_DB
     .prepare(
       `SELECT display_name, label, email
@@ -3436,101 +3449,165 @@ async function extractAndPersistProposals(
     env,
     input.workspaceId,
     input.accountId,
-    input.hits.map((h) => h.chunk_id)
+    hits.map((h) => h.chunk_id)
   );
-  const compactContext = input.hits
-    .slice(0, 8)
-    .map((h) => ({
-      message_id: h.message_id,
-      thread_id: h.thread_id,
-      date: h.date,
-      from: h.from,
-      recipient_name: extractContactName(h.from),
-      recipient_email: extractEmailAddress(h.from),
-      subject: h.subject,
-      excerpt: h.excerpt,
-      body_text: truncateText(fullChunkByVectorId.get(h.chunk_id) || h.excerpt || '', 3000)
-    }));
+  const context = hits.slice(0, 8).map((h) => ({
+    message_id: h.message_id,
+    thread_id: h.thread_id,
+    date: h.date,
+    from: h.from,
+    subject: h.subject,
+    excerpt: h.excerpt,
+    body_text: truncateText(fullChunkByVectorId.get(h.chunk_id) || h.excerpt || '', 3000)
+  }));
 
-  let raw = '[]';
-  try {
-    raw = await callOpenAiChatViaGateway(
-      env,
-      [
-        {
-          role: 'system',
-          content:
-            `You are an expert chief-of-staff assistant. Review every email snippet in context and surface the concrete actions the account owner should take now. ALWAYS emit a reply_email proposal when the email sounds like someone is waiting for a response, asks a question, requests follow-up, or raises an open issue—even if the user did not explicitly ask for a reply. Only return [] when no message needs action.
-
-Return a JSON array where each item includes type,title,risk_level,citations. For reply_email items also include reply_body (string) containing ONLY the greeting, message body, and closing. Do not include headers such as To or Subject. Sign every reply with the exact account owner name "${accountOwnerName}". Never output placeholder text like [Client's Name] or [Your Name]; rely on the provided recipient data.`
-        },
-        {
-          role: 'user',
-          content: JSON.stringify({
-            query: input.query,
-            answer: input.answer,
-            account_owner_name: accountOwnerName,
-            context: compactContext
-          })
-        }
-      ],
-      { type: 'json_object' },
+  const raw = await callOpenAiChatViaGateway(
+    env,
+    [
       {
-        workspaceId: input.workspaceId,
-        accountId: input.accountId,
-        operation: 'proposal_extraction',
-        endpoint: '/chat'
-      }
-    );
-  } catch {
-    raw = '[]';
-  }
+        role: 'system',
+        content:
+          `You are Jarvis, an AI chief-of-staff. Use the provided email context to answer the user naturally and practically.
 
-  console.log(`[proposals] raw_response=${raw.slice(0, 500)}`);
-
-  const sanitizedRaw = stripJsonCodeFence(raw);
-
-  let proposalsIn: Array<{
-    type?: string;
-    title?: string;
-    draft_payload?: JsonRecord;
-    reply_body?: string;
-    risk_level?: string;
-    citations?: string[];
-    _source?: 'llm' | 'fallback';
-  }> = [];
-  try {
-    const parsed = JSON.parse(sanitizedRaw) as unknown;
-    if (Array.isArray(parsed)) {
-      proposalsIn = (parsed as typeof proposalsIn).map((proposal) => ({ ...proposal, _source: 'llm' }));
-    } else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { proposals?: unknown[] }).proposals)) {
-      proposalsIn = (parsed as { proposals: typeof proposalsIn }).proposals.map((proposal) => ({ ...proposal, _source: 'llm' }));
+Return exactly one JSON object with this exact shape and field names:
+{
+  "answer": "short, useful narrative answer in plain English",
+  "citation_ids": ["message_id_1"],
+  "proposals": [
+    {
+      "title": "one line describing the situation",
+      "recommendation": "what to do and why",
+      "action_type": "what kind of action this is",
+      "reply_body": "full email body if action_type involves sending a message",
+      "citations": ["message_id_1"],
+      "risk_level": "low | medium | high"
     }
-  } catch {
-    proposalsIn = [];
+  ]
+}
+
+Rules:
+- Output must be raw JSON only with no prose before or after the JSON object.
+- "answer" must directly answer the user question and sound conversational, not like metadata output.
+- Keep "answer" concise and action-oriented.
+- Never end your answer with a question. State what you found, what needs to happen, and what you have prepared. The user will decide what to do next.
+- Use only information present in context.
+- "citation_ids" must reference message_id values from context.
+- If no valid evidence exists, set "answer" to: "insufficient sources" and use empty citation_ids/proposals.
+- Only generate a proposal if you can populate a complete executable payload from the email content. If you cannot identify a specific recipient, action target, or required fields, include the item in the answer text instead of creating a proposal.
+- If the user asks what needs attention today (or similar), answer as a daily briefing: rank the top priorities first, explain urgency/risk in one line each, and end with the single most important next action.
+- If proposing a response to an email, action_type MUST be exactly "reply_email" (never "send_email").
+- For every "reply_email" proposal, include at least one valid message_id in "citations" and provide a complete "reply_body".
+- For reply_email proposals, reply_body must contain only greeting, body, and closing, and be signed with "${accountOwnerName}".
+- Never include placeholders like [Client Name].
+- Never mention attachments/documents/files unless explicitly present in context.`
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          query: input.query,
+          account_owner_name: accountOwnerName,
+          context
+        })
+      }
+    ],
+    { type: 'json_object' },
+    {
+      workspaceId: input.workspaceId,
+      accountId: input.accountId,
+      runId: input.runId,
+      operation: 'chat_query_unified_answer_and_proposals',
+      endpoint: '/chat/query'
+    }
+  );
+  console.log(`[chat.query] unified_response runId=${input.runId} raw=${raw.slice(0, 500)}`);
+
+  const parsed = JSON.parse(stripJsonCodeFence(raw)) as {
+    answer?: unknown;
+    citation_ids?: unknown;
+    proposals?: unknown;
+  };
+  const answer = stringOr(parsed.answer);
+  if (!answer) {
+    throw new Error('chat_query_unified_missing_answer');
   }
 
-  const out: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string; _source?: 'llm' | 'fallback' }> =
-    [];
-  for (const p of proposalsIn.slice(0, 10)) {
-    const type = stringOr(p.type) || 'create_task';
+  const citationIds = Array.isArray(parsed.citation_ids) ? parsed.citation_ids.map((x) => String(x)) : [];
+  const byMessageId = new Map(hits.map((h) => [h.message_id, h]));
+  const deduped = new Set<string>();
+  const citations: Citation[] = [];
+  for (const id of citationIds) {
+    if (deduped.has(id)) continue;
+    const hit = byMessageId.get(id);
+    if (!hit) continue;
+    deduped.add(id);
+    citations.push({
+      messageId: hit.message_id,
+      date: hit.date,
+      from: hit.from || 'unknown',
+      subject: hit.subject || '(no subject)',
+      score: hit.score
+    });
+    if (citations.length >= 6) break;
+  }
+
+  let proposals: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }> = [];
+  if (includeProposals) {
+    const proposalsIn = Array.isArray(parsed.proposals) ? (parsed.proposals as ExtractedProposal[]) : [];
+    proposals = await persistExtractedProposals(env, {
+      workspaceId: input.workspaceId,
+      accountId: input.accountId,
+      agentId: null,
+      query: input.query,
+      hits,
+      accountOwnerName,
+      proposals: proposalsIn
+    });
+  }
+
+  return {
+    answer,
+    citations,
+    searched: {
+      intent: 'find_email',
+      mode: isDailyBriefing ? 'daily_briefing' : 'default',
+      strategy: 'vector_search+llm_unified',
+      k: 10,
+      hits: hits.length,
+      citationIds: citationIds.slice(0, 8)
+    },
+    proposals
+  };
+}
+
+async function persistExtractedProposals(
+  env: Env,
+  input: {
+    workspaceId: string;
+    accountId: string;
+    agentId: string | null;
+    query: string;
+    hits: SearchResult[];
+    accountOwnerName: string;
+    proposals: ExtractedProposal[];
+  }
+): Promise<Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }>> {
+  const out: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }> = [];
+  for (const p of input.proposals.slice(0, 10)) {
+    const type = stringOr(p.action_type);
+    if (!type) continue;
+    if (type !== 'reply_email') continue;
     const title = stringOr(p.title) || 'Untitled proposal';
     const riskLevel = stringOr(p.risk_level) || 'low';
     const proposalId = crypto.randomUUID();
     const citationsRaw = Array.isArray(p.citations) ? p.citations.map((x) => String(x)) : [];
-    const payload =
-      type === 'reply_email'
-        ? buildReplyEmailPayload({
-            hits: input.hits,
-            citationIds: citationsRaw,
-            generatedBody:
-              stringOr((p as { reply_body?: string }).reply_body) || stringOr((objectOr(p.draft_payload) || {}).suggested_response),
-            accountOwnerName
-          })
-        : objectOr(p.draft_payload) || {};
-    if (type === 'reply_email' && payload.needs_draft !== true) {
-      payload.needs_draft = false;
-    }
+    const payload = buildReplyEmailPayload({
+      hits: input.hits,
+      citationIds: citationsRaw,
+      generatedBody: stringOr(p.reply_body),
+      accountOwnerName: input.accountOwnerName
+    });
+    if (!isExecutableReplyPayload(payload)) continue;
+    payload.needs_draft = false;
 
     await env.SKY_DB
       .prepare(
@@ -3578,10 +3655,126 @@ Return a JSON array where each item includes type,title,risk_level,citations. Fo
       .bind(crypto.randomUUID(), proposalId, 'system', JSON.stringify({ type, title, riskLevel }))
       .run();
 
-    const source = (p as { _source?: 'llm' | 'fallback' })._source || 'llm';
-    out.push({ id: proposalId, type, title, draft_payload_json: payload, risk_level: riskLevel, _source: source });
+    out.push({ id: proposalId, type, title, draft_payload_json: payload, risk_level: riskLevel });
   }
   return out;
+}
+
+async function extractAndPersistProposals(
+  env: Env,
+  input: {
+    workspaceId: string;
+    accountId: string;
+    agentId: string | null;
+    query: string;
+    answer: string;
+    hits: SearchResult[];
+  }
+): Promise<
+  Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string; _source?: 'llm' | 'fallback' }>
+> {
+  const ownerRow = await env.SKY_DB
+    .prepare(
+      `SELECT display_name, label, email
+       FROM connected_accounts
+       WHERE workspace_id = ? AND id = ?
+       LIMIT 1`
+    )
+    .bind(input.workspaceId, input.accountId)
+    .first<{ display_name: string | null; label: string | null; email: string | null }>();
+  const accountOwnerName = deriveAccountOwnerName(ownerRow);
+
+  const fullChunkByVectorId = await loadChunkTextByVectorIds(
+    env,
+    input.workspaceId,
+    input.accountId,
+    input.hits.map((h) => h.chunk_id)
+  );
+  const compactContext = input.hits
+    .slice(0, 8)
+    .map((h) => ({
+      message_id: h.message_id,
+      thread_id: h.thread_id,
+      date: h.date,
+      from: h.from,
+      recipient_name: extractContactName(h.from),
+      recipient_email: extractEmailAddress(h.from),
+      subject: h.subject,
+      excerpt: h.excerpt,
+      body_text: truncateText(fullChunkByVectorId.get(h.chunk_id) || h.excerpt || '', 3000)
+    }));
+
+  let raw = '{"proposals":[]}';
+  try {
+    raw = await callOpenAiChatViaGateway(
+      env,
+      [
+        {
+          role: 'system',
+          content:
+            `You are an expert chief-of-staff assistant. Review every email snippet in context and surface the concrete actions the account owner should take now. ALWAYS emit a reply_email proposal when the email sounds like someone is waiting for a response, asks a question, requests follow-up, or raises an open issue, even if the user did not explicitly ask for a reply.
+
+Return exactly one JSON object with this exact shape and field names:
+{
+  "proposals": [
+    {
+      "title": "one line describing the situation",
+      "recommendation": "what to do and why",
+      "action_type": "what kind of action this is",
+      "reply_body": "full email body if action_type involves sending a message",
+      "citations": ["message_id_1"],
+      "risk_level": "low | medium | high"
+    }
+  ]
+}
+
+Output must be raw JSON only with no prose before or after the JSON object.
+If no action is needed, return {"proposals":[]}. For reply_email items, reply_body must contain ONLY greeting, body, and closing, with no headers like To or Subject. Sign every reply with the exact account owner name "${accountOwnerName}". Never output placeholder text like [Client's Name] or [Your Name]. Never reference attachments, documents, or files unless they are explicitly present in the email context.
+If the user should respond to an email, action_type MUST be exactly "reply_email" (never "send_email"), citations must include the source message_id being replied to, and reply_body must be complete.
+Only generate a proposal if you can populate a complete executable payload from the email content. If you cannot identify a specific recipient, action target, or required fields, include the item in the answer text instead of creating a proposal.`
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            query: input.query,
+            answer: input.answer,
+            account_owner_name: accountOwnerName,
+            context: compactContext
+          })
+        }
+      ],
+      {
+        workspaceId: input.workspaceId,
+        accountId: input.accountId,
+        operation: 'proposal_extraction',
+        endpoint: '/chat'
+      }
+    );
+  } catch {
+    raw = '{"proposals":[]}';
+  }
+
+  console.log(`[proposals] raw_response=${raw.slice(0, 500)}`);
+
+  const sanitizedRaw = stripJsonCodeFence(raw);
+  let proposalsIn: ExtractedProposal[] = [];
+  try {
+    const parsed = JSON.parse(sanitizedRaw) as unknown;
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { proposals?: unknown[] }).proposals)) {
+      proposalsIn = (parsed as { proposals: typeof proposalsIn }).proposals;
+    }
+  } catch {
+    proposalsIn = [];
+  }
+  return await persistExtractedProposals(env, {
+    workspaceId: input.workspaceId,
+    accountId: input.accountId,
+    agentId: input.agentId,
+    query: input.query,
+    hits: input.hits,
+    accountOwnerName,
+    proposals: proposalsIn
+  });
 }
 
 async function loadChunkTextByVectorIds(
@@ -3699,6 +3892,16 @@ function buildReplyEmailPayload(opts: {
   };
   if (body) payload.body = body;
   return payload;
+}
+
+function isExecutableReplyPayload(payload: JsonRecord): boolean {
+  return Boolean(
+    stringOr(payload.to) &&
+      stringOr(payload.subject) &&
+      stringOr(payload.message_id) &&
+      stringOr(payload.body) &&
+      payload.needs_draft !== true
+  );
 }
 
 function findPrimaryHit(hits: SearchResult[], citationIds: string[]): SearchResult | null {
