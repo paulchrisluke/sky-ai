@@ -1,4 +1,3 @@
-import { normalizeAccountId } from '../../shared/account';
 import {
   extractBearerToken,
   principalFromAccessClaims,
@@ -28,7 +27,6 @@ interface Env extends AccessAuthEnv {
   WORKERS_AI_EMBEDDING_MODEL?: string;
   WORKERS_AI_CHAT_MODEL?: string;
   VECTOR_DIMENSIONS?: string;
-  BRIEFING_TIMEZONE?: string;
   ENVIRONMENT?: string;
 }
 
@@ -1151,14 +1149,14 @@ async function getTodayBriefing(request: Request, env: Env): Promise<Response> {
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
   if (!permission.ok) return permission.response;
 
-  const briefingTimezone = env.BRIEFING_TIMEZONE || 'America/New_York';
+  const briefingTimezone = await getWorkspaceTimezone(env, workspaceId);
   const today = localDateInTimezone(briefingTimezone);
   const generated = await env.SKY_DB
     .prepare(
       `SELECT id, briefing_date, narrative, payload_json, content_json, created_at
        FROM briefings
        WHERE workspace_id = ?
-         AND lower(account_id) = lower(?)
+         AND account_id = ?
          AND briefing_date = ?
          AND (status = 'ready' OR delivery_status = 'ready')
        ORDER BY datetime(created_at) DESC
@@ -1201,6 +1199,20 @@ async function getTodayBriefing(request: Request, env: Env): Promise<Response> {
     narrative: null,
     message: `Briefing not yet generated for ${today} (${briefingTimezone}). Check back after 7am local time.`
   });
+}
+
+async function getWorkspaceTimezone(env: Env, workspaceId: string): Promise<string> {
+  const row = await env.SKY_DB
+    .prepare(
+      `SELECT timezone
+       FROM workspaces
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .bind(workspaceId)
+    .first<{ timezone: string | null }>();
+  const tz = (row?.timezone || '').trim();
+  return tz || 'America/Chicago';
 }
 
 function localDateInTimezone(timezone: string): string {
@@ -1559,15 +1571,15 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
 
   const [messages, threads, chunks, embeddings, tasksOpen, followupsOpen, decisionsRecent] = await Promise.all([
     env.SKY_DB
-      .prepare('SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND lower(account_id) = lower(?)')
+      .prepare('SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND account_id = ?')
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
-      .prepare('SELECT COUNT(*) AS c FROM email_threads WHERE workspace_id = ? AND lower(account_id) = lower(?)')
+      .prepare('SELECT COUNT(*) AS c FROM email_threads WHERE workspace_id = ? AND account_id = ?')
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
-      .prepare('SELECT COUNT(*) AS c FROM memory_chunks WHERE workspace_id = ? AND lower(account_id) = lower(?)')
+      .prepare('SELECT COUNT(*) AS c FROM memory_chunks WHERE workspace_id = ? AND account_id = ?')
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
@@ -1577,20 +1589,20 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
             SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) AS retry,
             SUM(CASE WHEN status = 'indexed' THEN 1 ELSE 0 END) AS indexed
          FROM embedding_jobs
-         WHERE workspace_id = ? AND lower(account_id) = lower(?)`
+         WHERE workspace_id = ? AND account_id = ?`
       )
       .bind(workspaceId, accountId)
       .first<{ queued: number | null; retry: number | null; indexed: number | null }>(),
     env.SKY_DB
-      .prepare("SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND lower(account_id) = lower(?) AND status IN ('ready','needs_review')")
+      .prepare("SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND account_id = ? AND status IN ('ready','needs_review')")
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
-      .prepare("SELECT COUNT(*) AS c FROM followups WHERE workspace_id = ? AND lower(account_id) = lower(?) AND status IN ('ready','needs_review')")
+      .prepare("SELECT COUNT(*) AS c FROM followups WHERE workspace_id = ? AND account_id = ? AND status IN ('ready','needs_review')")
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
-      .prepare("SELECT COUNT(*) AS c FROM decisions WHERE workspace_id = ? AND lower(account_id) = lower(?) AND date(created_at) >= date('now','-7 days')")
+      .prepare("SELECT COUNT(*) AS c FROM decisions WHERE workspace_id = ? AND account_id = ? AND date(created_at) >= date('now','utc','-7 days')")
       .bind(workspaceId, accountId)
       .first<{ c: number }>()
   ]);
@@ -1642,7 +1654,7 @@ async function getIngestStats(request: Request, env: Env): Promise<Response> {
 
   const [total, last24h, latest] = await Promise.all([
     env.SKY_DB
-      .prepare(`SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND lower(account_id) = lower(?)`)
+      .prepare(`SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND account_id = ?`)
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
@@ -1650,7 +1662,7 @@ async function getIngestStats(request: Request, env: Env): Promise<Response> {
         `SELECT COUNT(*) AS c
          FROM email_messages
          WHERE workspace_id = ?
-           AND lower(account_id) = lower(?)
+           AND account_id = ?
            AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-24 hours')`
       )
       .bind(workspaceId, accountId)
@@ -1660,7 +1672,7 @@ async function getIngestStats(request: Request, env: Env): Promise<Response> {
         `SELECT MAX(created_at) AS last_ingested_at, MAX(sent_at) AS last_sent_at
          FROM email_messages
          WHERE workspace_id = ?
-           AND lower(account_id) = lower(?)`
+           AND account_id = ?`
       )
       .bind(workspaceId, accountId)
       .first<{ last_ingested_at: string | null; last_sent_at: string | null }>()
@@ -1697,7 +1709,7 @@ async function getQueueStats(request: Request, env: Env): Promise<Response> {
           MIN(CASE WHEN status IN ('queued','retry') THEN next_attempt_at END) AS oldest_next_attempt_at
        FROM embedding_jobs
        WHERE workspace_id = ?
-         AND lower(account_id) = lower(?)`
+         AND account_id = ?`
     )
     .bind(workspaceId, accountId)
     .first<{ queued: number | null; retry: number | null; indexed: number | null; oldest_next_attempt_at: string | null }>();
@@ -1727,7 +1739,7 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
       .prepare(
         `SELECT SUM(CASE WHEN review_state = 'needs_review' THEN 1 ELSE 0 END) AS c
          FROM tasks
-         WHERE workspace_id = ? AND lower(account_id) = lower(?)`
+         WHERE workspace_id = ? AND account_id = ?`
       )
       .bind(workspaceId, accountId)
       .first<{ c: number | null }>(),
@@ -1735,7 +1747,7 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
       .prepare(
         `SELECT SUM(CASE WHEN review_state = 'needs_review' THEN 1 ELSE 0 END) AS c
          FROM followups
-         WHERE workspace_id = ? AND lower(account_id) = lower(?)`
+         WHERE workspace_id = ? AND account_id = ?`
       )
       .bind(workspaceId, accountId)
       .first<{ c: number | null }>(),
@@ -1743,7 +1755,7 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
       .prepare(
         `SELECT SUM(CASE WHEN review_state = 'needs_review' THEN 1 ELSE 0 END) AS c
          FROM decisions
-         WHERE workspace_id = ? AND lower(account_id) = lower(?)`
+         WHERE workspace_id = ? AND account_id = ?`
       )
       .bind(workspaceId, accountId)
       .first<{ c: number | null }>(),
@@ -1753,7 +1765,7 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
             SUM(CASE WHEN status = 'needs_review' THEN 1 ELSE 0 END) AS extractions_needs_review,
             COUNT(*) AS extractions_total
          FROM message_extractions
-         WHERE workspace_id = ? AND lower(account_id) = lower(?)`
+         WHERE workspace_id = ? AND account_id = ?`
       )
       .bind(workspaceId, accountId)
       .first<{ extractions_needs_review: number | null; extractions_total: number | null }>(),
@@ -1764,7 +1776,7 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
             COUNT(*) AS total_runs
          FROM run_search_audits
          WHERE workspace_id = ?
-           AND lower(account_id) = lower(?)
+           AND account_id = ?
            AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-7 days')`
       )
       .bind(workspaceId, accountId)
@@ -1814,7 +1826,7 @@ async function getUsageStats(request: Request, env: Env): Promise<Response> {
               COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd
        FROM model_usage_events
        WHERE workspace_id = ?
-         AND lower(COALESCE(account_id, '')) = lower(?)
+         AND COALESCE(account_id, '') = ?
          AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-' || ? || ' days')
        GROUP BY provider, model, operation
        ORDER BY estimated_cost_usd DESC, calls DESC`
@@ -1876,7 +1888,7 @@ async function getTriageStats(request: Request, env: Env): Promise<Response> {
         `SELECT COALESCE(json_extract(classification_json, '$.priority'), 'unknown') AS key, COUNT(*) AS c
          FROM email_threads
          WHERE workspace_id = ?
-           AND lower(account_id) = lower(?)
+           AND account_id = ?
            AND classification_json IS NOT NULL
          GROUP BY key
          ORDER BY c DESC`
@@ -1888,7 +1900,7 @@ async function getTriageStats(request: Request, env: Env): Promise<Response> {
         `SELECT COALESCE(json_extract(classification_json, '$.category'), 'unknown') AS key, COUNT(*) AS c
          FROM email_threads
          WHERE workspace_id = ?
-           AND lower(account_id) = lower(?)
+           AND account_id = ?
            AND classification_json IS NOT NULL
          GROUP BY key
          ORDER BY c DESC`
@@ -1900,7 +1912,7 @@ async function getTriageStats(request: Request, env: Env): Promise<Response> {
         `SELECT COALESCE(CAST(json_extract(classification_json, '$.needs_reply') AS INTEGER), 0) AS key, COUNT(*) AS c
          FROM email_threads
          WHERE workspace_id = ?
-           AND lower(account_id) = lower(?)
+           AND account_id = ?
            AND classification_json IS NOT NULL
          GROUP BY key
          ORDER BY c DESC`
@@ -1912,7 +1924,7 @@ async function getTriageStats(request: Request, env: Env): Promise<Response> {
         `SELECT COALESCE(json_extract(classification_json, '$.sentiment'), 'unknown') AS key, COUNT(*) AS c
          FROM email_threads
          WHERE workspace_id = ?
-           AND lower(account_id) = lower(?)
+           AND account_id = ?
            AND classification_json IS NOT NULL
          GROUP BY key
          ORDER BY c DESC`
@@ -2231,14 +2243,14 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
     .run();
 
   if (accountId.includes('@')) {
-    const accountEmail = normalizeAccountId(accountId);
+    const accountEmail = accountId.trim();
 
     const existing = await env.SKY_DB
       .prepare(
         `SELECT id
          FROM accounts
          WHERE workspace_id = ?
-           AND lower(email) = lower(?)
+           AND email = ?
          LIMIT 1`
       )
       .bind(workspaceId, accountEmail)
@@ -2256,13 +2268,13 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
     return accountEmail;
   }
 
-  const canonicalId = normalizeAccountId(accountId);
+  const canonicalId = accountId.trim();
   const existing = await env.SKY_DB
     .prepare(
       `SELECT id
        FROM accounts
        WHERE workspace_id = ?
-         AND lower(id) = lower(?)
+         AND id = ?
        LIMIT 1`
     )
     .bind(workspaceId, canonicalId)
@@ -2718,7 +2730,7 @@ async function assertPermission(
        WHERE subject = ?
          AND workspace_id = ?
          AND status = 'active'
-         AND (lower(account_id) = lower(?) OR account_id = '*')
+         AND (account_id = ? OR account_id = '*')
        LIMIT 1`
     )
     .bind(principal.subject, workspaceId, accountId)
@@ -2989,7 +3001,7 @@ async function performSemanticSearch(
          ON em.id = json_extract(mc.metadata_json, '$.messageId')
         AND em.workspace_id = mc.workspace_id
        WHERE mc.workspace_id = ?
-         AND lower(mc.account_id) = lower(?)
+         AND mc.account_id = ?
          AND mc.vector_id IN (${placeholders})
          AND NOT (
            lower(mc.chunk_text) LIKE '%return-path:%'
@@ -3345,7 +3357,7 @@ async function loadChunkTextByVectorIds(
       `SELECT vector_id, chunk_text
        FROM memory_chunks
        WHERE workspace_id = ?
-         AND lower(account_id) = lower(?)
+         AND account_id = ?
          AND vector_id IN (${placeholders})`
     )
     .bind(workspaceId, accountId, ...ids)

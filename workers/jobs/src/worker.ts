@@ -1,5 +1,4 @@
 import { extractBearerToken, verifyAccessJwtClaims, type AccessAuthEnv } from '../../shared/auth';
-import { normalizeAccountId } from '../../shared/account';
 
 interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
@@ -18,8 +17,6 @@ interface Env extends AccessAuthEnv {
   WORKERS_AI_EMBEDDING_MODEL?: string;
   VECTOR_DIMENSIONS?: string;
   ENVIRONMENT?: string;
-  BRIEFING_TIMEZONE?: string;
-  BRIEFING_HOUR_LOCAL?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -37,6 +34,7 @@ type BriefingPayload = {
   sections: {
     urgent_threads: Array<Record<string, unknown>>;
     sla_breaches: Array<Record<string, unknown>>;
+    sla_fallback_count: number;
     due_tasks: Array<Record<string, unknown>>;
     open_proposals: Array<Record<string, unknown>>;
     triage_stats: Array<Record<string, unknown>>;
@@ -92,10 +90,11 @@ export default {
       if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
       const body = (await request.json().catch(() => ({}))) as JsonRecord;
       const workspaceId = stringOr(body.workspaceId) || 'default';
-      const accountId = normalizeAccountId(stringOr(body.accountId) || '');
+      const accountId = stringOr(body.accountId) || '';
       if (!accountId) return json({ ok: false, error: 'accountId is required' }, 400);
 
-      const localDate = getLocalDateHour(env.BRIEFING_TIMEZONE || 'America/New_York').date;
+      const workspaceTimezone = await getWorkspaceTimezone(env, workspaceId);
+      const localDate = getLocalDateHour(workspaceTimezone).date;
       const fakeJob: SyncJobRow = {
         id: crypto.randomUUID(),
         job_type: 'daily_briefing',
@@ -104,7 +103,7 @@ export default {
           workspaceId,
           accountId,
           localDate,
-          timezone: env.BRIEFING_TIMEZONE || 'America/New_York'
+          timezone: workspaceTimezone
         })
       };
       const briefingId = await processDailyBriefing(fakeJob, env);
@@ -149,13 +148,12 @@ export default {
 };
 
 async function maybeEnqueueMorningBriefing(env: Env): Promise<void> {
-  const timezone = env.BRIEFING_TIMEZONE || 'America/New_York';
-  const targetHour = Math.max(0, Math.min(23, Number(env.BRIEFING_HOUR_LOCAL || '7')));
-  const local = getLocalDateHour(timezone);
-  if (local.hour !== targetHour) return;
-
+  const targetHour = 7;
   const scopes = await getBriefingScopes(env);
   for (const scope of scopes) {
+    const local = getLocalDateHour(scope.timezone);
+    if (local.hour !== targetHour) continue;
+
     const existing = await env.SKY_DB
       .prepare(
         `SELECT id
@@ -166,17 +164,17 @@ async function maybeEnqueueMorningBriefing(env: Env): Promise<void> {
            AND json_extract(metadata_json, '$.timezone') = ?
            AND json_extract(metadata_json, '$.localDate') = ?
            AND lower(json_extract(metadata_json, '$.workspaceId')) = lower(?)
-           AND lower(json_extract(metadata_json, '$.accountId')) = lower(?)
+           AND json_extract(metadata_json, '$.accountId') = ?
          LIMIT 1`
       )
-      .bind(timezone, local.date, scope.workspaceId, scope.accountId)
+      .bind(scope.timezone, local.date, scope.workspaceId, scope.accountId)
       .first<{ id: string }>();
 
     if (existing?.id) continue;
 
     await enqueueSyncJob(env, 'daily_briefing', {
       source: 'jobs_cron',
-      timezone,
+      timezone: scope.timezone,
       localDate: local.date,
       localHour: local.hour,
       workspaceId: scope.workspaceId,
@@ -203,21 +201,23 @@ function getLocalDateHour(timezone: string): { date: string; hour: number } {
   return { date: `${year}-${month}-${day}`, hour: Number.isFinite(hour) ? hour : 0 };
 }
 
-async function getBriefingScopes(env: Env): Promise<Array<{ workspaceId: string; accountId: string }>> {
+async function getBriefingScopes(env: Env): Promise<Array<{ workspaceId: string; accountId: string; timezone: string }>> {
   try {
     const rows = await env.SKY_DB
       .prepare(
-        `SELECT workspace_id, id AS account_id
-         FROM accounts
-         WHERE status = 'active'`
+        `SELECT a.workspace_id, a.id AS account_id, w.timezone
+         FROM accounts a
+         JOIN workspaces w ON w.id = a.workspace_id
+         WHERE a.status = 'active'`
       )
-      .all<{ workspace_id: string; account_id: string }>();
+      .all<{ workspace_id: string; account_id: string; timezone: string | null }>();
     const out = (rows.results || [])
       .map((r) => ({
         workspaceId: r.workspace_id,
-        accountId: normalizeAccountId(r.account_id)
+        accountId: r.account_id,
+        timezone: normalizeTimezone(r.timezone)
       }))
-      .filter((x) => x.workspaceId && x.accountId);
+      .filter((x) => x.workspaceId && x.accountId && x.timezone);
     if (out.length > 0) return out;
   } catch {
     // fall through to email_threads fallback
@@ -225,15 +225,38 @@ async function getBriefingScopes(env: Env): Promise<Array<{ workspaceId: string;
 
   const rows = await env.SKY_DB
     .prepare(
-      `SELECT DISTINCT workspace_id, account_id
-       FROM email_threads
+      `SELECT DISTINCT t.workspace_id, t.account_id, w.timezone
+       FROM email_threads t
+       JOIN workspaces w ON w.id = t.workspace_id
        WHERE account_id IS NOT NULL
        LIMIT 500`
     )
-    .all<{ workspace_id: string; account_id: string }>();
+    .all<{ workspace_id: string; account_id: string; timezone: string | null }>();
   return (rows.results || [])
-    .map((r) => ({ workspaceId: r.workspace_id, accountId: normalizeAccountId(r.account_id) }))
-    .filter((x) => x.workspaceId && x.accountId);
+    .map((r) => ({
+      workspaceId: r.workspace_id,
+      accountId: r.account_id,
+      timezone: normalizeTimezone(r.timezone)
+    }))
+    .filter((x) => x.workspaceId && x.accountId && x.timezone);
+}
+
+async function getWorkspaceTimezone(env: Env, workspaceId: string): Promise<string> {
+  const row = await env.SKY_DB
+    .prepare(
+      `SELECT timezone
+       FROM workspaces
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .bind(workspaceId)
+    .first<{ timezone: string | null }>();
+  return normalizeTimezone(row?.timezone);
+}
+
+function normalizeTimezone(value: string | null | undefined): string {
+  const tz = (value || '').trim();
+  return tz || 'America/Chicago';
 }
 
 async function processSyncJobs(env: Env, limit: number): Promise<number> {
@@ -290,10 +313,10 @@ async function processSyncJobs(env: Env, limit: number): Promise<number> {
 async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> {
   const metadata = parseJsonObject(job.metadata_json);
   const workspaceId = stringOr(metadata.workspaceId) || 'default';
-  const accountId = normalizeAccountId(stringOr(metadata.accountId) || '');
+  const accountId = stringOr(metadata.accountId) || '';
   if (!accountId) throw new Error('daily_briefing_missing_account_id');
 
-  const timezone = stringOr(metadata.timezone) || env.BRIEFING_TIMEZONE || 'America/New_York';
+  const timezone = await getWorkspaceTimezone(env, workspaceId);
   const localDate = stringOr(metadata.localDate) || getLocalDateHour(timezone).date;
 
   const [urgentThreads, slaBreaches, dueTasks, openProposals, triageStats] = await Promise.all([
@@ -302,7 +325,7 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
         `SELECT t.id, t.subject, t.last_message_at, t.classification_json
          FROM email_threads t
          WHERE t.workspace_id = ?
-           AND lower(t.account_id) = lower(?)
+           AND t.account_id = ?
            AND CAST(COALESCE(json_extract(t.classification_json, '$.needs_reply'), 0) AS INTEGER) = 1
            AND json_extract(t.classification_json, '$.priority') IN ('P0', 'P1')
          ORDER BY datetime(COALESCE(t.last_message_at, t.updated_at)) DESC
@@ -312,13 +335,54 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
       .all<Record<string, unknown>>(),
     env.SKY_DB
       .prepare(
-        `SELECT t.id, t.subject, t.last_message_at, t.classification_json
-         FROM email_threads t
-         WHERE t.workspace_id = ?
-           AND lower(t.account_id) = lower(?)
-           AND CAST(COALESCE(json_extract(t.classification_json, '$.needs_reply'), 0) AS INTEGER) = 1
-           AND datetime(COALESCE(t.last_message_at, t.updated_at)) < datetime(CURRENT_TIMESTAMP, '-48 hours')
-         ORDER BY datetime(COALESCE(t.last_message_at, t.updated_at)) ASC
+        `WITH agent_sla AS (
+           SELECT aa.account_id, MIN(a.response_sla_hours) AS response_sla_hours
+           FROM agent_accounts aa
+           JOIN agents a ON a.id = aa.agent_id
+           GROUP BY aa.account_id
+         ),
+         thread_scope AS (
+           SELECT
+             t.id,
+             t.subject,
+             t.last_message_at,
+             t.classification_json,
+             t.last_inbound_at,
+             t.last_outbound_at,
+             CASE
+               WHEN COALESCE(agent_sla.response_sla_hours, 48) > 0 THEN COALESCE(agent_sla.response_sla_hours, 48)
+               ELSE 48
+             END AS response_sla_hours,
+             CASE
+               WHEN agent_sla.response_sla_hours IS NULL OR agent_sla.response_sla_hours <= 0 THEN 1
+               ELSE 0
+             END AS used_fallback_sla,
+             CASE
+               WHEN t.last_inbound_at IS NULL THEN NULL
+               WHEN t.last_outbound_at IS NULL THEN t.last_inbound_at
+               WHEN datetime(t.last_outbound_at) < datetime(t.last_inbound_at) THEN t.last_inbound_at
+               ELSE NULL
+             END AS pending_reply_since
+           FROM email_threads t
+           LEFT JOIN agent_sla ON agent_sla.account_id = t.account_id
+           WHERE t.workspace_id = ?
+             AND t.account_id = ?
+             AND CAST(COALESCE(json_extract(t.classification_json, '$.needs_reply'), 0) AS INTEGER) = 1
+         )
+         SELECT
+           id,
+           subject,
+           last_message_at,
+           classification_json,
+           last_inbound_at,
+           last_outbound_at,
+           response_sla_hours,
+           used_fallback_sla,
+           pending_reply_since
+         FROM thread_scope
+         WHERE pending_reply_since IS NOT NULL
+           AND datetime(pending_reply_since) < datetime(CURRENT_TIMESTAMP, '-' || response_sla_hours || ' hours')
+         ORDER BY datetime(pending_reply_since) ASC
          LIMIT 10`
       )
       .bind(workspaceId, accountId)
@@ -328,7 +392,7 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
         `SELECT id, title, priority, due_at, source_type
          FROM tasks
          WHERE workspace_id = ?
-           AND lower(account_id) = lower(?)
+           AND account_id = ?
            AND status = 'open'
            AND (due_at IS NULL OR datetime(due_at) <= datetime(CURRENT_TIMESTAMP, '+24 hours'))
          ORDER BY
@@ -359,7 +423,7 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
                 created_at
          FROM proposals
          WHERE workspace_id = ?
-           AND lower(account_id) = lower(?)
+           AND account_id = ?
            AND status = 'proposed'
          ORDER BY datetime(created_at) DESC
          LIMIT 10`
@@ -371,8 +435,8 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
         `SELECT json_extract(classification_json, '$.priority') AS priority, COUNT(*) AS count
          FROM email_threads
          WHERE workspace_id = ?
-           AND lower(account_id) = lower(?)
-           AND date(COALESCE(last_message_at, updated_at)) = date('now')
+           AND account_id = ?
+           AND date(COALESCE(last_message_at, updated_at)) = date('now', 'utc')
          GROUP BY priority`
       )
       .bind(workspaceId, accountId)
@@ -386,6 +450,10 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
     sections: {
       urgent_threads: urgentThreads.results || [],
       sla_breaches: slaBreaches.results || [],
+      sla_fallback_count: (slaBreaches.results || []).reduce((sum, row) => {
+        const v = Number(row.used_fallback_sla || 0);
+        return sum + (Number.isFinite(v) ? v : 0);
+      }, 0),
       due_tasks: dueTasks.results || [],
       open_proposals: openProposals.results || [],
       triage_stats: triageStats.results || []
@@ -400,7 +468,7 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
       `SELECT id
        FROM briefings
        WHERE workspace_id = ?
-         AND lower(account_id) = lower(?)
+         AND account_id = ?
          AND briefing_date = ?
          AND status = 'ready'
        ORDER BY datetime(created_at) DESC
@@ -463,8 +531,12 @@ async function generateBriefingNarrative(payload: BriefingPayload, env: Env): Pr
     'Urgent emails needing reply (P0/P1):',
     formatLines(urgent, (t) => `- ${(t.subject as string) || '(no subject)'} | last: ${(t.last_message_at as string) || 'unknown'}`),
     '',
-    'SLA breaches (no reply > 48hrs):',
-    formatLines(breaches, (t) => `- ${(t.subject as string) || '(no subject)'} | last: ${(t.last_message_at as string) || 'unknown'}`),
+    'SLA breaches (pending reply older than configured SLA):',
+    formatLines(
+      breaches,
+      (t) =>
+        `- ${(t.subject as string) || '(no subject)'} | pending since: ${(t.pending_reply_since as string) || 'unknown'} | SLA: ${String(t.response_sla_hours || 48)}h`
+    ),
     '',
     'Tasks due today or overdue:',
     formatLines(tasks, (t) => `- [${(t.priority as string) || 'P2'}] ${(t.title as string) || '(untitled)'} | due: ${(t.due_at as string) || 'unspecified'}`),
@@ -590,7 +662,7 @@ function parseFromJson(raw: string): string[] {
     return parsed
       .map((x) => stringOr(x.email) || stringOr(x.address))
       .filter((x): x is string => Boolean(x))
-      .map((x) => normalizeAccountId(x));
+      .map((x) => x.trim());
   } catch {
     return [];
   }

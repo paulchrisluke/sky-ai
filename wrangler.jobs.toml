@@ -13,8 +13,6 @@ WORKERS_AI_EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
 VECTOR_DIMENSIONS = "1536"
 ACCESS_AUTH_ENABLED = "true"
 ALLOW_API_KEY_BYPASS = "true"
-BRIEFING_TIMEZONE = "America/New_York"
-BRIEFING_HOUR_LOCAL = "7"
 
 [[d1_databases]]
 binding = "SKY_DB"
@@ -52,8 +50,6 @@ WORKERS_AI_EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
 VECTOR_DIMENSIONS = "1536"
 ACCESS_AUTH_ENABLED = "true"
 ALLOW_API_KEY_BYPASS = "true"
-BRIEFING_TIMEZONE = "America/New_York"
-BRIEFING_HOUR_LOCAL = "7"
 
 [[env.prod.d1_databases]]
 binding = "SKY_DB"

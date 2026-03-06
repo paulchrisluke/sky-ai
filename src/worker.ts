@@ -1,4 +1,3 @@
-import { normalizeAccountId } from '../workers/shared/account';
 import { extractBearerToken, verifyAccessJwtClaims, type AccessAuthEnv } from '../workers/shared/auth';
 
 interface Env extends AccessAuthEnv {
@@ -86,8 +85,8 @@ export default {
 async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
-  const accountEmail = normalizeAccountId(stringOr(payload.accountEmail) || 'unknown');
-  const accountId = normalizeAccountId(stringOr(payload.accountId) || accountEmail);
+  const accountEmail = stringOr(payload.accountEmail) || 'unknown';
+  const accountId = stringOr(payload.accountId) || accountEmail;
   const mailbox = stringOr(payload.mailbox) || 'INBOX';
   const threadExternalId = stringOr(payload.threadId);
   const providerUid = numberOr(payload.uid);
@@ -181,6 +180,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   const messageId = crypto.randomUUID();
   const fromAddresses = normalizeAddresses(payload.from);
   const toAddresses = normalizeAddresses(payload.to);
+  const direction = deriveMessageDirection(mailbox, fromAddresses, accountEmail);
   const rawSource = stringOr(payload.rawRfc822) || '';
   const rawSha256 = rawSource ? await sha256Hex(rawSource) : null;
 
@@ -188,8 +188,8 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
     .prepare(
       `INSERT INTO email_messages
        (id, workspace_id, thread_id, account_id, account_email, mailbox, provider_uid, provider_message_id, source_message_key, subject,
-        sent_at, from_json, to_json, snippet, artifact_id, raw_sha256, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        sent_at, from_json, to_json, snippet, artifact_id, raw_sha256, direction, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     )
     .bind(
       messageId,
@@ -207,7 +207,8 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
       JSON.stringify(toAddresses),
       snippet,
       artifactId,
-      rawSha256
+      rawSha256,
+      direction
     )
     .run();
 
@@ -391,7 +392,7 @@ async function upsertParticipants(
 async function queueBackfillRun(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
-  const accountEmail = normalizeAccountId(stringOr(payload.accountEmail) || 'unknown');
+  const accountEmail = stringOr(payload.accountEmail) || 'unknown';
   const mailbox = stringOr(payload.mailbox) || 'INBOX';
   const sinceDate = stringOr(payload.sinceDate);
   const untilDate = stringOr(payload.untilDate);
@@ -436,7 +437,7 @@ async function enqueueEmbeddingJob(
        (id, workspace_id, account_id, source_record_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'queued', 0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     )
-    .bind(crypto.randomUUID(), workspaceId, normalizeAccountId(accountId), sourceRecordId)
+    .bind(crypto.randomUUID(), workspaceId, accountId, sourceRecordId)
     .run();
 
   await enqueueEmbeddingQueueMessage(env, { sourceRecordId });
@@ -743,9 +744,31 @@ function normalizeAddresses(input: unknown): NormalizedAddress[] {
     const record = item as Record<string, unknown>;
     const email = stringOr(record.address) || stringOr(record.email);
     if (!email) continue;
-    out.push({ email: normalizeAccountId(email), name: stringOr(record.name) });
+    out.push({ email, name: stringOr(record.name) });
   }
   return out;
+}
+
+function deriveMessageDirection(
+  mailbox: string,
+  fromAddresses: NormalizedAddress[],
+  accountEmail: string
+): 'inbound' | 'outbound' | 'unknown' {
+  const mailboxLower = mailbox.trim().toLowerCase();
+  if (mailboxLower === 'sent' || mailboxLower === 'sent messages') {
+    return 'outbound';
+  }
+
+  const account = accountEmail.trim().toLowerCase();
+  if (account && account !== 'unknown') {
+    const fromMatch = fromAddresses.some((x) => x.email.toLowerCase() === account);
+    if (fromMatch) return 'outbound';
+  }
+
+  const hasSender = fromAddresses.length > 0;
+  const hasMailboxSignal = mailboxLower.length > 0;
+  if (!hasSender && !hasMailboxSignal) return 'unknown';
+  return 'inbound';
 }
 
 function buildSnippet(payload: JsonRecord, subject: string): string {

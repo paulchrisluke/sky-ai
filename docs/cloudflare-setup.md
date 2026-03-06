@@ -164,7 +164,7 @@ Example commands (dev):
 - Briefing generation endpoints:
   - `POST /jobs/briefing/generate-now` (manual immediate generation for one account)
   - `POST /jobs/sync/process` (drain queued sync jobs including `daily_briefing`)
-- Daily briefing is cron-evaluated hourly and enqueued once at local `BRIEFING_HOUR_LOCAL` in `BRIEFING_TIMEZONE`.
+- Daily briefing is cron-evaluated hourly and enqueued once at 7am local time using each workspace's `workspaces.timezone`.
 
 ## Secret storage clarification
 
