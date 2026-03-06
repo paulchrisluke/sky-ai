@@ -158,6 +158,10 @@ Example commands (dev):
   - `POST /mail/backfill` (queues checkpointed historical ingest job metadata)
 - Embedding queue endpoint:
   - `POST /jobs/embeddings/process` on the jobs worker (manual drain for queued/retry embeddings)
+  - `POST /jobs/embeddings/reclean-noisy` (manual reclean + requeue for noisy chunks)
+- Triage backfill endpoint:
+  - `POST /jobs/triage/reclassify` (classify existing threads with latest heuristic version)
+- Daily briefing is cron-evaluated hourly and enqueued once at local `BRIEFING_HOUR_LOCAL` in `BRIEFING_TIMEZONE`.
 
 ## Secret storage clarification
 

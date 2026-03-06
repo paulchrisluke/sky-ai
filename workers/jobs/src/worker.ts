@@ -22,6 +22,17 @@ interface Env extends AccessAuthEnv {
 
 type JsonRecord = Record<string, unknown>;
 
+type ThreadClassification = {
+  priority: 'P0' | 'P1' | 'P2' | 'P3';
+  category: 'customer_support' | 'vendor' | 'legal' | 'financial' | 'personal';
+  needs_reply: boolean;
+  sentiment: 'urgent' | 'neutral' | 'positive';
+  suggested_action: 'reply' | 'archive' | 'forward' | 'escalate';
+  confidence: number;
+  classifier_version: string;
+  reasons: string[];
+};
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -43,6 +54,15 @@ export default {
       const dryRun = body.dryRun === true;
       const processNow = body.processNow === true;
       const result = await recleanNoisyChunksAndQueue(env, { limit, dryRun, processNow });
+      return json({ ok: true, ...result });
+    }
+
+    if (request.method === 'POST' && url.pathname === '/jobs/triage/reclassify') {
+      if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
+      const body = (await request.json().catch(() => ({}))) as JsonRecord;
+      const limit = Math.max(1, Math.min(numberOr(body.limit) || 500, 5000));
+      const dryRun = body.dryRun === true;
+      const result = await reclassifyThreads(env, { limit, dryRun });
       return json({ ok: true, ...result });
     }
 
@@ -118,6 +138,154 @@ function getLocalDateHour(timezone: string): { date: string; hour: number } {
   const day = get('day');
   const hour = Number(get('hour') || '0');
   return { date: `${year}-${month}-${day}`, hour: Number.isFinite(hour) ? hour : 0 };
+}
+
+async function reclassifyThreads(
+  env: Env,
+  input: { limit: number; dryRun: boolean }
+): Promise<{ scanned: number; updated: number; dryRun: boolean }> {
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT
+          t.id AS thread_id,
+          t.mailbox AS mailbox,
+          COALESCE(m.subject, t.subject, '') AS subject,
+          COALESCE(m.snippet, '') AS snippet,
+          COALESCE(m.from_json, '[]') AS from_json
+       FROM email_threads t
+       LEFT JOIN email_messages m
+         ON m.id = (
+           SELECT mm.id
+           FROM email_messages mm
+           WHERE mm.thread_id = t.id
+           ORDER BY datetime(COALESCE(mm.sent_at, mm.created_at)) DESC, mm.created_at DESC
+           LIMIT 1
+         )
+       WHERE t.classification_json IS NULL
+          OR json_extract(t.classification_json, '$.classifier_version') IS NULL
+          OR json_extract(t.classification_json, '$.classifier_version') != 'triage-heuristic-v1'
+       LIMIT ?`
+    )
+    .bind(input.limit)
+    .all<{ thread_id: string; mailbox: string; subject: string; snippet: string; from_json: string }>();
+
+  let updated = 0;
+  for (const row of rows.results || []) {
+    const from = parseFromJson(row.from_json);
+    const classification = classifyEmailThread({
+      subject: row.subject,
+      snippet: row.snippet,
+      from,
+      mailbox: row.mailbox
+    });
+
+    if (!input.dryRun) {
+      await env.SKY_DB
+        .prepare(
+          `UPDATE email_threads
+           SET classification_json = ?,
+               classification_updated_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`
+        )
+        .bind(JSON.stringify(classification), row.thread_id)
+        .run();
+    }
+    updated += 1;
+  }
+
+  return { scanned: Number(rows.results?.length || 0), updated, dryRun: input.dryRun };
+}
+
+function parseFromJson(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((x) => stringOr(x.email) || stringOr(x.address))
+      .filter((x): x is string => Boolean(x))
+      .map((x) => normalizeAccountId(x));
+  } catch {
+    return [];
+  }
+}
+
+function classifyEmailThread(input: {
+  subject: string;
+  snippet: string;
+  from: string[];
+  mailbox: string;
+}): ThreadClassification {
+  const text = `${input.subject}\n${input.snippet}`.toLowerCase();
+  const senderText = input.from.join(' ').toLowerCase();
+  const reasons: string[] = [];
+
+  const has = (patterns: RegExp[]): boolean => patterns.some((p) => p.test(text));
+
+  const urgentPatterns = [/\burgent\b/, /\basap\b/, /\bimmediately\b/, /\bcritical\b/, /\baction required\b/, /\boverdue\b/];
+  const positivePatterns = [/\bthank(s| you)?\b/, /\bappreciate\b/, /\bgreat\b/, /\bawesome\b/, /\bexcited\b/, /\blove\b/];
+  const replyPatterns = [/\?/, /\bplease (reply|respond|confirm|review)\b/, /\bcan you\b/, /\blet me know\b/, /\bfollow up\b/];
+
+  const customerSupportPatterns = [
+    /\bcustomer\b/,
+    /\bsupport\b/,
+    /\bhelp\b/,
+    /\bissue\b/,
+    /\bproblem\b/,
+    /\breturn\b/,
+    /\bwarranty\b/,
+    /\btracking\b/,
+    /\border\b/
+  ];
+  const vendorPatterns = [/\bvendor\b/, /\bsupplier\b/, /\bmanufacturer\b/, /\bpo\b/, /\bpurchase order\b/, /\bshipment\b/, /\binventory\b/];
+  const legalPatterns = [/\bcontract\b/, /\bagreement\b/, /\bnda\b/, /\blegal\b/, /\battorney\b/, /\bcounsel\b/, /\bcompliance\b/];
+  const financialPatterns = [/\binvoice\b/, /\bpayment\b/, /\brefund\b/, /\bchargeback\b/, /\bbilling\b/, /\btax\b/, /\breceipt\b/];
+  const personalPatterns = [/\bwife\b/, /\bfamily\b/, /\bdad\b/, /\bmom\b/, /\bkid(s)?\b/, /\bbirthday\b/, /\bvalentine\b/, /\bdoctor\b/, /\bdinner\b/];
+
+  let category: ThreadClassification['category'] = 'customer_support';
+  if (has(legalPatterns)) category = 'legal';
+  else if (has(financialPatterns)) category = 'financial';
+  else if (has(vendorPatterns)) category = 'vendor';
+  else if (has(personalPatterns) || /\bme\.com\b/.test(senderText)) category = 'personal';
+  else if (has(customerSupportPatterns)) category = 'customer_support';
+  reasons.push(`category:${category}`);
+
+  const urgent = has(urgentPatterns);
+  const needsReply = has(replyPatterns) || /inbox/i.test(input.mailbox);
+  const positive = !urgent && has(positivePatterns);
+
+  let sentiment: ThreadClassification['sentiment'] = 'neutral';
+  if (urgent) sentiment = 'urgent';
+  else if (positive) sentiment = 'positive';
+  reasons.push(`sentiment:${sentiment}`);
+
+  let priority: ThreadClassification['priority'] = 'P3';
+  if (urgent) priority = 'P0';
+  else if (needsReply && (category === 'legal' || category === 'financial')) priority = 'P1';
+  else if (needsReply || category === 'customer_support') priority = 'P2';
+  reasons.push(`priority:${priority}`);
+
+  let suggestedAction: ThreadClassification['suggested_action'] = 'archive';
+  if (urgent) suggestedAction = 'escalate';
+  else if (needsReply) suggestedAction = 'reply';
+  else if (category === 'financial' || category === 'legal') suggestedAction = 'forward';
+  reasons.push(`suggested_action:${suggestedAction}`);
+
+  let confidence = 0.55;
+  if (urgent) confidence += 0.2;
+  if (needsReply) confidence += 0.1;
+  if (category !== 'customer_support') confidence += 0.1;
+
+  return {
+    priority,
+    category,
+    needs_reply: needsReply,
+    sentiment,
+    suggested_action: suggestedAction,
+    confidence: Math.min(0.95, Number(confidence.toFixed(2))),
+    classifier_version: 'triage-heuristic-v1',
+    reasons
+  };
 }
 
 async function enqueueSyncJob(env: Env, jobType: string, metadata: JsonRecord): Promise<void> {

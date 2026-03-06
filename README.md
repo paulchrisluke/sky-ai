@@ -205,6 +205,9 @@ Validation endpoint:
   - scheduled sync/briefing job enqueue
 - Manual embedding drain:
   - `POST /jobs/embeddings/process`
+  - `POST /jobs/embeddings/reclean-noisy`
+- Manual triage backfill for existing threads:
+  - `POST /jobs/triage/reclassify`
 
 ## Shared Core Modules
 
