@@ -7,6 +7,7 @@ import {
 } from '../../shared/auth';
 import { enforceCitationContract } from '../../shared/citation';
 import { RUN_EVENT_TYPES } from '../../shared/events';
+import { extractProviderErrorCode } from '../../shared/providerErrors';
 import {
   disableProviderTemporarily,
   getProviderHealthState,
@@ -2977,21 +2978,6 @@ function getOpenAiRateLimitCooldownMinutes(env: Env): number {
   return Math.min(60, Math.trunc(raw));
 }
 
-function extractProviderErrorCode(responseText: string): string | null {
-  try {
-    const parsed = JSON.parse(responseText) as {
-      error?: { code?: unknown; type?: unknown };
-    };
-    const code = parsed?.error?.code;
-    if (typeof code === 'string' && code.trim()) return code.trim();
-    const type = parsed?.error?.type;
-    if (typeof type === 'string' && type.trim()) return type.trim();
-  } catch {
-    // non-json provider response
-  }
-  return null;
-}
-
 function classifyGatewayError(
   responseStatus: number,
   responseText: string
@@ -3001,7 +2987,7 @@ function classifyGatewayError(
   disableReason: 'insufficient_quota' | 'rate_limited' | null;
 } {
   const lower = responseText.toLowerCase();
-  const providerErrorCode = extractProviderErrorCode(responseText);
+  const providerErrorCode = extractProviderErrorCode('openai', responseText);
   if (lower.includes('insufficient_quota') || lower.includes('exceeded your current quota')) {
     return { classificationCode: 'insufficient_quota', providerErrorCode, disableReason: 'insufficient_quota' };
   }
