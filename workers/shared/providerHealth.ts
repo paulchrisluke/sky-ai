@@ -3,6 +3,8 @@ export type ProviderHealthState = {
   status: 'healthy' | 'disabled';
   disabledUntil: string | null;
   reasonCode: string | null;
+  classificationCode: string | null;
+  providerErrorCode: string | null;
   lastError: string | null;
   updatedAt: string | null;
 };
@@ -15,6 +17,8 @@ export async function getProviderHealthState(db: D1Database, provider: string): 
          status,
          disabled_until,
          reason_code,
+         classification_code,
+         provider_error_code,
          last_error,
          updated_at
        FROM ai_provider_health
@@ -27,6 +31,8 @@ export async function getProviderHealthState(db: D1Database, provider: string): 
       status: string;
       disabled_until: string | null;
       reason_code: string | null;
+      classification_code: string | null;
+      provider_error_code: string | null;
       last_error: string | null;
       updated_at: string | null;
     }>();
@@ -37,6 +43,8 @@ export async function getProviderHealthState(db: D1Database, provider: string): 
     status: row.status === 'disabled' ? 'disabled' : 'healthy',
     disabledUntil: row.disabled_until,
     reasonCode: row.reason_code,
+    classificationCode: row.classification_code,
+    providerErrorCode: row.provider_error_code,
     lastError: row.last_error,
     updatedAt: row.updated_at
   };
@@ -66,7 +74,7 @@ export async function isProviderTemporarilyDisabled(db: D1Database, provider: st
 export async function disableProviderTemporarily(
   db: D1Database,
   provider: string,
-  opts: { minutes: number; reasonCode: string; lastError: string }
+  opts: { minutes: number; classificationCode: string; providerErrorCode: string | null; lastError: string }
 ): Promise<void> {
   const minutes = Math.max(1, Math.min(24 * 60, Math.trunc(opts.minutes)));
   await db
@@ -76,6 +84,8 @@ export async function disableProviderTemporarily(
          status,
          disabled_until,
          reason_code,
+         classification_code,
+         provider_error_code,
          last_error,
          updated_at
        ) VALUES (
@@ -84,16 +94,27 @@ export async function disableProviderTemporarily(
          datetime('now', 'utc', ?),
          ?,
          ?,
+         ?,
+         ?,
          CURRENT_TIMESTAMP
        )
        ON CONFLICT(provider) DO UPDATE SET
          status = 'disabled',
          disabled_until = datetime('now', 'utc', excluded.disabled_until),
          reason_code = excluded.reason_code,
+         classification_code = excluded.classification_code,
+         provider_error_code = excluded.provider_error_code,
          last_error = excluded.last_error,
          updated_at = CURRENT_TIMESTAMP`
     )
-    .bind(provider, `+${minutes} minutes`, opts.reasonCode, opts.lastError)
+    .bind(
+      provider,
+      `+${minutes} minutes`,
+      opts.classificationCode,
+      opts.classificationCode,
+      opts.providerErrorCode,
+      opts.lastError
+    )
     .run();
 }
 
@@ -105,13 +126,17 @@ export async function markProviderHealthy(db: D1Database, provider: string): Pro
          status,
          disabled_until,
          reason_code,
+         classification_code,
+         provider_error_code,
          last_error,
          updated_at
-       ) VALUES (?, 'healthy', NULL, NULL, NULL, CURRENT_TIMESTAMP)
+       ) VALUES (?, 'healthy', NULL, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)
        ON CONFLICT(provider) DO UPDATE SET
          status = 'healthy',
          disabled_until = NULL,
          reason_code = NULL,
+         classification_code = NULL,
+         provider_error_code = NULL,
          last_error = NULL,
          updated_at = CURRENT_TIMESTAMP`
     )

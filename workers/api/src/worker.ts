@@ -2977,18 +2977,41 @@ function getOpenAiRateLimitCooldownMinutes(env: Env): number {
   return Math.min(60, Math.trunc(raw));
 }
 
-function classifyGatewayError(responseStatus: number, responseText: string): { errorCode: string; disableReason: 'insufficient_quota' | 'rate_limited' | null } {
+function extractProviderErrorCode(responseText: string): string | null {
+  try {
+    const parsed = JSON.parse(responseText) as {
+      error?: { code?: unknown; type?: unknown };
+    };
+    const code = parsed?.error?.code;
+    if (typeof code === 'string' && code.trim()) return code.trim();
+    const type = parsed?.error?.type;
+    if (typeof type === 'string' && type.trim()) return type.trim();
+  } catch {
+    // non-json provider response
+  }
+  return null;
+}
+
+function classifyGatewayError(
+  responseStatus: number,
+  responseText: string
+): {
+  classificationCode: string;
+  providerErrorCode: string | null;
+  disableReason: 'insufficient_quota' | 'rate_limited' | null;
+} {
   const lower = responseText.toLowerCase();
+  const providerErrorCode = extractProviderErrorCode(responseText);
   if (lower.includes('insufficient_quota') || lower.includes('exceeded your current quota')) {
-    return { errorCode: 'insufficient_quota', disableReason: 'insufficient_quota' };
+    return { classificationCode: 'insufficient_quota', providerErrorCode, disableReason: 'insufficient_quota' };
   }
   if (responseStatus === 401 || lower.includes('invalid_api_key') || lower.includes('unauthorized')) {
-    return { errorCode: 'unauthorized', disableReason: null };
+    return { classificationCode: 'unauthorized', providerErrorCode, disableReason: null };
   }
   if (responseStatus === 429 || lower.includes('rate limit')) {
-    return { errorCode: 'rate_limited', disableReason: 'rate_limited' };
+    return { classificationCode: 'rate_limited', providerErrorCode, disableReason: 'rate_limited' };
   }
-  return { errorCode: `http_${responseStatus}`, disableReason: null };
+  return { classificationCode: `http_${responseStatus}`, providerErrorCode, disableReason: null };
 }
 
 function shouldFallbackToWorkersAi(errorMessage: string): boolean {
@@ -3071,7 +3094,7 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
       operation: usageContext?.operation || 'embedding_query',
       endpoint: usageContext?.endpoint || '/search',
       status: 'error',
-      errorCode: gatewayError.errorCode,
+      errorCode: gatewayError.providerErrorCode || gatewayError.classificationCode,
       metadata: { preview: text.slice(0, 200) }
     });
     if (gatewayError.disableReason) {
@@ -3080,7 +3103,8 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
           gatewayError.disableReason === 'insufficient_quota'
             ? getOpenAiQuotaCooldownMinutes(env)
             : getOpenAiRateLimitCooldownMinutes(env),
-        reasonCode: gatewayError.errorCode,
+        classificationCode: gatewayError.classificationCode,
+        providerErrorCode: gatewayError.providerErrorCode,
         lastError: text.slice(0, 1000)
       });
     }
@@ -3310,7 +3334,7 @@ async function callOpenAiChatViaGateway(
       operation: usageContext?.operation || 'chat_completion',
       endpoint: usageContext?.endpoint || '/chat',
       status: 'error',
-      errorCode: gatewayError.errorCode,
+      errorCode: gatewayError.providerErrorCode || gatewayError.classificationCode,
       metadata: { preview: text.slice(0, 200) }
     });
     if (gatewayError.disableReason) {
@@ -3319,7 +3343,8 @@ async function callOpenAiChatViaGateway(
           gatewayError.disableReason === 'insufficient_quota'
             ? getOpenAiQuotaCooldownMinutes(env)
             : getOpenAiRateLimitCooldownMinutes(env),
-        reasonCode: gatewayError.errorCode,
+        classificationCode: gatewayError.classificationCode,
+        providerErrorCode: gatewayError.providerErrorCode,
         lastError: text.slice(0, 1000)
       });
     }
