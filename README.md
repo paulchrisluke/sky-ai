@@ -202,12 +202,16 @@ Validation endpoint:
 - Owns queue consumer + cron processing:
   - embedding queue consumption
   - embedding retry draining
-  - scheduled sync/briefing job enqueue
+  - scheduled sync/briefing job enqueue + daily briefing generation consumption
 - Manual embedding drain:
   - `POST /jobs/embeddings/process`
   - `POST /jobs/embeddings/reclean-noisy`
 - Manual triage backfill for existing threads:
   - `POST /jobs/triage/reclassify`
+- Manual briefing generation:
+  - `POST /jobs/briefing/generate-now`
+- Manual sync job processing:
+  - `POST /jobs/sync/process`
 
 ## Shared Core Modules
 

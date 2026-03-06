@@ -1,4 +1,5 @@
 import { extractBearerToken, verifyAccessJwtClaims, type AccessAuthEnv } from '../../shared/auth';
+import { normalizeAccountId } from '../../shared/account';
 
 interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
@@ -12,6 +13,7 @@ interface Env extends AccessAuthEnv {
   CF_AIG_AUTH_TOKEN?: string;
   AIG_ACCOUNT_ID?: string;
   AIG_GATEWAY_ID?: string;
+  OPENAI_MODEL?: string;
   OPENAI_EMBEDDING_MODEL?: string;
   WORKERS_AI_EMBEDDING_MODEL?: string;
   VECTOR_DIMENSIONS?: string;
@@ -21,6 +23,26 @@ interface Env extends AccessAuthEnv {
 }
 
 type JsonRecord = Record<string, unknown>;
+
+type SyncJobRow = {
+  id: string;
+  job_type: string;
+  metadata_json: string | null;
+};
+
+type BriefingPayload = {
+  date: string;
+  account_id: string;
+  workspace_id: string;
+  sections: {
+    urgent_threads: Array<Record<string, unknown>>;
+    sla_breaches: Array<Record<string, unknown>>;
+    due_tasks: Array<Record<string, unknown>>;
+    open_proposals: Array<Record<string, unknown>>;
+    triage_stats: Array<Record<string, unknown>>;
+  };
+  generated_at: string;
+};
 
 type ThreadClassification = {
   priority: 'P0' | 'P1' | 'P2' | 'P3';
@@ -66,6 +88,37 @@ export default {
       return json({ ok: true, ...result });
     }
 
+    if (request.method === 'POST' && url.pathname === '/jobs/briefing/generate-now') {
+      if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
+      const body = (await request.json().catch(() => ({}))) as JsonRecord;
+      const workspaceId = stringOr(body.workspaceId) || 'default';
+      const accountId = normalizeAccountId(stringOr(body.accountId) || '');
+      if (!accountId) return json({ ok: false, error: 'accountId is required' }, 400);
+
+      const localDate = getLocalDateHour(env.BRIEFING_TIMEZONE || 'America/New_York').date;
+      const fakeJob: SyncJobRow = {
+        id: crypto.randomUUID(),
+        job_type: 'daily_briefing',
+        metadata_json: JSON.stringify({
+          source: 'manual',
+          workspaceId,
+          accountId,
+          localDate,
+          timezone: env.BRIEFING_TIMEZONE || 'America/New_York'
+        })
+      };
+      const briefingId = await processDailyBriefing(fakeJob, env);
+      return json({ ok: true, briefing_id: briefingId, message: 'Briefing generated successfully' });
+    }
+
+    if (request.method === 'POST' && url.pathname === '/jobs/sync/process') {
+      if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
+      const body = (await request.json().catch(() => ({}))) as JsonRecord;
+      const limit = Math.max(1, Math.min(numberOr(body.limit) || 20, 200));
+      const processed = await processSyncJobs(env, limit);
+      return json({ ok: true, processed });
+    }
+
     return json({ ok: false, error: 'Not found' }, 404);
   },
 
@@ -73,12 +126,14 @@ export default {
     if (controller.cron === '*/15 * * * *') {
       await enqueueSyncJob(env, 'mailbox_incremental_sync', { source: 'jobs_cron' });
       await processEmbeddingJobs(env, 200);
+      await processSyncJobs(env, 20);
       return;
     }
 
     if (controller.cron === '0 * * * *') {
       await maybeEnqueueMorningBriefing(env);
       await processEmbeddingJobs(env, 200);
+      await processSyncJobs(env, 20);
     }
   },
 
@@ -99,27 +154,35 @@ async function maybeEnqueueMorningBriefing(env: Env): Promise<void> {
   const local = getLocalDateHour(timezone);
   if (local.hour !== targetHour) return;
 
-  const existing = await env.SKY_DB
-    .prepare(
-      `SELECT id
-       FROM sync_jobs
-       WHERE job_type = 'daily_briefing'
-         AND json_extract(metadata_json, '$.source') = 'jobs_cron'
-         AND json_extract(metadata_json, '$.timezone') = ?
-         AND json_extract(metadata_json, '$.localDate') = ?
-       LIMIT 1`
-    )
-    .bind(timezone, local.date)
-    .first<{ id: string }>();
+  const scopes = await getBriefingScopes(env);
+  for (const scope of scopes) {
+    const existing = await env.SKY_DB
+      .prepare(
+        `SELECT id
+         FROM sync_jobs
+         WHERE job_type = 'daily_briefing'
+           AND status IN ('queued', 'running', 'complete')
+           AND json_extract(metadata_json, '$.source') = 'jobs_cron'
+           AND json_extract(metadata_json, '$.timezone') = ?
+           AND json_extract(metadata_json, '$.localDate') = ?
+           AND lower(json_extract(metadata_json, '$.workspaceId')) = lower(?)
+           AND lower(json_extract(metadata_json, '$.accountId')) = lower(?)
+         LIMIT 1`
+      )
+      .bind(timezone, local.date, scope.workspaceId, scope.accountId)
+      .first<{ id: string }>();
 
-  if (existing?.id) return;
+    if (existing?.id) continue;
 
-  await enqueueSyncJob(env, 'daily_briefing', {
-    source: 'jobs_cron',
-    timezone,
-    localDate: local.date,
-    localHour: local.hour
-  });
+    await enqueueSyncJob(env, 'daily_briefing', {
+      source: 'jobs_cron',
+      timezone,
+      localDate: local.date,
+      localHour: local.hour,
+      workspaceId: scope.workspaceId,
+      accountId: scope.accountId
+    });
+  }
 }
 
 function getLocalDateHour(timezone: string): { date: string; hour: number } {
@@ -138,6 +201,329 @@ function getLocalDateHour(timezone: string): { date: string; hour: number } {
   const day = get('day');
   const hour = Number(get('hour') || '0');
   return { date: `${year}-${month}-${day}`, hour: Number.isFinite(hour) ? hour : 0 };
+}
+
+async function getBriefingScopes(env: Env): Promise<Array<{ workspaceId: string; accountId: string }>> {
+  try {
+    const rows = await env.SKY_DB
+      .prepare(
+        `SELECT workspace_id, id AS account_id
+         FROM accounts
+         WHERE status = 'active'`
+      )
+      .all<{ workspace_id: string; account_id: string }>();
+    const out = (rows.results || [])
+      .map((r) => ({
+        workspaceId: r.workspace_id,
+        accountId: normalizeAccountId(r.account_id)
+      }))
+      .filter((x) => x.workspaceId && x.accountId);
+    if (out.length > 0) return out;
+  } catch {
+    // fall through to email_threads fallback
+  }
+
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT DISTINCT workspace_id, account_id
+       FROM email_threads
+       WHERE account_id IS NOT NULL
+       LIMIT 500`
+    )
+    .all<{ workspace_id: string; account_id: string }>();
+  return (rows.results || [])
+    .map((r) => ({ workspaceId: r.workspace_id, accountId: normalizeAccountId(r.account_id) }))
+    .filter((x) => x.workspaceId && x.accountId);
+}
+
+async function processSyncJobs(env: Env, limit: number): Promise<number> {
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT id, job_type, metadata_json
+       FROM sync_jobs
+       WHERE status IN ('queued', 'retry')
+         AND job_type = 'daily_briefing'
+       ORDER BY created_at ASC
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<SyncJobRow>();
+
+  let processed = 0;
+  for (const row of rows.results || []) {
+    await env.SKY_DB
+      .prepare(`UPDATE sync_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .bind(row.id)
+      .run();
+
+    try {
+      const briefingId = await processDailyBriefing(row, env);
+      await env.SKY_DB
+        .prepare(
+          `UPDATE sync_jobs
+           SET status = 'complete',
+               metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.briefingId', ?),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`
+        )
+        .bind(briefingId, row.id)
+        .run();
+      processed += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'daily_briefing_failed';
+      await env.SKY_DB
+        .prepare(
+          `UPDATE sync_jobs
+           SET status = 'retry',
+               error_message = ?,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`
+        )
+        .bind(message.slice(0, 1500), row.id)
+        .run();
+    }
+  }
+
+  return processed;
+}
+
+async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> {
+  const metadata = parseJsonObject(job.metadata_json);
+  const workspaceId = stringOr(metadata.workspaceId) || 'default';
+  const accountId = normalizeAccountId(stringOr(metadata.accountId) || '');
+  if (!accountId) throw new Error('daily_briefing_missing_account_id');
+
+  const timezone = stringOr(metadata.timezone) || env.BRIEFING_TIMEZONE || 'America/New_York';
+  const localDate = stringOr(metadata.localDate) || getLocalDateHour(timezone).date;
+
+  const [urgentThreads, slaBreaches, dueTasks, openProposals, triageStats] = await Promise.all([
+    env.SKY_DB
+      .prepare(
+        `SELECT t.id, t.subject, t.last_message_at, t.classification_json
+         FROM email_threads t
+         WHERE t.workspace_id = ?
+           AND lower(t.account_id) = lower(?)
+           AND CAST(COALESCE(json_extract(t.classification_json, '$.needs_reply'), 0) AS INTEGER) = 1
+           AND json_extract(t.classification_json, '$.priority') IN ('P0', 'P1')
+         ORDER BY datetime(COALESCE(t.last_message_at, t.updated_at)) DESC
+         LIMIT 10`
+      )
+      .bind(workspaceId, accountId)
+      .all<Record<string, unknown>>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT t.id, t.subject, t.last_message_at, t.classification_json
+         FROM email_threads t
+         WHERE t.workspace_id = ?
+           AND lower(t.account_id) = lower(?)
+           AND CAST(COALESCE(json_extract(t.classification_json, '$.needs_reply'), 0) AS INTEGER) = 1
+           AND datetime(COALESCE(t.last_message_at, t.updated_at)) < datetime(CURRENT_TIMESTAMP, '-48 hours')
+         ORDER BY datetime(COALESCE(t.last_message_at, t.updated_at)) ASC
+         LIMIT 10`
+      )
+      .bind(workspaceId, accountId)
+      .all<Record<string, unknown>>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT id, title, priority, due_at, source_type
+         FROM tasks
+         WHERE workspace_id = ?
+           AND lower(account_id) = lower(?)
+           AND status = 'open'
+           AND (due_at IS NULL OR datetime(due_at) <= datetime(CURRENT_TIMESTAMP, '+24 hours'))
+         ORDER BY
+           CASE lower(COALESCE(priority, 'p2'))
+             WHEN 'p0' THEN 0
+             WHEN 'p1' THEN 1
+             WHEN 'high' THEN 1
+             WHEN 'p2' THEN 2
+             WHEN 'medium' THEN 2
+             WHEN 'p3' THEN 3
+             ELSE 4
+           END ASC,
+           datetime(COALESCE(due_at, '2999-12-31')) ASC
+         LIMIT 10`
+      )
+      .bind(workspaceId, accountId)
+      .all<Record<string, unknown>>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT id,
+                type,
+                COALESCE(
+                  json_extract(draft_payload_json, '$.title'),
+                  json_extract(draft_payload_json, '$.subject'),
+                  type
+                ) AS title,
+                risk_level,
+                created_at
+         FROM proposals
+         WHERE workspace_id = ?
+           AND lower(account_id) = lower(?)
+           AND status = 'proposed'
+         ORDER BY datetime(created_at) DESC
+         LIMIT 10`
+      )
+      .bind(workspaceId, accountId)
+      .all<Record<string, unknown>>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT json_extract(classification_json, '$.priority') AS priority, COUNT(*) AS count
+         FROM email_threads
+         WHERE workspace_id = ?
+           AND lower(account_id) = lower(?)
+           AND date(COALESCE(last_message_at, updated_at)) = date('now')
+         GROUP BY priority`
+      )
+      .bind(workspaceId, accountId)
+      .all<Record<string, unknown>>()
+  ]);
+
+  const payload: BriefingPayload = {
+    date: localDate,
+    account_id: accountId,
+    workspace_id: workspaceId,
+    sections: {
+      urgent_threads: urgentThreads.results || [],
+      sla_breaches: slaBreaches.results || [],
+      due_tasks: dueTasks.results || [],
+      open_proposals: openProposals.results || [],
+      triage_stats: triageStats.results || []
+    },
+    generated_at: new Date().toISOString()
+  };
+
+  const narrative = await generateBriefingNarrative(payload, env);
+
+  const existing = await env.SKY_DB
+    .prepare(
+      `SELECT id
+       FROM briefings
+       WHERE workspace_id = ?
+         AND lower(account_id) = lower(?)
+         AND briefing_date = ?
+         AND status = 'ready'
+       ORDER BY datetime(created_at) DESC
+       LIMIT 1`
+    )
+    .bind(workspaceId, accountId, localDate)
+    .first<{ id: string }>();
+
+  const briefingId = existing?.id || crypto.randomUUID();
+  if (existing?.id) {
+    await env.SKY_DB
+      .prepare(
+        `UPDATE briefings
+         SET narrative = ?,
+             payload_json = ?,
+             content_json = ?,
+             status = 'ready',
+             delivery_status = 'ready',
+             generated_at = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+      )
+      .bind(narrative, JSON.stringify(payload), JSON.stringify(payload), payload.generated_at, briefingId)
+      .run();
+  } else {
+    await env.SKY_DB
+      .prepare(
+        `INSERT INTO briefings
+         (id, workspace_id, account_id, briefing_date, channel, content_json, payload_json, narrative, delivery_status, status, generated_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'morning', ?, ?, ?, 'ready', 'ready', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      )
+      .bind(
+        briefingId,
+        workspaceId,
+        accountId,
+        localDate,
+        JSON.stringify(payload),
+        JSON.stringify(payload),
+        narrative,
+        payload.generated_at
+      )
+      .run();
+  }
+
+  return briefingId;
+}
+
+async function generateBriefingNarrative(payload: BriefingPayload, env: Env): Promise<string> {
+  const urgent = payload.sections.urgent_threads;
+  const breaches = payload.sections.sla_breaches;
+  const tasks = payload.sections.due_tasks;
+  const proposals = payload.sections.open_proposals;
+
+  const prompt = [
+    'You are a chief of staff preparing a morning briefing.',
+    'Be concise, direct, and prioritized. No filler.',
+    `Today is ${payload.date}.`,
+    '',
+    'DATA:',
+    'Urgent emails needing reply (P0/P1):',
+    formatLines(urgent, (t) => `- ${(t.subject as string) || '(no subject)'} | last: ${(t.last_message_at as string) || 'unknown'}`),
+    '',
+    'SLA breaches (no reply > 48hrs):',
+    formatLines(breaches, (t) => `- ${(t.subject as string) || '(no subject)'} | last: ${(t.last_message_at as string) || 'unknown'}`),
+    '',
+    'Tasks due today or overdue:',
+    formatLines(tasks, (t) => `- [${(t.priority as string) || 'P2'}] ${(t.title as string) || '(untitled)'} | due: ${(t.due_at as string) || 'unspecified'}`),
+    '',
+    'Open proposals awaiting approval:',
+    formatLines(proposals, (p) => `- ${(p.title as string) || '(untitled)'} | risk: ${(p.risk_level as string) || 'low'}`),
+    '',
+    'Write a morning briefing with sections:',
+    '1. URGENT',
+    '2. OVERDUE',
+    '3. TODAY',
+    '4. PENDING',
+    '',
+    'Keep each section to 2-4 bullet points maximum.'
+  ].join('\n');
+
+  if (!hasAiGatewayConfig(env)) {
+    return [
+      'URGENT',
+      ...toSimpleBullets(urgent, (t) => `${(t.subject as string) || '(no subject)'} — reply needed`),
+      '',
+      'OVERDUE',
+      ...toSimpleBullets(breaches, (t) => `${(t.subject as string) || '(no subject)'} — SLA breach`),
+      '',
+      'TODAY',
+      ...toSimpleBullets(tasks, (t) => `${(t.title as string) || '(untitled task)'}`),
+      '',
+      'PENDING',
+      ...toSimpleBullets(proposals, (p) => `${(p.title as string) || '(untitled proposal)'}`)
+    ].join('\n');
+  }
+
+  try {
+    return await callOpenAiChatViaGateway(env, [{ role: 'user', content: prompt }]);
+  } catch {
+    return [
+      'URGENT',
+      ...toSimpleBullets(urgent, (t) => `${(t.subject as string) || '(no subject)'} — reply needed`),
+      '',
+      'OVERDUE',
+      ...toSimpleBullets(breaches, (t) => `${(t.subject as string) || '(no subject)'} — SLA breach`),
+      '',
+      'TODAY',
+      ...toSimpleBullets(tasks, (t) => `${(t.title as string) || '(untitled task)'}`),
+      '',
+      'PENDING',
+      ...toSimpleBullets(proposals, (p) => `${(p.title as string) || '(untitled proposal)'}`)
+    ].join('\n');
+  }
+}
+
+function formatLines<T>(items: T[], toLine: (item: T) => string): string {
+  if (items.length === 0) return 'None';
+  return items.slice(0, 10).map(toLine).join('\n');
+}
+
+function toSimpleBullets<T>(items: T[], toText: (item: T) => string): string[] {
+  if (items.length === 0) return ['- None'];
+  return items.slice(0, 4).map((x) => `- ${toText(x)}`);
 }
 
 async function reclassifyThreads(
@@ -631,6 +1017,43 @@ async function callOpenAiEmbeddingsViaGateway(env: Env, chunks: string[]): Promi
     throw new Error('Embedding response did not match requested chunk count');
   }
   return vectors;
+}
+
+async function callOpenAiChatViaGateway(
+  env: Env,
+  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
+): Promise<string> {
+  const gatewayUrl =
+    `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/chat/completions`;
+
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    authorization: `Bearer ${env.OPENAI_API_KEY as string}`
+  };
+
+  if (env.CF_AIG_AUTH_TOKEN) {
+    headers['cf-aig-authorization'] = `Bearer ${env.CF_AIG_AUTH_TOKEN}`;
+  }
+
+  const response = await fetch(gatewayUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: env.OPENAI_MODEL || 'gpt-4o-mini',
+      max_tokens: 700,
+      messages
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Briefing chat request failed (${response.status}): ${text.slice(0, 500)}`);
+  }
+
+  const body = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  return body.choices?.[0]?.message?.content || '';
 }
 
 async function callWorkersAiEmbeddings(env: Env, chunks: string[]): Promise<number[][]> {

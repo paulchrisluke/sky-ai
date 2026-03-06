@@ -28,6 +28,7 @@ interface Env extends AccessAuthEnv {
   WORKERS_AI_EMBEDDING_MODEL?: string;
   WORKERS_AI_CHAT_MODEL?: string;
   VECTOR_DIMENSIONS?: string;
+  BRIEFING_TIMEZONE?: string;
   ENVIRONMENT?: string;
 }
 
@@ -1149,8 +1150,69 @@ async function getTodayBriefing(request: Request, env: Env): Promise<Response> {
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
   if (!permission.ok) return permission.response;
-  const briefing = await loadTodayBriefingData(env, workspaceId, accountId);
-  return json({ ok: true, ...briefing });
+
+  const briefingTimezone = env.BRIEFING_TIMEZONE || 'America/New_York';
+  const today = localDateInTimezone(briefingTimezone);
+  const generated = await env.SKY_DB
+    .prepare(
+      `SELECT id, briefing_date, narrative, payload_json, content_json, created_at
+       FROM briefings
+       WHERE workspace_id = ?
+         AND lower(account_id) = lower(?)
+         AND briefing_date = ?
+         AND (status = 'ready' OR delivery_status = 'ready')
+       ORDER BY datetime(created_at) DESC
+       LIMIT 1`
+    )
+    .bind(workspaceId, accountId, today)
+    .first<{
+      id: string;
+      briefing_date: string;
+      narrative: string | null;
+      payload_json: string | null;
+      content_json: string | null;
+      created_at: string;
+    }>();
+
+  if (generated?.id) {
+    const rawPayload = generated.payload_json || generated.content_json || '{}';
+    let payload: JsonRecord = {};
+    try {
+      payload = JSON.parse(rawPayload) as JsonRecord;
+    } catch {
+      payload = {};
+    }
+
+    return json({
+      ok: true,
+      briefing_id: generated.id,
+      date: generated.briefing_date,
+      narrative: generated.narrative || null,
+      payload,
+      source: 'generated',
+      generated_at: generated.created_at
+    });
+  }
+
+  return json({
+    ok: true,
+    date: today,
+    source: 'pending',
+    narrative: null,
+    message: `Briefing not yet generated for ${today} (${briefingTimezone}). Check back after 7am local time.`
+  });
+}
+
+function localDateInTimezone(timezone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date());
+
+  const get = (type: string): string => parts.find((x) => x.type === type)?.value || '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
 async function loadTodayBriefingData(

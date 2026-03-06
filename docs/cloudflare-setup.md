@@ -161,6 +161,9 @@ Example commands (dev):
   - `POST /jobs/embeddings/reclean-noisy` (manual reclean + requeue for noisy chunks)
 - Triage backfill endpoint:
   - `POST /jobs/triage/reclassify` (classify existing threads with latest heuristic version)
+- Briefing generation endpoints:
+  - `POST /jobs/briefing/generate-now` (manual immediate generation for one account)
+  - `POST /jobs/sync/process` (drain queued sync jobs including `daily_briefing`)
 - Daily briefing is cron-evaluated hourly and enqueued once at local `BRIEFING_HOUR_LOCAL` in `BRIEFING_TIMEZONE`.
 
 ## Secret storage clarification
