@@ -3507,19 +3507,22 @@ Return a JSON array where each item includes type,title,risk_level,citations. Fo
     const q = input.query.toLowerCase();
     const autoCandidate = findAutoReplyCandidate(input.hits);
     if (autoCandidate) {
+      const deterministicBody = buildDeterministicAckBody(autoCandidate, accountOwnerName);
       proposalsIn = [
         {
           type: 'reply_email',
           title: `Draft reply for: ${autoCandidate.subject || 'Follow up required'}`,
           draft_payload: {
             to: autoCandidate.from,
-            subject: autoCandidate.subject,
+            subject: formatReplySubject(autoCandidate.subject),
             thread_id: autoCandidate.thread_id,
             message_id: autoCandidate.message_id,
-            needs_draft: true
+            body: deterministicBody,
+            needs_draft: false
           },
           risk_level: autoCandidate.score >= 0.75 ? 'high' : 'med',
-          citations: [autoCandidate.message_id]
+          citations: [autoCandidate.message_id],
+          reply_body: deterministicBody
         }
       ];
     } else if ((q.includes('reply') || q.includes('urgent') || q.includes('refund') || q.includes('follow up')) && input.hits.length > 0) {
@@ -3755,6 +3758,19 @@ function sanitizeReplyBody(body: string | null | undefined, ownerName: string): 
   const hasOwner = trimmed.toLowerCase().includes(ownerLower);
   const signOff = `Best,\n${ownerName}`;
   return hasOwner ? trimmed : `${trimmed.trimEnd()}\n\n${signOff}`;
+}
+
+function buildDeterministicAckBody(hit: SearchResult, ownerName: string): string {
+  const rawRecipient = extractContactName(hit.from);
+  const firstName = rawRecipient ? rawRecipient.split(/\s+/)[0] : 'there';
+  const topic = sanitizeAckTopic(hit.subject);
+  return `Hi ${firstName},\n\nThanks for your note about ${topic}. I'll review and circle back shortly with next steps.\n\nBest,\n${ownerName}`;
+}
+
+function sanitizeAckTopic(subject?: string | null): string {
+  if (!subject) return 'this request';
+  const normalized = subject.replace(/^re:\s*/i, '').trim();
+  return normalized.length > 0 ? normalized : 'this request';
 }
 
 function json(payload: JsonRecord, status = 200): Response {
