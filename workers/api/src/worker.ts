@@ -3458,7 +3458,9 @@ async function extractAndPersistProposals(
         {
           role: 'system',
           content:
-            `Given context and assistant answer, return JSON array of proposed actions only. Each item must include type,title,risk_level,citations. For reply_email items also include reply_body (string) containing ONLY the greeting, message, and closing text. Do not include headers such as To or Subject. Sign every reply using the exact account owner name "${accountOwnerName}". Never output placeholder text like [Client's Name] or [Your Name]; rely on the supplied recipient data. If there are no actions, return [].`
+            `You are an expert chief-of-staff assistant. Review every email snippet in context and surface the concrete actions the account owner should take now. ALWAYS emit a reply_email proposal when the email sounds like someone is waiting for a response, asks a question, requests follow-up, or raises an open issue—even if the user did not explicitly ask for a reply. Only return [] when no message needs action.
+
+Return a JSON array where each item includes type,title,risk_level,citations. For reply_email items also include reply_body (string) containing ONLY the greeting, message body, and closing. Do not include headers such as To or Subject. Sign every reply with the exact account owner name "${accountOwnerName}". Never output placeholder text like [Client's Name] or [Your Name]; rely on the provided recipient data.`
         },
         {
           role: 'user',
@@ -3503,7 +3505,24 @@ async function extractAndPersistProposals(
 
   if (proposalsIn.length === 0) {
     const q = input.query.toLowerCase();
-    if ((q.includes('reply') || q.includes('urgent') || q.includes('refund') || q.includes('follow up')) && input.hits.length > 0) {
+    const autoCandidate = findAutoReplyCandidate(input.hits);
+    if (autoCandidate) {
+      proposalsIn = [
+        {
+          type: 'reply_email',
+          title: `Draft reply for: ${autoCandidate.subject || 'Follow up required'}`,
+          draft_payload: {
+            to: autoCandidate.from,
+            subject: autoCandidate.subject,
+            thread_id: autoCandidate.thread_id,
+            message_id: autoCandidate.message_id,
+            needs_draft: true
+          },
+          risk_level: autoCandidate.score >= 0.75 ? 'high' : 'med',
+          citations: [autoCandidate.message_id]
+        }
+      ];
+    } else if ((q.includes('reply') || q.includes('urgent') || q.includes('refund') || q.includes('follow up')) && input.hits.length > 0) {
       const first = input.hits[0];
       proposalsIn = [
         {
@@ -3674,6 +3693,21 @@ function extractEmailAddress(contact?: string | null): string | null {
   if (!contact) return null;
   const match = contact.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
   return match ? match[0].toLowerCase() : null;
+}
+
+function findAutoReplyCandidate(hits: SearchResult[]): SearchResult | null {
+  for (const hit of hits) {
+    if (isLikelyActionable(hit)) return hit;
+  }
+  return null;
+}
+
+function isLikelyActionable(hit: SearchResult): boolean {
+  const combined = `${hit.subject} ${hit.excerpt}`.toLowerCase();
+  const keywords = ['follow up', 'contract', 'invoice', 'please', 'could you', 'can you', 'urgent', 'question', '?', 'update', 'waiting'];
+  return keywords.some((token) =>
+    token === '?' ? combined.includes('?') : combined.includes(token)
+  );
 }
 
 function buildReplyEmailPayload(opts: {
