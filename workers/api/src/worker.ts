@@ -3484,6 +3484,10 @@ Return a JSON array where each item includes type,title,risk_level,citations. Fo
     raw = '[]';
   }
 
+  console.log(`[proposals] raw_response=${raw.slice(0, 500)}`);
+
+  const sanitizedRaw = stripJsonCodeFence(raw);
+
   let proposalsIn: Array<{
     type?: string;
     title?: string;
@@ -3493,7 +3497,7 @@ Return a JSON array where each item includes type,title,risk_level,citations. Fo
     citations?: string[];
   }> = [];
   try {
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = JSON.parse(sanitizedRaw) as unknown;
     if (Array.isArray(parsed)) {
       proposalsIn = parsed as typeof proposalsIn;
     } else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { proposals?: unknown[] }).proposals)) {
@@ -3738,6 +3742,15 @@ function sanitizeAckTopic(subject?: string | null): string {
   if (!subject) return 'this request';
   const normalized = subject.replace(/^re:\s*/i, '').trim();
   return normalized.length > 0 ? normalized : 'this request';
+}
+
+function stripJsonCodeFence(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('```')) {
+    const withoutFence = trimmed.replace(/^```(?:json)?/i, '').replace(/```$/i, '');
+    return withoutFence.trim();
+  }
+  return raw;
 }
 
 function collectProposalMessageIds(
