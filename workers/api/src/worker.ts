@@ -3444,6 +3444,7 @@ async function extractAndPersistProposals(
       date: h.date,
       from: h.from,
       recipient_name: extractContactName(h.from),
+      recipient_email: extractEmailAddress(h.from),
       subject: h.subject,
       excerpt: h.excerpt,
       body_text: truncateText(fullChunkByVectorId.get(h.chunk_id) || h.excerpt || '', 3000)
@@ -3457,7 +3458,7 @@ async function extractAndPersistProposals(
         {
           role: 'system',
           content:
-            `Given context and assistant answer, return JSON array of proposed actions only. Each item: type,title,draft_payload,risk_level,citations. If none, return []. Account owner name is "${accountOwnerName}" — use this exact name in the sender signature for reply_email drafts. Use the \\"from\\" or recipient_name fields in context for the greeting and do not invent placeholders. Never output placeholder text like [Client's Name] or [Your Name]. Always produce a concrete professional email body for reply_email proposals using the provided body_text.`
+            `Given context and assistant answer, return JSON array of proposed actions only. Each item must include type,title,risk_level,citations. For reply_email items also include reply_body (string) containing ONLY the greeting, message, and closing text. Do not include headers such as To or Subject. Sign every reply using the exact account owner name "${accountOwnerName}". Never output placeholder text like [Client's Name] or [Your Name]; rely on the supplied recipient data. If there are no actions, return [].`
         },
         {
           role: 'user',
@@ -3485,6 +3486,7 @@ async function extractAndPersistProposals(
     type?: string;
     title?: string;
     draft_payload?: JsonRecord;
+    reply_body?: string;
     risk_level?: string;
     citations?: string[];
   }> = [];
@@ -3527,16 +3529,19 @@ async function extractAndPersistProposals(
     const title = stringOr(p.title) || 'Untitled proposal';
     const riskLevel = stringOr(p.risk_level) || 'low';
     const proposalId = crypto.randomUUID();
-    const payload = objectOr(p.draft_payload) || {};
-    if (type === 'reply_email') {
-      const suggested = stringOr(payload.suggested_response);
-      const hasPlaceholder = suggested ? containsTemplatePlaceholder(suggested) : false;
-      if (!suggested || isSummaryLikeDraft(suggested) || hasPlaceholder) {
-        delete payload.suggested_response;
-        payload.needs_draft = true;
-      } else {
-        payload.needs_draft = false;
-      }
+    const citationsRaw = Array.isArray(p.citations) ? p.citations.map((x) => String(x)) : [];
+    const payload =
+      type === 'reply_email'
+        ? buildReplyEmailPayload({
+            hits: input.hits,
+            citationIds: citationsRaw,
+            generatedBody:
+              stringOr((p as { reply_body?: string }).reply_body) || stringOr((objectOr(p.draft_payload) || {}).suggested_response),
+            accountOwnerName
+          })
+        : objectOr(p.draft_payload) || {};
+    if (type === 'reply_email' && payload.needs_draft !== true) {
+      payload.needs_draft = false;
     }
 
     await env.SKY_DB
@@ -3557,8 +3562,7 @@ async function extractAndPersistProposals(
       )
       .run();
 
-    const citationIds = Array.isArray(p.citations) ? p.citations.map((x) => String(x)) : [];
-    for (const citationId of citationIds.slice(0, 8)) {
+    for (const citationId of citationsRaw.slice(0, 8)) {
       const hit = input.hits.find((h) => h.message_id === citationId);
       await env.SKY_DB
         .prepare(
@@ -3664,6 +3668,59 @@ function extractContactName(contact?: string | null): string | null {
     return normalizeEmailLocalPart(trimmed) || trimmed.split('@')[0];
   }
   return trimmed;
+}
+
+function extractEmailAddress(contact?: string | null): string | null {
+  if (!contact) return null;
+  const match = contact.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0].toLowerCase() : null;
+}
+
+function buildReplyEmailPayload(opts: {
+  hits: SearchResult[];
+  citationIds: string[];
+  generatedBody?: string | null;
+  accountOwnerName: string;
+}): JsonRecord {
+  const source = findPrimaryHit(opts.hits, opts.citationIds);
+  const to = extractEmailAddress(source?.from) || source?.from || null;
+  const subject = formatReplySubject(source?.subject);
+  const body = sanitizeReplyBody(opts.generatedBody, opts.accountOwnerName);
+  const payload: JsonRecord = {
+    to,
+    subject,
+    thread_id: source?.thread_id || null,
+    message_id: source?.message_id || null,
+    needs_draft: !body || !to || !subject
+  };
+  if (body) payload.body = body;
+  return payload;
+}
+
+function findPrimaryHit(hits: SearchResult[], citationIds: string[]): SearchResult | null {
+  for (const id of citationIds) {
+    const found = hits.find((h) => h.message_id === id);
+    if (found) return found;
+  }
+  return hits.length > 0 ? hits[0] : null;
+}
+
+function formatReplySubject(original?: string | null): string | null {
+  if (!original) return 'Re: follow-up';
+  const trimmed = original.trim();
+  if (!trimmed) return 'Re: follow-up';
+  return /^re:/i.test(trimmed) ? trimmed : `Re: ${trimmed}`;
+}
+
+function sanitizeReplyBody(body: string | null | undefined, ownerName: string): string | null {
+  if (!body) return null;
+  const trimmed = body.trim();
+  if (!trimmed) return null;
+  if (isSummaryLikeDraft(trimmed) || containsTemplatePlaceholder(trimmed)) return null;
+  const ownerLower = ownerName.toLowerCase();
+  const hasOwner = trimmed.toLowerCase().includes(ownerLower);
+  const signOff = `Best,\n${ownerName}`;
+  return hasOwner ? trimmed : `${trimmed.trimEnd()}\n\n${signOff}`;
 }
 
 function json(payload: JsonRecord, status = 200): Response {
