@@ -217,7 +217,7 @@ async function getBriefingScopes(env: Env): Promise<Array<{ workspaceId: string;
     const rows = await env.SKY_DB
       .prepare(
         `SELECT a.workspace_id, a.id AS account_id, w.timezone
-         FROM accounts a
+         FROM connected_accounts a
          JOIN workspaces w ON w.id = a.workspace_id
          WHERE a.status = 'active'`
       )

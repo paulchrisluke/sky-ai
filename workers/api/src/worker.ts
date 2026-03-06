@@ -2342,7 +2342,7 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
     const existing = await env.SKY_DB
       .prepare(
         `SELECT id
-         FROM accounts
+         FROM connected_accounts
          WHERE workspace_id = ?
            AND email = ?
          LIMIT 1`
@@ -2353,7 +2353,7 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
 
     await env.SKY_DB
       .prepare(
-        `INSERT OR IGNORE INTO accounts
+        `INSERT OR IGNORE INTO connected_accounts
            (id, workspace_id, label, email, status, provider, identifier, display_name, config_json, onboarding_complete, created_at, updated_at)
          VALUES
            (?, ?, ?, ?, 'active', 'email_icloud', ?, ?, '{}', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
@@ -2368,7 +2368,7 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
   const existing = await env.SKY_DB
     .prepare(
       `SELECT id
-       FROM accounts
+       FROM connected_accounts
        WHERE workspace_id = ?
          AND id = ?
        LIMIT 1`
@@ -2379,7 +2379,7 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
 
   await env.SKY_DB
     .prepare(
-      `INSERT OR IGNORE INTO accounts
+      `INSERT OR IGNORE INTO connected_accounts
          (id, workspace_id, label, email, status, provider, identifier, display_name, config_json, onboarding_complete, created_at, updated_at)
        VALUES
          (?, ?, ?, NULL, 'active', 'email_icloud', ?, ?, '{}', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
@@ -2720,7 +2720,7 @@ async function resolveAccountEmail(env: Env, workspaceId: string, accountId: str
   if (accountId.includes('@')) return accountId.toLowerCase();
 
   const row = await env.SKY_DB
-    .prepare(`SELECT email, identifier FROM accounts WHERE workspace_id = ? AND id = ? LIMIT 1`)
+    .prepare(`SELECT email, identifier FROM connected_accounts WHERE workspace_id = ? AND id = ? LIMIT 1`)
     .bind(workspaceId, accountId)
     .first<{ email: string | null; identifier: string | null }>();
   const candidate = row?.email || row?.identifier || null;
