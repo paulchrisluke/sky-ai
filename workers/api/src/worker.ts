@@ -7,6 +7,12 @@ import {
 } from '../../shared/auth';
 import { enforceCitationContract } from '../../shared/citation';
 import { RUN_EVENT_TYPES } from '../../shared/events';
+import {
+  disableProviderTemporarily,
+  getProviderHealthState,
+  isProviderTemporarilyDisabled,
+  markProviderHealthy
+} from '../../shared/providerHealth';
 
 interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
@@ -30,6 +36,7 @@ interface Env extends AccessAuthEnv {
   ENVIRONMENT?: string;
   WORKERS_AI_INPUT_COST_PER_1M?: string;
   WORKERS_AI_OUTPUT_COST_PER_1M?: string;
+  OPENAI_QUOTA_COOLDOWN_MINUTES?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -64,6 +71,7 @@ type SearchResult = {
 };
 
 const MIN_SEMANTIC_CITATION_SCORE = 0.65;
+const DEFAULT_OPENAI_QUOTA_COOLDOWN_MINUTES = 60;
 
 type UsageContext = {
   workspaceId?: string;
@@ -166,6 +174,10 @@ export default {
 
     if (request.method === 'GET' && url.pathname === '/ops/usage-stats') {
       return getUsageStats(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/ops/provider-health') {
+      return getProviderHealth(request, env);
     }
 
     if (request.method === 'GET' && url.pathname === '/ops/triage-stats') {
@@ -1901,6 +1913,38 @@ async function getUsageStats(request: Request, env: Env): Promise<Response> {
   });
 }
 
+async function getProviderHealth(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+
+  const openai = await getProviderHealthState(env.SKY_DB, 'openai');
+  const disabled = await isProviderTemporarilyDisabled(env.SKY_DB, 'openai');
+
+  const recentErrors = await env.SKY_DB
+    .prepare(
+      `SELECT
+         COUNT(*) AS total_errors,
+         SUM(CASE WHEN error_code = 'insufficient_quota' THEN 1 ELSE 0 END) AS insufficient_quota_errors
+       FROM model_usage_events
+       WHERE provider = 'openai'
+         AND status = 'error'
+         AND created_at >= datetime('now', 'utc', '-24 hours')`
+    )
+    .first<{ total_errors: number | null; insufficient_quota_errors: number | null }>();
+
+  return json({
+    ok: true,
+    provider: 'openai',
+    disabled,
+    state: openai,
+    last24h: {
+      totalErrors: Number(recentErrors?.total_errors || 0),
+      insufficientQuotaErrors: Number(recentErrors?.insufficient_quota_errors || 0)
+    },
+    generatedAt: new Date().toISOString()
+  });
+}
+
 async function assertWorkspacePermission(
   env: Env,
   principal: AuthPrincipal,
@@ -2919,6 +2963,38 @@ function minutesSince(isoDateTime: string | null): number | null {
   return Number(Math.max(0, (Date.now() - parsed) / 60000).toFixed(2));
 }
 
+function getOpenAiQuotaCooldownMinutes(env: Env): number {
+  const raw = Number(env.OPENAI_QUOTA_COOLDOWN_MINUTES || DEFAULT_OPENAI_QUOTA_COOLDOWN_MINUTES);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_OPENAI_QUOTA_COOLDOWN_MINUTES;
+  return Math.min(24 * 60, Math.trunc(raw));
+}
+
+function classifyGatewayError(responseStatus: number, responseText: string): { errorCode: string; shouldDisableOpenAi: boolean } {
+  const lower = responseText.toLowerCase();
+  if (lower.includes('insufficient_quota') || lower.includes('exceeded your current quota')) {
+    return { errorCode: 'insufficient_quota', shouldDisableOpenAi: true };
+  }
+  if (responseStatus === 401 || lower.includes('invalid_api_key') || lower.includes('unauthorized')) {
+    return { errorCode: 'unauthorized', shouldDisableOpenAi: false };
+  }
+  if (responseStatus === 429 || lower.includes('rate limit')) {
+    return { errorCode: 'rate_limited', shouldDisableOpenAi: false };
+  }
+  return { errorCode: `http_${responseStatus}`, shouldDisableOpenAi: false };
+}
+
+function shouldFallbackToWorkersAi(errorMessage: string): boolean {
+  const msg = errorMessage.toLowerCase();
+  return (
+    msg.includes('429') ||
+    msg.includes('401') ||
+    msg.includes('quota') ||
+    msg.includes('insufficient_quota') ||
+    msg.includes('unauthorized') ||
+    msg.includes('openai_provider_temporarily_disabled')
+  );
+}
+
 function hasSearchEmbeddingConfig(env: Env): boolean {
   return Boolean(env.OPENAI_API_KEY && env.AIG_ACCOUNT_ID && env.AIG_GATEWAY_ID);
 }
@@ -2926,13 +3002,28 @@ function hasSearchEmbeddingConfig(env: Env): boolean {
 async function embedSearchQuery(env: Env, query: string, usageContext?: UsageContext): Promise<number[]> {
   const target = parseVectorDimensions(env);
   if (hasSearchEmbeddingConfig(env)) {
+    const openAiDisabled = await isProviderTemporarilyDisabled(env.SKY_DB, 'openai');
+    if (openAiDisabled) {
+      await recordUsageEvent(env, {
+        workspaceId: usageContext?.workspaceId,
+        accountId: usageContext?.accountId,
+        runId: usageContext?.runId,
+        provider: 'openai',
+        model: env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
+        operation: usageContext?.operation || 'embedding_query',
+        endpoint: usageContext?.endpoint || '/search',
+        status: 'error',
+        errorCode: 'skipped_quota_cooldown'
+      });
+    } else {
     try {
       return normalizeVectorDimensions(await embedQueryViaGateway(env, query, usageContext), target);
     } catch (error) {
       const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-      if (!env.AI || (!msg.includes('429') && !msg.includes('401') && !msg.includes('quota') && !msg.includes('unauthorized'))) {
+      if (!env.AI || !shouldFallbackToWorkersAi(msg)) {
         throw error;
       }
+    }
     }
   }
   if (!env.AI) throw new Error('search_embedding_not_configured');
@@ -2957,6 +3048,7 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
   });
   if (!response.ok) {
     const text = await response.text();
+    const gatewayError = classifyGatewayError(response.status, text);
     await recordUsageEvent(env, {
       workspaceId: usageContext?.workspaceId,
       accountId: usageContext?.accountId,
@@ -2966,9 +3058,16 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
       operation: usageContext?.operation || 'embedding_query',
       endpoint: usageContext?.endpoint || '/search',
       status: 'error',
-      errorCode: `http_${response.status}`,
+      errorCode: gatewayError.errorCode,
       metadata: { preview: text.slice(0, 200) }
     });
+    if (gatewayError.shouldDisableOpenAi) {
+      await disableProviderTemporarily(env.SKY_DB, 'openai', {
+        minutes: getOpenAiQuotaCooldownMinutes(env),
+        reasonCode: gatewayError.errorCode,
+        lastError: text.slice(0, 1000)
+      });
+    }
     throw new Error(`search_embedding_failed_${response.status}:${text.slice(0, 300)}`);
   }
   const body = (await response.json()) as {
@@ -2991,6 +3090,7 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
     estimatedCostUsd: estimateUsageCostUsd('openai', env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small', requestUnits, 0, env),
     status: 'ok'
   });
+  await markProviderHealthy(env.SKY_DB, 'openai');
   return vector;
 }
 
@@ -3147,6 +3247,23 @@ async function callOpenAiChatViaGateway(
   if (!env.OPENAI_API_KEY || !env.AIG_ACCOUNT_ID || !env.AIG_GATEWAY_ID) {
     throw new Error('chat_not_configured');
   }
+  if (await isProviderTemporarilyDisabled(env.SKY_DB, 'openai')) {
+    await recordUsageEvent(env, {
+      workspaceId: usageContext?.workspaceId,
+      accountId: usageContext?.accountId,
+      runId: usageContext?.runId,
+      provider: 'openai',
+      model: env.OPENAI_MODEL || 'gpt-4o-mini',
+      operation: usageContext?.operation || 'chat_completion',
+      endpoint: usageContext?.endpoint || '/chat',
+      status: 'error',
+      errorCode: 'skipped_quota_cooldown'
+    });
+    if (env.AI) {
+      return await callWorkersAiChat(env, messages, responseFormat, usageContext);
+    }
+    throw new Error('openai_provider_temporarily_disabled');
+  }
 
   const gatewayUrl = `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/chat/completions`;
   const headers: Record<string, string> = {
@@ -3167,6 +3284,7 @@ async function callOpenAiChatViaGateway(
   });
   if (!response.ok) {
     const text = await response.text();
+    const gatewayError = classifyGatewayError(response.status, text);
     await recordUsageEvent(env, {
       workspaceId: usageContext?.workspaceId,
       accountId: usageContext?.accountId,
@@ -3176,9 +3294,16 @@ async function callOpenAiChatViaGateway(
       operation: usageContext?.operation || 'chat_completion',
       endpoint: usageContext?.endpoint || '/chat',
       status: 'error',
-      errorCode: `http_${response.status}`,
+      errorCode: gatewayError.errorCode,
       metadata: { preview: text.slice(0, 200) }
     });
+    if (gatewayError.shouldDisableOpenAi) {
+      await disableProviderTemporarily(env.SKY_DB, 'openai', {
+        minutes: getOpenAiQuotaCooldownMinutes(env),
+        reasonCode: gatewayError.errorCode,
+        lastError: text.slice(0, 1000)
+      });
+    }
     const msg = `chat_gateway_failed_${response.status}:${text.slice(0, 500)}`;
     if (env.AI && response.status >= 400) {
       try {
@@ -3210,6 +3335,7 @@ async function callOpenAiChatViaGateway(
     estimatedCostUsd: estimateUsageCostUsd('openai', env.OPENAI_MODEL || 'gpt-4o-mini', reqUnits, respUnits, env),
     status: 'ok'
   });
+  await markProviderHealthy(env.SKY_DB, 'openai');
   return text;
 }
 

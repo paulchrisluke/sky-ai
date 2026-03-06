@@ -1,4 +1,9 @@
 import { extractBearerToken, verifyAccessJwtClaims, type AccessAuthEnv } from '../../shared/auth';
+import {
+  disableProviderTemporarily,
+  isProviderTemporarilyDisabled,
+  markProviderHealthy
+} from '../../shared/providerHealth';
 
 interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
@@ -17,6 +22,7 @@ interface Env extends AccessAuthEnv {
   WORKERS_AI_EMBEDDING_MODEL?: string;
   VECTOR_DIMENSIONS?: string;
   ENVIRONMENT?: string;
+  OPENAI_QUOTA_COOLDOWN_MINUTES?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -52,6 +58,8 @@ type ThreadClassification = {
   classifier_version: string;
   reasons: string[];
 };
+
+const DEFAULT_OPENAI_QUOTA_COOLDOWN_MINUTES = 60;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -1011,6 +1019,26 @@ function computeBackoffMinutes(attempts: number): number {
   return Math.min(240, Math.max(1, 2 ** Math.min(attempts, 8)));
 }
 
+function getOpenAiQuotaCooldownMinutes(env: Env): number {
+  const raw = Number(env.OPENAI_QUOTA_COOLDOWN_MINUTES || DEFAULT_OPENAI_QUOTA_COOLDOWN_MINUTES);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_OPENAI_QUOTA_COOLDOWN_MINUTES;
+  return Math.min(24 * 60, Math.trunc(raw));
+}
+
+function classifyGatewayError(responseStatus: number, responseText: string): { errorCode: string; shouldDisableOpenAi: boolean } {
+  const lower = responseText.toLowerCase();
+  if (lower.includes('insufficient_quota') || lower.includes('exceeded your current quota')) {
+    return { errorCode: 'insufficient_quota', shouldDisableOpenAi: true };
+  }
+  if (responseStatus === 401 || lower.includes('invalid_api_key') || lower.includes('unauthorized')) {
+    return { errorCode: 'unauthorized', shouldDisableOpenAi: false };
+  }
+  if (responseStatus === 429 || lower.includes('rate limit')) {
+    return { errorCode: 'rate_limited', shouldDisableOpenAi: false };
+  }
+  return { errorCode: `http_${responseStatus}`, shouldDisableOpenAi: false };
+}
+
 function cleanEmailBody(raw: string): string {
   const headerNames =
     '(Return-Path|Received|MIME-Version|Content-Type|Content-Transfer-Encoding|X-[\\w-]+|Message-ID|Date|From|To|Cc|Bcc|Subject|Reply-To|Delivered-To|Authentication-Results|DKIM-Signature|ARC-[\\w-]+)';
@@ -1057,6 +1085,9 @@ function parseJsonObject(input: string | null | undefined): Record<string, unkno
 }
 
 async function callOpenAiEmbeddingsViaGateway(env: Env, chunks: string[]): Promise<number[][]> {
+  if (await isProviderTemporarilyDisabled(env.SKY_DB, 'openai')) {
+    throw new Error('openai_provider_temporarily_disabled');
+  }
   const gatewayUrl =
     `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/embeddings`;
 
@@ -1080,6 +1111,14 @@ async function callOpenAiEmbeddingsViaGateway(env: Env, chunks: string[]): Promi
 
   if (!response.ok) {
     const text = await response.text();
+    const gatewayError = classifyGatewayError(response.status, text);
+    if (gatewayError.shouldDisableOpenAi) {
+      await disableProviderTemporarily(env.SKY_DB, 'openai', {
+        minutes: getOpenAiQuotaCooldownMinutes(env),
+        reasonCode: gatewayError.errorCode,
+        lastError: text.slice(0, 1000)
+      });
+    }
     throw new Error(`Embedding request failed (${response.status}): ${text.slice(0, 500)}`);
   }
 
@@ -1088,6 +1127,7 @@ async function callOpenAiEmbeddingsViaGateway(env: Env, chunks: string[]): Promi
   if (vectors.length !== chunks.length || vectors.some((v) => v.length === 0)) {
     throw new Error('Embedding response did not match requested chunk count');
   }
+  await markProviderHealthy(env.SKY_DB, 'openai');
   return vectors;
 }
 
@@ -1095,6 +1135,9 @@ async function callOpenAiChatViaGateway(
   env: Env,
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
 ): Promise<string> {
+  if (await isProviderTemporarilyDisabled(env.SKY_DB, 'openai')) {
+    throw new Error('openai_provider_temporarily_disabled');
+  }
   const gatewayUrl =
     `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/chat/completions`;
 
@@ -1119,13 +1162,23 @@ async function callOpenAiChatViaGateway(
 
   if (!response.ok) {
     const text = await response.text();
+    const gatewayError = classifyGatewayError(response.status, text);
+    if (gatewayError.shouldDisableOpenAi) {
+      await disableProviderTemporarily(env.SKY_DB, 'openai', {
+        minutes: getOpenAiQuotaCooldownMinutes(env),
+        reasonCode: gatewayError.errorCode,
+        lastError: text.slice(0, 1000)
+      });
+    }
     throw new Error(`Briefing chat request failed (${response.status}): ${text.slice(0, 500)}`);
   }
 
   const body = (await response.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
   };
-  return body.choices?.[0]?.message?.content || '';
+  const text = body.choices?.[0]?.message?.content || '';
+  await markProviderHealthy(env.SKY_DB, 'openai');
+  return text;
 }
 
 async function callWorkersAiEmbeddings(env: Env, chunks: string[]): Promise<number[][]> {
@@ -1164,7 +1217,8 @@ function shouldFallbackToWorkersAi(errorMessage: string): boolean {
     msg.includes('insufficient_quota') ||
     msg.includes('embedding request failed (429)') ||
     msg.includes('embedding request failed (401)') ||
-    msg.includes('unauthorized')
+    msg.includes('unauthorized') ||
+    msg.includes('openai_provider_temporarily_disabled')
   );
 }
 

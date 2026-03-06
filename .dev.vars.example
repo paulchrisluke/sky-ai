@@ -14,6 +14,7 @@ CF_AIG_AUTH_TOKEN="replace-me"
 # Leave unset to report usage units with unknown (null) estimated cost for Workers AI rows.
 WORKERS_AI_INPUT_COST_PER_1M=""
 WORKERS_AI_OUTPUT_COST_PER_1M=""
+OPENAI_QUOTA_COOLDOWN_MINUTES="60"
 
 # Optional for scripts/validate-api-e2e.sh (Access service-token E2E checks):
 CF_ACCESS_CLIENT_ID="replace-me"
