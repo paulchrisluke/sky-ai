@@ -3419,6 +3419,17 @@ async function extractAndPersistProposals(
     hits: SearchResult[];
   }
 ): Promise<Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }>> {
+  const ownerRow = await env.SKY_DB
+    .prepare(
+      `SELECT display_name, label, email
+       FROM connected_accounts
+       WHERE workspace_id = ? AND id = ?
+       LIMIT 1`
+    )
+    .bind(input.workspaceId, input.accountId)
+    .first<{ display_name: string | null; label: string | null; email: string | null }>();
+  const accountOwnerName = deriveAccountOwnerName(ownerRow);
+
   const fullChunkByVectorId = await loadChunkTextByVectorIds(
     env,
     input.workspaceId,
@@ -3432,6 +3443,7 @@ async function extractAndPersistProposals(
       thread_id: h.thread_id,
       date: h.date,
       from: h.from,
+      recipient_name: extractContactName(h.from),
       subject: h.subject,
       excerpt: h.excerpt,
       body_text: truncateText(fullChunkByVectorId.get(h.chunk_id) || h.excerpt || '', 3000)
@@ -3445,13 +3457,14 @@ async function extractAndPersistProposals(
         {
           role: 'system',
           content:
-            'Given context and assistant answer, return JSON array of proposed actions only. Each item: type,title,draft_payload,risk_level,citations. If none, return []. For reply_email proposals, draft_payload MUST include suggested_response as a concrete professional email body the user could send. Do not copy or paraphrase the retrieval summary. Use the provided body_text context when available.'
+            `Given context and assistant answer, return JSON array of proposed actions only. Each item: type,title,draft_payload,risk_level,citations. If none, return []. Account owner name is "${accountOwnerName}" — use this exact name in the sender signature for reply_email drafts. Use the \\"from\\" or recipient_name fields in context for the greeting and do not invent placeholders. Never output placeholder text like [Client's Name] or [Your Name]. Always produce a concrete professional email body for reply_email proposals using the provided body_text.`
         },
         {
           role: 'user',
           content: JSON.stringify({
             query: input.query,
             answer: input.answer,
+            account_owner_name: accountOwnerName,
             context: compactContext
           })
         }
@@ -3517,9 +3530,12 @@ async function extractAndPersistProposals(
     const payload = objectOr(p.draft_payload) || {};
     if (type === 'reply_email') {
       const suggested = stringOr(payload.suggested_response);
-      if (!suggested || isSummaryLikeDraft(suggested)) {
+      const hasPlaceholder = suggested ? containsTemplatePlaceholder(suggested) : false;
+      if (!suggested || isSummaryLikeDraft(suggested) || hasPlaceholder) {
         delete payload.suggested_response;
         payload.needs_draft = true;
+      } else {
+        payload.needs_draft = false;
       }
     }
 
@@ -3598,14 +3614,56 @@ async function loadChunkTextByVectorIds(
 }
 
 function isSummaryLikeDraft(text: string): boolean {
-  const t = text.toLowerCase();
-  return (
-    t.includes('found relevant sources') ||
-    t.includes('top references') ||
-    t.includes('insufficient sources') ||
-    t.includes('i searched') ||
-    t.includes('citation')
-  );
+  const t = text.trim();
+  if (!t) return true;
+  const lower = t.toLowerCase();
+  const wordCount = t.split(/\s+/).length;
+  const hasGreeting = /\b(hi|hello|dear)\b/i.test(t);
+  const hasSignOff = /\b(best|thanks|regards|sincerely)\b/i.test(t);
+  const summaryPhrases = ['found relevant sources', 'top references', 'insufficient sources', 'i searched', 'citation'];
+  const containsSummary = summaryPhrases.some((phrase) => lower.includes(phrase));
+  if (wordCount < 25 && !hasGreeting) return true;
+  if (containsSummary && !(hasGreeting && hasSignOff)) return true;
+  return false;
+}
+
+function containsTemplatePlaceholder(text: string): boolean {
+  const placeholderPatterns = [/\[(?:your|client|sender|recipient)[^\]]*\]/i, /{{[^}]*name[^}]*}}/i];
+  return placeholderPatterns.some((pattern) => pattern.test(text));
+}
+
+function deriveAccountOwnerName(row?: { display_name: string | null; label: string | null; email: string | null }): string {
+  const pick = (value?: string | null): string | null => {
+    if (!value) return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+  const ordered = [pick(row?.display_name), pick(row?.label), normalizeEmailLocalPart(row?.email)];
+  return ordered.find((value): value is string => Boolean(value)) || 'Skyler Baird';
+}
+
+function normalizeEmailLocalPart(email?: string | null): string | null {
+  if (!email) return null;
+  const local = email.split('@')[0]?.trim();
+  if (!local) return null;
+  return local
+    .split(/[._-]/)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+}
+
+function extractContactName(contact?: string | null): string | null {
+  if (!contact) return null;
+  const trimmed = contact.trim();
+  if (!trimmed) return null;
+  const quoted = trimmed.match(/"([^\"]+)"/);
+  if (quoted) return quoted[1].trim();
+  const angle = trimmed.match(/([^<]+)</);
+  if (angle) return angle[1].trim();
+  if (trimmed.includes('@')) {
+    return normalizeEmailLocalPart(trimmed) || trimmed.split('@')[0];
+  }
+  return trimmed;
 }
 
 function json(payload: JsonRecord, status = 200): Response {
