@@ -37,8 +37,7 @@ max_retries = 5
 crons = ["*/15 * * * *", "0 * * * *"]
 
 [env.prod]
-workers_dev = false
-route = { pattern = "sky-ai-jobs.example.com/*", zone_name = "example.com" }
+workers_dev = true
 
 [env.prod.vars]
 ENVIRONMENT = "prod"

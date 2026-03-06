@@ -18,7 +18,7 @@ interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
   SKY_VECTORIZE: VectorizeIndex;
   AI?: {
-    run(model: string, input: Record<string, unknown>): Promise<unknown>;
+    run(model: string, input: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
   };
   CHAT_COORDINATOR: DurableObjectNamespace;
   WORKER_API_KEY?: string;
@@ -37,6 +37,7 @@ interface Env extends AccessAuthEnv {
   WORKERS_AI_INPUT_COST_PER_1M?: string;
   WORKERS_AI_OUTPUT_COST_PER_1M?: string;
   OPENAI_QUOTA_COOLDOWN_MINUTES?: string;
+  OPENAI_RATE_LIMIT_COOLDOWN_MINUTES?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -71,7 +72,8 @@ type SearchResult = {
 };
 
 const MIN_SEMANTIC_CITATION_SCORE = 0.65;
-const DEFAULT_OPENAI_QUOTA_COOLDOWN_MINUTES = 60;
+const DEFAULT_OPENAI_QUOTA_COOLDOWN_MINUTES = 1440;
+const DEFAULT_OPENAI_RATE_LIMIT_COOLDOWN_MINUTES = 5;
 
 type UsageContext = {
   workspaceId?: string;
@@ -2969,18 +2971,24 @@ function getOpenAiQuotaCooldownMinutes(env: Env): number {
   return Math.min(24 * 60, Math.trunc(raw));
 }
 
-function classifyGatewayError(responseStatus: number, responseText: string): { errorCode: string; shouldDisableOpenAi: boolean } {
+function getOpenAiRateLimitCooldownMinutes(env: Env): number {
+  const raw = Number(env.OPENAI_RATE_LIMIT_COOLDOWN_MINUTES || DEFAULT_OPENAI_RATE_LIMIT_COOLDOWN_MINUTES);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_OPENAI_RATE_LIMIT_COOLDOWN_MINUTES;
+  return Math.min(60, Math.trunc(raw));
+}
+
+function classifyGatewayError(responseStatus: number, responseText: string): { errorCode: string; disableReason: 'insufficient_quota' | 'rate_limited' | null } {
   const lower = responseText.toLowerCase();
   if (lower.includes('insufficient_quota') || lower.includes('exceeded your current quota')) {
-    return { errorCode: 'insufficient_quota', shouldDisableOpenAi: true };
+    return { errorCode: 'insufficient_quota', disableReason: 'insufficient_quota' };
   }
   if (responseStatus === 401 || lower.includes('invalid_api_key') || lower.includes('unauthorized')) {
-    return { errorCode: 'unauthorized', shouldDisableOpenAi: false };
+    return { errorCode: 'unauthorized', disableReason: null };
   }
   if (responseStatus === 429 || lower.includes('rate limit')) {
-    return { errorCode: 'rate_limited', shouldDisableOpenAi: false };
+    return { errorCode: 'rate_limited', disableReason: 'rate_limited' };
   }
-  return { errorCode: `http_${responseStatus}`, shouldDisableOpenAi: false };
+  return { errorCode: `http_${responseStatus}`, disableReason: null };
 }
 
 function shouldFallbackToWorkersAi(errorMessage: string): boolean {
@@ -2993,6 +3001,11 @@ function shouldFallbackToWorkersAi(errorMessage: string): boolean {
     msg.includes('unauthorized') ||
     msg.includes('openai_provider_temporarily_disabled')
   );
+}
+
+function workersAiGatewayOptions(env: Env): Record<string, unknown> | undefined {
+  if (!env.AIG_GATEWAY_ID) return undefined;
+  return { gateway: { id: env.AIG_GATEWAY_ID } };
 }
 
 function hasSearchEmbeddingConfig(env: Env): boolean {
@@ -3061,9 +3074,12 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
       errorCode: gatewayError.errorCode,
       metadata: { preview: text.slice(0, 200) }
     });
-    if (gatewayError.shouldDisableOpenAi) {
+    if (gatewayError.disableReason) {
       await disableProviderTemporarily(env.SKY_DB, 'openai', {
-        minutes: getOpenAiQuotaCooldownMinutes(env),
+        minutes:
+          gatewayError.disableReason === 'insufficient_quota'
+            ? getOpenAiQuotaCooldownMinutes(env)
+            : getOpenAiRateLimitCooldownMinutes(env),
         reasonCode: gatewayError.errorCode,
         lastError: text.slice(0, 1000)
       });
@@ -3096,7 +3112,7 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
 
 async function embedQueryViaWorkersAi(env: Env, query: string, usageContext?: UsageContext): Promise<number[]> {
   const model = env.WORKERS_AI_EMBEDDING_MODEL || '@cf/baai/bge-base-en-v1.5';
-  const result = (await env.AI!.run(model, { text: [query] })) as {
+  const result = (await env.AI!.run(model, { text: [query] }, workersAiGatewayOptions(env))) as {
     data?: number[] | number[][];
     shape?: number[];
   };
@@ -3297,9 +3313,12 @@ async function callOpenAiChatViaGateway(
       errorCode: gatewayError.errorCode,
       metadata: { preview: text.slice(0, 200) }
     });
-    if (gatewayError.shouldDisableOpenAi) {
+    if (gatewayError.disableReason) {
       await disableProviderTemporarily(env.SKY_DB, 'openai', {
-        minutes: getOpenAiQuotaCooldownMinutes(env),
+        minutes:
+          gatewayError.disableReason === 'insufficient_quota'
+            ? getOpenAiQuotaCooldownMinutes(env)
+            : getOpenAiRateLimitCooldownMinutes(env),
         reasonCode: gatewayError.errorCode,
         lastError: text.slice(0, 1000)
       });
@@ -3352,7 +3371,7 @@ async function callWorkersAiChat(
   const out = (await env.AI.run(model, {
     prompt: `${prompt}${suffix}`,
     max_tokens: 700
-  })) as { response?: string; result?: { response?: string } };
+  }, workersAiGatewayOptions(env))) as { response?: string; result?: { response?: string } };
   const text = out.response || out.result?.response || '';
   if (!text.trim()) throw new Error('workers_ai_chat_empty_response');
   const reqUnits = estimateTextUnits(prompt);
