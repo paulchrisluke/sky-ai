@@ -12,6 +12,8 @@ WORKERS_AI_EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
 VECTOR_DIMENSIONS = "1536"
 ACCESS_AUTH_ENABLED = "true"
 ALLOW_API_KEY_BYPASS = "true"
+BRIEFING_TIMEZONE = "America/New_York"
+BRIEFING_HOUR_LOCAL = "7"
 
 [[d1_databases]]
 binding = "SKY_DB"
@@ -33,7 +35,7 @@ max_batch_timeout = 5
 max_retries = 5
 
 [triggers]
-crons = ["*/15 * * * *", "0 13 * * *"]
+crons = ["*/15 * * * *", "0 * * * *"]
 
 [env.prod]
 workers_dev = false
@@ -48,6 +50,8 @@ WORKERS_AI_EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
 VECTOR_DIMENSIONS = "1536"
 ACCESS_AUTH_ENABLED = "true"
 ALLOW_API_KEY_BYPASS = "true"
+BRIEFING_TIMEZONE = "America/New_York"
+BRIEFING_HOUR_LOCAL = "7"
 
 [[env.prod.d1_databases]]
 binding = "SKY_DB"
@@ -69,4 +73,4 @@ max_batch_timeout = 5
 max_retries = 5
 
 [env.prod.triggers]
-crons = ["*/15 * * * *", "0 13 * * *"]
+crons = ["*/15 * * * *", "0 * * * *"]

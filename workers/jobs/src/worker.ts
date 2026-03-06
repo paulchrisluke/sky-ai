@@ -16,6 +16,8 @@ interface Env extends AccessAuthEnv {
   WORKERS_AI_EMBEDDING_MODEL?: string;
   VECTOR_DIMENSIONS?: string;
   ENVIRONMENT?: string;
+  BRIEFING_TIMEZONE?: string;
+  BRIEFING_HOUR_LOCAL?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -54,8 +56,8 @@ export default {
       return;
     }
 
-    if (controller.cron === '0 13 * * *') {
-      await enqueueSyncJob(env, 'daily_briefing', { source: 'jobs_cron' });
+    if (controller.cron === '0 * * * *') {
+      await maybeEnqueueMorningBriefing(env);
       await processEmbeddingJobs(env, 200);
     }
   },
@@ -70,6 +72,53 @@ export default {
     }
   }
 };
+
+async function maybeEnqueueMorningBriefing(env: Env): Promise<void> {
+  const timezone = env.BRIEFING_TIMEZONE || 'America/New_York';
+  const targetHour = Math.max(0, Math.min(23, Number(env.BRIEFING_HOUR_LOCAL || '7')));
+  const local = getLocalDateHour(timezone);
+  if (local.hour !== targetHour) return;
+
+  const existing = await env.SKY_DB
+    .prepare(
+      `SELECT id
+       FROM sync_jobs
+       WHERE job_type = 'daily_briefing'
+         AND json_extract(metadata_json, '$.source') = 'jobs_cron'
+         AND json_extract(metadata_json, '$.timezone') = ?
+         AND json_extract(metadata_json, '$.localDate') = ?
+       LIMIT 1`
+    )
+    .bind(timezone, local.date)
+    .first<{ id: string }>();
+
+  if (existing?.id) return;
+
+  await enqueueSyncJob(env, 'daily_briefing', {
+    source: 'jobs_cron',
+    timezone,
+    localDate: local.date,
+    localHour: local.hour
+  });
+}
+
+function getLocalDateHour(timezone: string): { date: string; hour: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false
+  }).formatToParts(new Date());
+
+  const get = (t: Intl.DateTimeFormatPartTypes): string => parts.find((x) => x.type === t)?.value || '';
+  const year = get('year');
+  const month = get('month');
+  const day = get('day');
+  const hour = Number(get('hour') || '0');
+  return { date: `${year}-${month}-${day}`, hour: Number.isFinite(hour) ? hour : 0 };
+}
 
 async function enqueueSyncJob(env: Env, jobType: string, metadata: JsonRecord): Promise<void> {
   await env.SKY_DB

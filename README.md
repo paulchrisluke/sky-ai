@@ -89,6 +89,9 @@ Use the auto-generated Worker domain by default:
 - In the current setup, iCloud app-specific password is used only by the Mac agent (`agent/.env`).
 - Worker secret `WORKER_API_KEY` is required for agent <-> Worker auth.
 - `OPENAI_API_KEY` is required for AI Gateway OpenAI-based triage/briefing and `/ai/test`.
+- Jobs worker daily briefing schedule vars:
+  - `BRIEFING_TIMEZONE` (default: `America/New_York`)
+  - `BRIEFING_HOUR_LOCAL` (default: `7`)
 
 ## Status While Waiting On Skyler OAuth/Claude Key
 
@@ -108,6 +111,7 @@ Use the auto-generated Worker domain by default:
 
 - `POST /ingest/mail-thread` never fails due to embedding quota; it stores mail and enqueues embedding work.
 - Cron drains embedding retries every 15 minutes.
+- Cron evaluates local-time daily briefing every hour and enqueues exactly once per local day at `BRIEFING_HOUR_LOCAL`.
 - You can manually trigger processing:
   - `curl -X POST "https://<worker>.workers.dev/embeddings/process" -H "authorization: Bearer <WORKER_API_KEY>"`
 
