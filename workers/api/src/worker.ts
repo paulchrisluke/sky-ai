@@ -2353,10 +2353,12 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
 
     await env.SKY_DB
       .prepare(
-        `INSERT OR IGNORE INTO accounts (id, workspace_id, label, email, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        `INSERT OR IGNORE INTO accounts
+           (id, workspace_id, label, email, status, provider, identifier, display_name, config_json, onboarding_complete, created_at, updated_at)
+         VALUES
+           (?, ?, ?, ?, 'active', 'email_icloud', ?, ?, '{}', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
       )
-      .bind(accountEmail, workspaceId, accountEmail, accountEmail)
+      .bind(accountEmail, workspaceId, accountEmail, accountEmail, accountEmail.toLowerCase(), accountEmail)
       .run();
 
     return accountEmail;
@@ -2377,10 +2379,12 @@ async function ensureWorkspaceAndAccount(env: Env, workspaceId: string, accountI
 
   await env.SKY_DB
     .prepare(
-      `INSERT OR IGNORE INTO accounts (id, workspace_id, label, email, status, created_at, updated_at)
-       VALUES (?, ?, ?, NULL, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      `INSERT OR IGNORE INTO accounts
+         (id, workspace_id, label, email, status, provider, identifier, display_name, config_json, onboarding_complete, created_at, updated_at)
+       VALUES
+         (?, ?, ?, NULL, 'active', 'email_icloud', ?, ?, '{}', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
     )
-    .bind(canonicalId, workspaceId, canonicalId)
+    .bind(canonicalId, workspaceId, canonicalId, canonicalId, canonicalId)
     .run();
   return canonicalId;
 }
@@ -2716,10 +2720,11 @@ async function resolveAccountEmail(env: Env, workspaceId: string, accountId: str
   if (accountId.includes('@')) return accountId.toLowerCase();
 
   const row = await env.SKY_DB
-    .prepare(`SELECT email FROM accounts WHERE workspace_id = ? AND id = ? LIMIT 1`)
+    .prepare(`SELECT email, identifier FROM accounts WHERE workspace_id = ? AND id = ? LIMIT 1`)
     .bind(workspaceId, accountId)
-    .first<{ email: string | null }>();
-  return row?.email ? row.email.toLowerCase() : null;
+    .first<{ email: string | null; identifier: string | null }>();
+  const candidate = row?.email || row?.identifier || null;
+  return candidate ? candidate.toLowerCase() : null;
 }
 
 function buildCitationEnforcedAnswer(
