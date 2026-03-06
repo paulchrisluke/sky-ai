@@ -3418,7 +3418,9 @@ async function extractAndPersistProposals(
     answer: string;
     hits: SearchResult[];
   }
-): Promise<Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }>> {
+): Promise<
+  Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string; _source?: 'llm' | 'fallback' }>
+> {
   const ownerRow = await env.SKY_DB
     .prepare(
       `SELECT display_name, label, email
@@ -3495,28 +3497,21 @@ Return a JSON array where each item includes type,title,risk_level,citations. Fo
     reply_body?: string;
     risk_level?: string;
     citations?: string[];
+    _source?: 'llm' | 'fallback';
   }> = [];
   try {
     const parsed = JSON.parse(sanitizedRaw) as unknown;
     if (Array.isArray(parsed)) {
-      proposalsIn = parsed as typeof proposalsIn;
+      proposalsIn = (parsed as typeof proposalsIn).map((proposal) => ({ ...proposal, _source: 'llm' }));
     } else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { proposals?: unknown[] }).proposals)) {
-      proposalsIn = (parsed as { proposals: typeof proposalsIn }).proposals;
+      proposalsIn = (parsed as { proposals: typeof proposalsIn }).proposals.map((proposal) => ({ ...proposal, _source: 'llm' }));
     }
   } catch {
     proposalsIn = [];
   }
 
-  const existingMessageIds = collectProposalMessageIds(proposalsIn);
-  const actionableHits = input.hits.filter((hit) => isLikelyActionable(hit));
-  for (const hit of actionableHits) {
-    if (!existingMessageIds.has(hit.message_id)) {
-      proposalsIn.push(createFallbackReplyProposal(hit, accountOwnerName));
-      existingMessageIds.add(hit.message_id);
-    }
-  }
-
-  const out: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }> = [];
+  const out: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string; _source?: 'llm' | 'fallback' }> =
+    [];
   for (const p of proposalsIn.slice(0, 10)) {
     const type = stringOr(p.type) || 'create_task';
     const title = stringOr(p.title) || 'Untitled proposal';
@@ -3583,7 +3578,8 @@ Return a JSON array where each item includes type,title,risk_level,citations. Fo
       .bind(crypto.randomUUID(), proposalId, 'system', JSON.stringify({ type, title, riskLevel }))
       .run();
 
-    out.push({ id: proposalId, type, title, draft_payload_json: payload, risk_level: riskLevel });
+    const source = (p as { _source?: 'llm' | 'fallback' })._source || 'llm';
+    out.push({ id: proposalId, type, title, draft_payload_json: payload, risk_level: riskLevel, _source: source });
   }
   return out;
 }
@@ -3731,19 +3727,6 @@ function sanitizeReplyBody(body: string | null | undefined, ownerName: string): 
   return hasOwner ? trimmed : `${trimmed.trimEnd()}\n\n${signOff}`;
 }
 
-function buildDeterministicAckBody(hit: SearchResult, ownerName: string): string {
-  const rawRecipient = extractContactName(hit.from);
-  const firstName = rawRecipient ? rawRecipient.split(/\s+/)[0] : 'there';
-  const topic = sanitizeAckTopic(hit.subject);
-  return `Hi ${firstName},\n\nThanks for your note about ${topic}. I'll review and circle back shortly with next steps.\n\nBest,\n${ownerName}`;
-}
-
-function sanitizeAckTopic(subject?: string | null): string {
-  if (!subject) return 'this request';
-  const normalized = subject.replace(/^re:\s*/i, '').trim();
-  return normalized.length > 0 ? normalized : 'this request';
-}
-
 function stripJsonCodeFence(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.startsWith('```')) {
@@ -3751,39 +3734,6 @@ function stripJsonCodeFence(raw: string): string {
     return withoutFence.trim();
   }
   return raw;
-}
-
-function collectProposalMessageIds(
-  proposals: Array<{ citations?: string[]; draft_payload?: JsonRecord; draft_payload_json?: JsonRecord }>
-): Set<string> {
-  const ids = new Set<string>();
-  for (const proposal of proposals) {
-    const citationIds = Array.isArray(proposal.citations) ? proposal.citations : [];
-    citationIds.forEach((id) => ids.add(String(id)));
-    const payload = proposal.draft_payload_json || proposal.draft_payload;
-    const payloadMessageId = typeof payload?.message_id === 'string' ? payload.message_id : null;
-    if (payloadMessageId) ids.add(payloadMessageId);
-  }
-  return ids;
-}
-
-function createFallbackReplyProposal(hit: SearchResult, ownerName: string) {
-  const deterministicBody = buildDeterministicAckBody(hit, ownerName);
-  return {
-    type: 'reply_email',
-    title: `Draft reply for: ${hit.subject || 'Follow up required'}`,
-    draft_payload: {
-      to: hit.from,
-      subject: formatReplySubject(hit.subject),
-      thread_id: hit.thread_id,
-      message_id: hit.message_id,
-      body: deterministicBody,
-      needs_draft: false
-    },
-    risk_level: hit.score >= 0.75 ? 'high' : 'med',
-    citations: [hit.message_id],
-    reply_body: deterministicBody
-  };
 }
 
 function json(payload: JsonRecord, status = 200): Response {
