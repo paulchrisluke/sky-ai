@@ -10,6 +10,11 @@ WORKER_API_KEY="replace-me"
 MAILBOX_SKYLERBAIRD_ME_COM="SkylerBaird@me.com"
 CF_AIG_AUTH_TOKEN="replace-me"
 
+# Optional per-1M unit pricing for Workers AI cost estimation.
+# Leave unset to report usage units with unknown (null) estimated cost for Workers AI rows.
+WORKERS_AI_INPUT_COST_PER_1M=""
+WORKERS_AI_OUTPUT_COST_PER_1M=""
+
 # Optional for scripts/validate-api-e2e.sh (Access service-token E2E checks):
 CF_ACCESS_CLIENT_ID="replace-me"
 CF_ACCESS_CLIENT_SECRET="replace-me"

@@ -148,6 +148,9 @@ Use the auto-generated Worker domain by default:
   - `GET /ops/ingest-stats?workspaceId=...&accountId=...`
   - `GET /ops/queue-stats?workspaceId=...&accountId=...`
   - `GET /ops/extraction-stats?workspaceId=...&accountId=...`
+  - `GET /ops/usage-stats?workspaceId=...&days=7` (workspace aggregate)
+  - `GET /ops/usage-stats?workspaceId=...&accountId=...&days=7` (single inbox)
+  - Add `&includeErrors=true` to include failed fallback attempts in usage rows.
   - `GET /ops/triage-stats?workspaceId=...&accountId=...`
   - Triage data is persisted per thread in `email_threads.classification_json`
 
@@ -164,6 +167,13 @@ Current strict policy:
 
 - `api` worker requires Access JWT (`ACCESS_AUTH_ENABLED="true"` in `wrangler.api.toml`)
 - `ingest` and `jobs` also run with `ACCESS_AUTH_ENABLED="true"`; machine traffic uses API key bypass (`ALLOW_API_KEY_BYPASS="true"`)
+
+Optional Worker vars for Workers AI cost estimation:
+
+- `WORKERS_AI_INPUT_COST_PER_1M`
+- `WORKERS_AI_OUTPUT_COST_PER_1M`
+
+If unset, Workers AI usage still records call/unit counts but estimated cost is left unknown (`NULL`), while OpenAI model pricing is computed at write-time from built-in registry.
 
 Set Worker vars for `api` (dev and prod):
 

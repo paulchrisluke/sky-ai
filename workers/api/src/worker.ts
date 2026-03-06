@@ -28,6 +28,8 @@ interface Env extends AccessAuthEnv {
   WORKERS_AI_CHAT_MODEL?: string;
   VECTOR_DIMENSIONS?: string;
   ENVIRONMENT?: string;
+  WORKERS_AI_INPUT_COST_PER_1M?: string;
+  WORKERS_AI_OUTPUT_COST_PER_1M?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -1808,38 +1810,53 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
 }
 
 async function getUsageStats(request: Request, env: Env): Promise<Response> {
-  const scope = await resolveOpsScope(request, env);
-  if (!scope.ok) return scope.response;
-  const { workspaceId, accountId } = scope;
   const url = new URL(request.url);
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+  const workspaceId = url.searchParams.get('workspaceId') || 'default';
+  const accountId = (url.searchParams.get('accountId') || '').trim() || null;
+  if (accountId) {
+    const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+    if (!permission.ok) return permission.response;
+  } else {
+    const permission = await assertWorkspacePermission(env, auth.principal, workspaceId);
+    if (!permission.ok) return permission.response;
+  }
+
   const daysRaw = Number(url.searchParams.get('days') || '7');
   const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(90, Math.trunc(daysRaw)) : 7;
+  const includeErrors = (url.searchParams.get('includeErrors') || '').toLowerCase() === 'true';
 
   const rows = await env.SKY_DB
     .prepare(
       `SELECT provider,
               model,
               operation,
+              status,
               COUNT(*) AS calls,
               COALESCE(SUM(request_units), 0) AS request_units,
               COALESCE(SUM(response_units), 0) AS response_units,
-              COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd
+              COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
+              SUM(CASE WHEN estimated_cost_usd IS NOT NULL THEN 1 ELSE 0 END) AS cost_known_calls
        FROM model_usage_events
        WHERE workspace_id = ?
-         AND COALESCE(account_id, '') = ?
+         AND (? IS NULL OR COALESCE(account_id, '') = ?)
+         AND (? = 1 OR status = 'ok')
          AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-' || ? || ' days')
-       GROUP BY provider, model, operation
+       GROUP BY provider, model, operation, status
        ORDER BY estimated_cost_usd DESC, calls DESC`
     )
-    .bind(workspaceId, accountId, String(days))
+    .bind(workspaceId, accountId, accountId, includeErrors ? 1 : 0, String(days))
     .all<{
       provider: string;
       model: string;
       operation: string;
+      status: string;
       calls: number | string;
       request_units: number | string;
       response_units: number | string;
       estimated_cost_usd: number | string;
+      cost_known_calls: number | string;
     }>();
 
   const totals = (rows.results || []).reduce(
@@ -1848,9 +1865,11 @@ async function getUsageStats(request: Request, env: Env): Promise<Response> {
       acc.requestUnits += Number(row.request_units || 0);
       acc.responseUnits += Number(row.response_units || 0);
       acc.estimatedCostUsd += Number(row.estimated_cost_usd || 0);
+      acc.costKnownCalls += Number(row.cost_known_calls || 0);
+      if ((row.status || 'ok') === 'error') acc.errorCalls += Number(row.calls || 0);
       return acc;
     },
-    { calls: 0, requestUnits: 0, responseUnits: 0, estimatedCostUsd: 0 }
+    { calls: 0, requestUnits: 0, responseUnits: 0, estimatedCostUsd: 0, costKnownCalls: 0, errorCalls: 0 }
   );
 
   return json({
@@ -1858,23 +1877,51 @@ async function getUsageStats(request: Request, env: Env): Promise<Response> {
     workspaceId,
     accountId,
     windowDays: days,
+    includeErrors,
     totals: {
       calls: totals.calls,
       requestUnits: totals.requestUnits,
       responseUnits: totals.responseUnits,
-      estimatedCostUsd: Number(totals.estimatedCostUsd.toFixed(6))
+      estimatedCostUsd: Number(totals.estimatedCostUsd.toFixed(6)),
+      costKnownCalls: totals.costKnownCalls,
+      errorCalls: totals.errorCalls
     },
     breakdown: (rows.results || []).map((row) => ({
       provider: row.provider,
       model: row.model,
       operation: row.operation,
+      status: row.status || 'ok',
       calls: Number(row.calls || 0),
       requestUnits: Number(row.request_units || 0),
       responseUnits: Number(row.response_units || 0),
-      estimatedCostUsd: Number(Number(row.estimated_cost_usd || 0).toFixed(6))
+      estimatedCostUsd: Number(Number(row.estimated_cost_usd || 0).toFixed(6)),
+      costKnownCalls: Number(row.cost_known_calls || 0)
     })),
     generatedAt: new Date().toISOString()
   });
+}
+
+async function assertWorkspacePermission(
+  env: Env,
+  principal: AuthPrincipal,
+  workspaceId: string
+): Promise<{ ok: true } | { ok: false; response: Response }> {
+  if (principal.type === 'service' || principal.type === 'anonymous') return { ok: true };
+
+  const row = await env.SKY_DB
+    .prepare(
+      `SELECT id
+       FROM access_subject_permissions
+       WHERE subject = ?
+         AND workspace_id = ?
+         AND status = 'active'
+       LIMIT 1`
+    )
+    .bind(principal.subject, workspaceId)
+    .first<{ id: string }>();
+
+  if (!row) return { ok: false, response: json({ ok: false, error: 'forbidden' }, 403) };
+  return { ok: true };
 }
 
 async function getTriageStats(request: Request, env: Env): Promise<Response> {
@@ -2814,19 +2861,43 @@ function estimateTextUnits(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-function estimateUsageCostUsd(provider: string, model: string, requestUnits: number, responseUnits: number): number | null {
+function estimateUsageCostUsd(
+  provider: string,
+  model: string,
+  requestUnits: number,
+  responseUnits: number,
+  env: Env
+): number | null {
+  const pricing = getModelPricing(provider, model, env);
+  if (!pricing) return null;
+  const input = (Math.max(0, requestUnits) / 1_000_000) * pricing.inputPer1m;
+  const output = (Math.max(0, responseUnits) / 1_000_000) * pricing.outputPer1m;
+  return Number((input + output).toFixed(8));
+}
+
+function getModelPricing(
+  provider: string,
+  model: string,
+  env: Env
+): { inputPer1m: number; outputPer1m: number } | null {
   const p = provider.toLowerCase();
   const m = model.toLowerCase();
-  if (p !== 'openai') return 0;
+  if (p === 'openai') {
+    if (m === 'text-embedding-3-small') return { inputPer1m: 0.02, outputPer1m: 0 };
+    if (m === 'gpt-4o-mini') return { inputPer1m: 0.15, outputPer1m: 0.6 };
+    if (m === 'gpt-4o') return { inputPer1m: 2.5, outputPer1m: 10.0 };
+    return null;
+  }
 
-  if (m === 'text-embedding-3-small') {
-    return Number(((requestUnits / 1_000_000) * 0.02).toFixed(8));
+  if (p === 'workers_ai') {
+    const inCost = Number(env.WORKERS_AI_INPUT_COST_PER_1M || '');
+    const outCost = Number(env.WORKERS_AI_OUTPUT_COST_PER_1M || '');
+    if (Number.isFinite(inCost) && Number.isFinite(outCost) && (inCost > 0 || outCost > 0)) {
+      return { inputPer1m: Math.max(0, inCost), outputPer1m: Math.max(0, outCost) };
+    }
+    return null;
   }
-  if (m === 'gpt-4o-mini') {
-    const input = (requestUnits / 1_000_000) * 0.15;
-    const output = (responseUnits / 1_000_000) * 0.6;
-    return Number((input + output).toFixed(8));
-  }
+
   return null;
 }
 
@@ -2917,7 +2988,7 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
     endpoint: usageContext?.endpoint || '/search',
     requestUnits,
     responseUnits: 0,
-    estimatedCostUsd: estimateUsageCostUsd('openai', env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small', requestUnits, 0),
+    estimatedCostUsd: estimateUsageCostUsd('openai', env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small', requestUnits, 0, env),
     status: 'ok'
   });
   return vector;
@@ -2940,7 +3011,7 @@ async function embedQueryViaWorkersAi(env: Env, query: string, usageContext?: Us
     endpoint: usageContext?.endpoint || '/search',
     requestUnits: approxUnits,
     responseUnits: 0,
-    estimatedCostUsd: estimateUsageCostUsd('workers_ai', model, approxUnits, 0),
+    estimatedCostUsd: estimateUsageCostUsd('workers_ai', model, approxUnits, 0, env),
     status: 'ok'
   });
 
@@ -3136,7 +3207,7 @@ async function callOpenAiChatViaGateway(
     endpoint: usageContext?.endpoint || '/chat',
     requestUnits: reqUnits,
     responseUnits: respUnits,
-    estimatedCostUsd: estimateUsageCostUsd('openai', env.OPENAI_MODEL || 'gpt-4o-mini', reqUnits, respUnits),
+    estimatedCostUsd: estimateUsageCostUsd('openai', env.OPENAI_MODEL || 'gpt-4o-mini', reqUnits, respUnits, env),
     status: 'ok'
   });
   return text;
@@ -3170,7 +3241,7 @@ async function callWorkersAiChat(
     endpoint: usageContext?.endpoint || '/chat',
     requestUnits: reqUnits,
     responseUnits: respUnits,
-    estimatedCostUsd: estimateUsageCostUsd('workers_ai', model, reqUnits, respUnits),
+    estimatedCostUsd: estimateUsageCostUsd('workers_ai', model, reqUnits, respUnits, env),
     status: 'ok'
   });
   return text.trim();
