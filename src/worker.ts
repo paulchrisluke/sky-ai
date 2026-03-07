@@ -4,6 +4,9 @@ interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
   SKY_ARTIFACTS: R2Bucket;
   SKY_VECTORIZE: VectorizeIndex;
+  AI?: {
+    run(model: string, input: Record<string, unknown>): Promise<unknown>;
+  };
   EMBEDDING_QUEUE?: QueueBinding;
   WORKER_API_KEY?: string;
   ACCESS_AUTH_ENABLED?: string;
@@ -36,6 +39,22 @@ type ThreadClassification = {
   reasons: string[];
 };
 
+type EmailEntity = {
+  entity_type: 'invoice' | 'contract' | 'payment' | 'appointment' | 'alert' | 'request' | 'correspondence';
+  direction: 'ar' | 'ap' | 'inbound' | 'outbound' | 'unknown';
+  counterparty_name: string | null;
+  counterparty_email: string | null;
+  amount_cents: number | null;
+  currency: string | null;
+  due_date: string | null;
+  reference_number: string | null;
+  status: 'open' | 'paid' | 'overdue' | 'pending' | 'requires_action' | 'unknown';
+  action_required: boolean;
+  action_description: string | null;
+  risk_level: 'low' | 'medium' | 'high' | 'critical';
+  confidence: number;
+};
+
 type EmbeddingQueueMessage = {
   sourceRecordId: string;
 };
@@ -63,6 +82,22 @@ export default {
       return queueBackfillRun(request, env);
     }
 
+    if (request.method === 'POST' && url.pathname === '/ingest/rehydrate-chunks') {
+      if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
+      return rehydrateChunksFromArtifacts(request, env);
+    }
+
+    // New: backfill entity extraction for existing messages
+    if (request.method === 'POST' && url.pathname === '/ingest/extract-entities') {
+      if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
+      return backfillEntityExtraction(request, env);
+    }
+
+    if (request.method === 'POST' && url.pathname === '/ingest/resolve-entities') {
+      if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
+      return resolveEntityDuplicates(request, env);
+    }
+
     if (request.method === 'POST' && url.pathname === '/mail/send') {
       if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
       return queueOutboundMail(request, env);
@@ -82,6 +117,433 @@ export default {
   }
 };
 
+// ─── Entity Extraction ────────────────────────────────────────────────────────
+
+async function extractEmailEntities(
+  env: Env,
+  input: {
+    messageId: string;
+    threadId: string | null;
+    workspaceId: string;
+    accountId: string;
+    accountEmail: string;
+    subject: string;
+    bodyText: string;
+    fromAddresses: NormalizedAddress[];
+    toAddresses: NormalizedAddress[];
+    sentAt: string | null;
+    direction: 'inbound' | 'outbound' | 'unknown';
+  }
+): Promise<EmailEntity | null> {
+  if (!hasAiGatewayConfig(env) && !env.AI) return null;
+  if (!input.bodyText.trim() && !input.subject.trim()) return null;
+
+  const prompt = `You are a precise email entity extractor. Extract structured facts from this email for the account owner: ${input.accountEmail}
+
+EMAIL:
+Subject: ${input.subject}
+From: ${input.fromAddresses.map(a => a.name ? `${a.name} <${a.email}>` : a.email).join(', ')}
+To: ${input.toAddresses.map(a => a.name ? `${a.name} <${a.email}>` : a.email).join(', ')}
+Date: ${input.sentAt || 'unknown'}
+Direction: ${input.direction}
+Body: ${input.bodyText.slice(0, 3000)}
+
+Respond with ONLY a JSON object. No explanation, no markdown, no code fences.
+
+{
+  "entity_type": "invoice|contract|payment|appointment|alert|request|correspondence",
+  "direction": "ar|ap|inbound|outbound|unknown",
+  "counterparty_name": "string or null",
+  "counterparty_email": "string or null",
+  "amount_cents": integer_or_null,
+  "currency": "USD|GBP|EUR or null",
+  "due_date": "YYYY-MM-DD or null",
+  "reference_number": "string or null",
+  "status": "open|paid|overdue|pending|requires_action|unknown",
+  "action_required": true_or_false,
+  "action_description": "one sentence describing exactly what action the account owner needs to take, or null",
+  "risk_level": "low|medium|high|critical",
+  "confidence": 0.0_to_1.0
+}
+
+Rules:
+- The account owner is ${input.accountEmail}. Reason about ALL directions from THEIR perspective.
+- direction "ar" = someone owes the account owner money, or the account owner expects to be paid.
+- direction "ap" = the account owner owes someone else money, or needs to make a payment.
+- direction "inbound" = non-financial inbound mail where no money changes hands.
+- direction "outbound" = mail sent by the account owner with no financial obligation.
+- If the email discusses an ongoing payment arrangement where the account owner receives money, that is "ar".
+- If the subject contains "Re:" check the snippet carefully — the account owner may be the one being paid.
+- amount_cents: integer cents ($50,000 = 5000000). Extract even if informal ("we've been doing 50K").
+- action_required: true if the account owner needs to respond, follow up, confirm, or take any step.
+- For negotiation or agreement threads, action_required is almost always true.
+- risk_level "high" if money is at stake and no response has been confirmed.
+- Marketing, newsletters, automated notifications with no money and no required response: entity_type correspondence, action_required false.`;
+
+  let raw: string;
+  try {
+    raw = await callOpenAiChatViaGateway(env, [{ role: 'user', content: prompt }], 400);
+  } catch (openAiError) {
+    const msg = openAiError instanceof Error ? openAiError.message : String(openAiError);
+    const lower = msg.toLowerCase();
+    const isQuotaOrRate =
+      lower.includes('429') ||
+      lower.includes('insufficient_quota') ||
+      lower.includes('rate_limited') ||
+      lower.includes('temporarily_disabled');
+    if (isQuotaOrRate && env.AI) {
+      const result = (await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 400,
+        response_format: { type: 'json_object' }
+      })) as { response?: string; result?: { response?: string } };
+      raw = (result.response || result.result?.response || '').trim();
+      if (!raw) throw new Error('workers_ai_entity_extraction_empty_response');
+    } else if (env.AI) {
+      const result = (await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 400,
+        response_format: { type: 'json_object' }
+      })) as { response?: string; result?: { response?: string } };
+      raw = (result.response || result.result?.response || '').trim();
+      if (!raw) throw openAiError;
+    } else {
+      throw openAiError;
+    }
+  }
+
+  const parsed = JSON.parse(stripJsonCodeFence(raw)) as Partial<EmailEntity>;
+  const counterpartyAddresses = input.direction === 'inbound' ? input.fromAddresses : input.toAddresses;
+
+  return {
+    entity_type: validateEntityType(parsed.entity_type) ?? 'correspondence',
+    direction: validateDirection(parsed.direction) ?? (input.direction === 'inbound' ? 'inbound' : 'outbound'),
+    counterparty_name: stringOrNull(parsed.counterparty_name) ?? counterpartyAddresses[0]?.name ?? null,
+    counterparty_email: stringOrNull(parsed.counterparty_email) ?? counterpartyAddresses[0]?.email ?? null,
+    amount_cents: numberOrNull(parsed.amount_cents),
+    currency: stringOrNull(parsed.currency),
+    due_date: stringOrNull(parsed.due_date),
+    reference_number: stringOrNull(parsed.reference_number),
+    status: validateStatus(parsed.status) ?? 'unknown',
+    action_required: Boolean(parsed.action_required),
+    action_description: stringOrNull(parsed.action_description),
+    risk_level: validateRiskLevel(parsed.risk_level) ?? 'low',
+    confidence: Math.min(1, Math.max(0, Number(parsed.confidence || 0.5)))
+  };
+}
+
+async function persistEmailEntity(
+  env: Env,
+  input: {
+    messageId: string;
+    threadId: string | null;
+    workspaceId: string;
+    accountId: string;
+    entity: EmailEntity;
+  }
+): Promise<void> {
+  try {
+    await env.SKY_DB
+      .prepare(
+        `INSERT OR REPLACE INTO email_entities
+         (id, workspace_id, account_id, message_id, thread_id, entity_type, direction,
+          counterparty_name, counterparty_email, amount_cents, currency, due_date,
+          reference_number, status, action_required, action_description, risk_level,
+          confidence, raw_json, extracted_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      )
+      .bind(
+        crypto.randomUUID(),
+        input.workspaceId,
+        input.accountId,
+        input.messageId,
+        input.threadId,
+        input.entity.entity_type,
+        input.entity.direction,
+        input.entity.counterparty_name,
+        input.entity.counterparty_email,
+        input.entity.amount_cents,
+        input.entity.currency,
+        input.entity.due_date,
+        input.entity.reference_number,
+        input.entity.status,
+        input.entity.action_required ? 1 : 0,
+        input.entity.action_description,
+        input.entity.risk_level,
+        input.entity.confidence,
+        JSON.stringify(input.entity)
+      )
+      .run();
+  } catch {
+    // entity extraction must never break the ingest path
+  }
+}
+
+async function backfillEntityExtraction(request: Request, env: Env): Promise<Response> {
+  const payload = (await request.json()) as JsonRecord;
+  const workspaceId = stringOr(payload.workspaceId) || 'default';
+  const accountId = stringOr(payload.accountId);
+  const limit = Math.max(1, Math.min(numberOr(payload.limit) || 100, 500));
+  const dryRun = payload.dryRun === true;
+
+  if (!accountId) return json({ ok: false, error: 'accountId is required' }, 400);
+
+  // Find messages that don't yet have extracted entities
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT
+         em.id AS message_id,
+         em.thread_id,
+         em.workspace_id,
+         em.account_id,
+         em.account_email,
+         em.subject,
+         em.snippet,
+         em.direction,
+         em.sent_at,
+         em.from_json,
+         em.to_json,
+         a.r2_key
+       FROM email_messages em
+       LEFT JOIN email_entities ee ON ee.message_id = em.id
+       LEFT JOIN artifacts a ON a.id = em.artifact_id
+       WHERE em.workspace_id = ?
+         AND em.account_id = ?
+         AND ee.id IS NULL
+       ORDER BY datetime(COALESCE(em.sent_at, em.created_at)) DESC
+       LIMIT ?`
+    )
+    .bind(workspaceId, accountId, limit)
+    .all<{
+      message_id: string;
+      thread_id: string | null;
+      workspace_id: string;
+      account_id: string;
+      account_email: string | null;
+      subject: string | null;
+      snippet: string | null;
+      direction: string | null;
+      sent_at: string | null;
+      from_json: string | null;
+      to_json: string | null;
+      r2_key: string | null;
+    }>();
+
+  let extracted = 0;
+  let skipped = 0;
+  const errors: Array<{ messageId: string; error: string }> = [];
+
+  for (const row of rows.results || []) {
+    let bodyText = row.snippet || '';
+
+    // Try to get richer body text from the artifact
+    if (row.r2_key) {
+      try {
+        const obj = await env.SKY_ARTIFACTS.get(row.r2_key);
+        if (obj) {
+          const artifactPayload = JSON.parse(await obj.text()) as JsonRecord;
+          const resolved = resolveBestMessageText(artifactPayload, row.subject || '');
+          if (resolved) bodyText = resolved;
+        }
+      } catch {
+        // fall through to snippet
+      }
+    }
+
+    if (!bodyText.trim() && !row.subject?.trim()) {
+      skipped += 1;
+      continue;
+    }
+
+    if (!dryRun) {
+      try {
+        const fromAddresses = parseAddressJson(row.from_json);
+        const toAddresses = parseAddressJson(row.to_json);
+        const direction = (row.direction as 'inbound' | 'outbound' | 'unknown') || 'unknown';
+
+        const entity = await extractEmailEntities(env, {
+          messageId: row.message_id,
+          threadId: row.thread_id,
+          workspaceId: row.workspace_id,
+          accountId: row.account_id,
+          accountEmail: row.account_email || row.account_id,
+          subject: row.subject || '',
+          bodyText,
+          fromAddresses,
+          toAddresses,
+          sentAt: row.sent_at,
+          direction
+        });
+
+        if (entity) {
+          await persistEmailEntity(env, {
+            messageId: row.message_id,
+            threadId: row.thread_id,
+            workspaceId: row.workspace_id,
+            accountId: row.account_id,
+            entity
+          });
+          extracted += 1;
+        } else {
+          skipped += 1;
+        }
+      } catch (error) {
+        skipped += 1;
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push({ messageId: row.message_id, error: message.slice(0, 400) });
+      }
+    } else {
+      extracted += 1; // dry run counts as would-extract
+    }
+  }
+
+  return json({
+    ok: true,
+    scanned: (rows.results || []).length,
+    extracted,
+    skipped,
+    dryRun,
+    errors: errors.slice(0, 20)
+  });
+}
+
+async function resolveEntityDuplicates(request: Request, env: Env): Promise<Response> {
+  const payload = (await request.json()) as JsonRecord;
+  const workspaceId = stringOr(payload.workspaceId) || 'default';
+  const accountId = stringOr(payload.accountId);
+  const dryRun = payload.dryRun === true;
+  const limit = Math.max(1, Math.min(numberOr(payload.limit) || 100, 500));
+  const amountCents = numberOr(payload.amountCents);
+
+  if (!accountId) return json({ ok: false, error: 'accountId is required' }, 400);
+
+  const result = await runEntityResolution(env, {
+    workspaceId,
+    accountId,
+    dryRun,
+    limit,
+    amountCents
+  });
+
+  return json({
+    ok: true,
+    scanned: result.scanned,
+    grouped: result.grouped,
+    dryRun
+  });
+}
+
+async function runEntityResolution(
+  env: Env,
+  input: { workspaceId: string; accountId: string; dryRun?: boolean; limit?: number; amountCents?: number | null }
+): Promise<{ scanned: number; grouped: number }> {
+  const dryRun = input.dryRun === true;
+  const limit = Math.max(1, Math.min(input.limit || 100, 500));
+
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT
+         a.id AS id_a,
+         b.id AS id_b,
+         a.entity_type AS type_a,
+         b.entity_type AS type_b,
+         a.direction AS dir_a,
+         b.direction AS dir_b,
+         a.counterparty_name AS name_a,
+         b.counterparty_name AS name_b,
+         a.amount_cents,
+         a.reference_number AS ref_a,
+         b.reference_number AS ref_b,
+         a.status AS status_a,
+         b.status AS status_b,
+         a.risk_level AS risk_a,
+         b.risk_level AS risk_b,
+         a.action_required AS action_a,
+         b.action_required AS action_b,
+         a.action_description AS action_desc_a,
+         b.action_description AS action_desc_b,
+         a.resolved_group_id AS group_a,
+         b.resolved_group_id AS group_b
+       FROM email_entities a
+       JOIN email_entities b
+         ON a.account_id = b.account_id
+         AND a.workspace_id = b.workspace_id
+         AND a.amount_cents = b.amount_cents
+         AND a.amount_cents IS NOT NULL
+         AND a.id < b.id
+         AND a.resolved_group_id IS NULL
+         AND b.resolved_group_id IS NULL
+         AND abs(julianday(a.extracted_at) - julianday(b.extracted_at)) <= 30
+       WHERE a.workspace_id = ?
+         AND a.account_id = ?
+         AND (? IS NULL OR a.amount_cents = ?)
+       LIMIT 100`
+    )
+    .bind(input.workspaceId, input.accountId, input.amountCents ?? null, input.amountCents ?? null)
+    .all<{
+      id_a: string; id_b: string;
+      type_a: string; type_b: string;
+      dir_a: string; dir_b: string;
+      name_a: string | null; name_b: string | null;
+      amount_cents: number;
+      ref_a: string | null; ref_b: string | null;
+      status_a: string; status_b: string;
+      risk_a: string; risk_b: string;
+      action_a: number; action_b: number;
+      action_desc_a: string | null; action_desc_b: string | null;
+      group_a: string | null; group_b: string | null;
+    }>();
+
+  let grouped = 0;
+  const riskRank = (risk: string): number => {
+    const r = (risk || '').toLowerCase();
+    if (r === 'critical') return 4;
+    if (r === 'high') return 3;
+    if (r === 'medium') return 2;
+    return 1;
+  };
+
+  for (const pair of (rows.results || []).slice(0, limit)) {
+    const financialTypes = ['invoice', 'payment', 'alert', 'contract'];
+    if (!financialTypes.includes(pair.type_a) && !financialTypes.includes(pair.type_b)) continue;
+
+    if (
+      (pair.dir_a === 'ar' && pair.dir_b === 'ap') ||
+      (pair.dir_a === 'ap' && pair.dir_b === 'ar')
+    ) continue;
+
+    const lo = pair.id_a < pair.id_b ? pair.id_a : pair.id_b;
+    const hi = pair.id_a < pair.id_b ? pair.id_b : pair.id_a;
+    const groupId = await sha256Hex(`${lo}:${hi}`);
+    const canonicalId = pair.type_a === 'invoice' ? pair.id_a
+      : pair.type_b === 'invoice' ? pair.id_b
+      : riskRank(pair.risk_a) >= riskRank(pair.risk_b) ? pair.id_a : pair.id_b;
+    const note = `Grouped with ${pair.amount_cents / 100} ${pair.type_a}+${pair.type_b} pair; canonical=${canonicalId}`;
+
+    if (!dryRun) {
+      await env.SKY_DB
+        .prepare(
+          `UPDATE email_entities
+           SET resolved_group_id = ?,
+               resolution_note = ?,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id IN (?, ?)`
+        )
+        .bind(groupId, note, pair.id_a, pair.id_b)
+        .run();
+    }
+
+    grouped += 1;
+  }
+
+  return {
+    scanned: (rows.results || []).length,
+    grouped
+  };
+}
+
+// ─── Ingest ───────────────────────────────────────────────────────────────────
+
 async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
@@ -91,7 +553,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   const threadExternalId = stringOr(payload.threadId);
   const providerUid = numberOr(payload.uid);
   const providerMessageId = stringOr(payload.messageId);
-  const subject = stringOr(payload.subject) || '';
+  const subject = decodeMimeHeaderWords(stringOr(payload.subject) || '');
   const sentAt = stringOr(payload.date);
 
   if (!threadExternalId) {
@@ -112,9 +574,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   await ensureWorkspace(env, workspaceId);
 
   const existingMessage = await env.SKY_DB
-    .prepare(
-      `SELECT id FROM email_messages WHERE source_message_key = ? LIMIT 1`
-    )
+    .prepare(`SELECT id FROM email_messages WHERE source_message_key = ? LIMIT 1`)
     .bind(sourceMessageKey)
     .first<{ id: string }>();
 
@@ -215,6 +675,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   await upsertParticipants(env, workspaceId, messageId, fromAddresses, 'from');
   await upsertParticipants(env, workspaceId, messageId, toAddresses, 'to');
   await updateThreadLastMessage(env, threadId, subject, sentAt);
+
   const chunkSource = buildChunkSource(payload, subject, snippet);
   const classification = classifyEmailThread({
     subject,
@@ -224,6 +685,39 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
     mailbox
   });
   await upsertThreadClassification(env, threadId, classification);
+
+  // Fire-and-forget entity extraction — never blocks ingest
+  if (hasAiGatewayConfig(env) || env.AI) {
+    const bodyText = resolveBestMessageText(payload, `${subject}\n\n${snippet}`);
+    extractEmailEntities(env, {
+      messageId,
+      threadId,
+      workspaceId,
+      accountId,
+      accountEmail,
+      subject,
+      bodyText,
+      fromAddresses,
+      toAddresses,
+      sentAt,
+      direction
+    }).then((entity) => {
+      if (entity) {
+        return persistEmailEntity(env, { messageId, threadId, workspaceId, accountId, entity }).then(() => {
+          if (!Number.isFinite(Number(entity.amount_cents)) || Number(entity.amount_cents) <= 0) return;
+          return runEntityResolution(env, {
+            workspaceId,
+            accountId,
+            amountCents: entity.amount_cents,
+            limit: 50
+          });
+        });
+      }
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`entity_extraction_failed messageId=${messageId} error=${message}`);
+    });
+  }
 
   const chunks = chunkText(chunkSource, CHUNK_SIZE, CHUNK_OVERLAP, MAX_CHUNKS_PER_MESSAGE);
   let embeddingWarning: string | null = null;
@@ -264,6 +758,8 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
     warning: embeddingWarning
   });
 }
+
+// ─── Thread Helpers ───────────────────────────────────────────────────────────
 
 async function upsertEmailThread(
   env: Env,
@@ -389,6 +885,8 @@ async function upsertParticipants(
   }
 }
 
+// ─── Backfill & Rehydration ───────────────────────────────────────────────────
+
 async function queueBackfillRun(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
@@ -425,20 +923,252 @@ async function queueBackfillRun(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, backfillRunId: id, status: 'queued' });
 }
 
+async function rehydrateChunksFromArtifacts(request: Request, env: Env): Promise<Response> {
+  const payload = (await request.json()) as JsonRecord;
+  const workspaceId = stringOr(payload.workspaceId) || 'default';
+  const accountId = stringOr(payload.accountId);
+  const messageId = stringOr(payload.messageId);
+  const noisyOnly = payload.noisyOnly !== false;
+  const processNow = payload.processNow === true;
+  const dryRun = payload.dryRun === true;
+  const limit = Math.max(1, Math.min(numberOr(payload.limit) || 100, 1000));
+  const beforeCreatedAt = stringOr(payload.beforeCreatedAt);
+
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT
+          nr.id AS source_record_id,
+          nr.workspace_id,
+          em.id AS message_id,
+          em.thread_id,
+          em.mailbox,
+          em.account_id,
+          em.account_email,
+          em.sent_at,
+          em.subject,
+          em.direction,
+          em.created_at,
+          a.r2_key
+       FROM normalized_records nr
+       JOIN artifacts a ON a.id = nr.source_artifact_id
+       JOIN email_messages em ON em.artifact_id = a.id
+       WHERE nr.record_type = 'email_message'
+         AND nr.workspace_id = ?
+         AND (? IS NULL OR em.account_id = ?)
+         AND (? IS NULL OR em.id = ?)
+         AND (? IS NULL OR datetime(em.created_at) < datetime(?))
+         AND (
+           ? = 0
+           OR EXISTS (
+             SELECT 1
+             FROM memory_chunks mc
+             WHERE mc.source_record_id = nr.id
+               AND (
+                 lower(mc.chunk_text) LIKE '%return-path:%'
+                 OR lower(mc.chunk_text) LIKE '%received:%'
+                 OR lower(mc.chunk_text) LIKE '%mime-version:%'
+                 OR lower(mc.chunk_text) LIKE '%content-type:%'
+                 OR lower(mc.chunk_text) LIKE '%content-transfer-encoding:%'
+                 OR lower(mc.chunk_text) LIKE '%dkim-signature:%'
+                 OR lower(mc.chunk_text) LIKE '%x-icl-info:%'
+               )
+           )
+         )
+       ORDER BY datetime(em.created_at) DESC
+       LIMIT ?`
+    )
+    .bind(
+      workspaceId,
+      accountId,
+      accountId,
+      messageId,
+      messageId,
+      beforeCreatedAt,
+      beforeCreatedAt,
+      noisyOnly ? 1 : 0,
+      limit
+    )
+    .all<{
+      source_record_id: string;
+      workspace_id: string;
+      message_id: string;
+      thread_id: string | null;
+      mailbox: string | null;
+      account_id: string | null;
+      account_email: string | null;
+      sent_at: string | null;
+      subject: string | null;
+      direction: string | null;
+      created_at: string;
+      r2_key: string;
+    }>();
+
+  let rebuilt = 0;
+  let reembeddedNow = 0;
+  let totalChunksDeleted = 0;
+  let totalChunksInserted = 0;
+
+  for (const row of rows.results || []) {
+    const obj = await env.SKY_ARTIFACTS.get(row.r2_key);
+    if (!obj) {
+      throw new Error(`artifact_missing:${row.r2_key}`);
+    }
+    const artifactPayload = JSON.parse(await obj.text()) as JsonRecord;
+
+    const subject = row.subject || '';
+    const snippet = buildSnippet(artifactPayload, subject);
+    const chunkSource = buildChunkSource(artifactPayload, subject, snippet);
+    const chunks = chunkText(chunkSource, CHUNK_SIZE, CHUNK_OVERLAP, MAX_CHUNKS_PER_MESSAGE);
+
+    if (!dryRun) {
+      const deleted = await env.SKY_DB
+        .prepare(`DELETE FROM memory_chunks WHERE source_record_id = ?`)
+        .bind(row.source_record_id)
+        .run();
+      totalChunksDeleted += Number((deleted as unknown as { meta?: { changes?: number } }).meta?.changes || 0);
+
+      for (let i = 0; i < chunks.length; i += 1) {
+        await env.SKY_DB
+          .prepare(
+            `INSERT INTO memory_chunks
+             (id, workspace_id, account_id, source_record_id, vector_id, chunk_text, metadata_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+          )
+          .bind(
+            crypto.randomUUID(),
+            row.workspace_id,
+            row.account_id || row.account_email || 'unknown',
+            row.source_record_id,
+            `${row.message_id}:${i}`,
+            chunks[i],
+            JSON.stringify({
+              messageId: row.message_id,
+              threadId: row.thread_id,
+              mailbox: row.mailbox,
+              accountId: row.account_id || row.account_email || 'unknown',
+              accountEmail: row.account_email,
+              sentAt: row.sent_at,
+              chunkIndex: i
+            })
+          )
+          .run();
+      }
+      totalChunksInserted += chunks.length;
+
+      await env.SKY_DB
+        .prepare(`UPDATE email_messages SET snippet = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .bind(snippet || null, row.message_id)
+        .run();
+
+      await env.SKY_DB
+        .prepare(
+          `UPDATE normalized_records
+           SET body_json = json_set(COALESCE(body_json, '{}'), '$.snippet', ?),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`
+        )
+        .bind(snippet, row.source_record_id)
+        .run();
+
+      const targetAccountId = row.account_id || row.account_email || 'unknown';
+      await enqueueEmbeddingJob(env, row.workspace_id, targetAccountId, row.source_record_id);
+
+      // Also re-extract entities for rehydrated messages
+      if (hasAiGatewayConfig(env) || env.AI) {
+        const bodyText = resolveBestMessageText(artifactPayload, `${subject}\n\n${snippet}`);
+        const fromAddresses = parseAddressJson(artifactPayload.from);
+        const toAddresses = parseAddressJson(artifactPayload.to);
+        const direction = (row.direction as 'inbound' | 'outbound' | 'unknown') || 'unknown';
+        const entity = await extractEmailEntities(env, {
+          messageId: row.message_id,
+          threadId: row.thread_id,
+          workspaceId: row.workspace_id,
+          accountId: targetAccountId,
+          accountEmail: row.account_email || targetAccountId,
+          subject,
+          bodyText,
+          fromAddresses,
+          toAddresses,
+          sentAt: row.sent_at,
+          direction
+        });
+        if (entity) {
+          await persistEmailEntity(env, {
+            messageId: row.message_id,
+            threadId: row.thread_id,
+            workspaceId: row.workspace_id,
+            accountId: targetAccountId,
+            entity
+          });
+          if (Number.isFinite(Number(entity.amount_cents)) && Number(entity.amount_cents) > 0) {
+            await runEntityResolution(env, {
+              workspaceId: row.workspace_id,
+              accountId: targetAccountId,
+              amountCents: entity.amount_cents,
+              limit: 50
+            });
+          }
+        }
+      }
+
+      if (processNow) {
+        const res = await processSingleEmbeddingJob(env, row.source_record_id);
+        if (res.status === 'indexed') reembeddedNow += 1;
+      }
+    }
+
+    rebuilt += 1;
+  }
+
+  return json({
+    ok: true,
+    workspaceId,
+    accountId: accountId || null,
+    messageId: messageId || null,
+    noisyOnly,
+    dryRun,
+    processNow,
+    beforeCreatedAt: beforeCreatedAt || null,
+    nextBeforeCreatedAt: (rows.results || []).length > 0 ? rows.results?.[rows.results.length - 1]?.created_at || null : null,
+    scanned: (rows.results || []).length,
+    rebuilt,
+    chunksDeleted: totalChunksDeleted,
+    chunksInserted: totalChunksInserted,
+    reembeddedNow
+  });
+}
+
+// ─── Embedding ────────────────────────────────────────────────────────────────
+
 async function enqueueEmbeddingJob(
   env: Env,
   workspaceId: string,
   accountId: string,
   sourceRecordId: string
 ): Promise<void> {
-  await env.SKY_DB
+  const updated = await env.SKY_DB
     .prepare(
-      `INSERT OR IGNORE INTO embedding_jobs
-       (id, workspace_id, account_id, source_record_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'queued', 0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      `UPDATE embedding_jobs
+       SET status = 'queued',
+           last_error = NULL,
+           next_attempt_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE source_record_id = ?`
     )
-    .bind(crypto.randomUUID(), workspaceId, accountId, sourceRecordId)
+    .bind(sourceRecordId)
     .run();
+
+  const changes = Number((updated as unknown as { meta?: { changes?: number } }).meta?.changes || 0);
+  if (changes === 0) {
+    await env.SKY_DB
+      .prepare(
+        `INSERT OR IGNORE INTO embedding_jobs
+         (id, workspace_id, account_id, source_record_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'queued', 0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      )
+      .bind(crypto.randomUUID(), workspaceId, accountId, sourceRecordId)
+      .run();
+  }
 
   await enqueueEmbeddingQueueMessage(env, { sourceRecordId });
 }
@@ -569,72 +1299,7 @@ async function markEmbeddingJobRetry(
     .run();
 }
 
-function computeBackoffMinutes(attempts: number): number {
-  return Math.min(240, Math.max(1, 2 ** Math.min(attempts, 8)));
-}
-
-async function ensureWorkspace(env: Env, workspaceId: string): Promise<void> {
-  await env.SKY_DB
-    .prepare(
-      `INSERT OR IGNORE INTO workspaces (id, name, status, created_at, updated_at)
-       VALUES (?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-    )
-    .bind(workspaceId, workspaceId)
-    .run();
-}
-
-async function runTriage(env: Env): Promise<Response> {
-  if (!hasAiGatewayConfig(env)) {
-    return json({ ok: true, noop: true, reason: 'missing_openai_api_key' });
-  }
-
-  await enqueueSyncJob(env, 'triage_inbox', { source: 'api' });
-  return json({ ok: true, queued: 'triage_inbox' });
-}
-
-async function runDailyBriefing(env: Env): Promise<Response> {
-  if (!hasAiGatewayConfig(env)) {
-    return json({ ok: true, noop: true, reason: 'missing_openai_api_key' });
-  }
-
-  await enqueueSyncJob(env, 'daily_briefing', { source: 'api' });
-  return json({ ok: true, queued: 'daily_briefing' });
-}
-
-async function runAiGatewayTest(env: Env): Promise<Response> {
-  if (!hasAiGatewayConfig(env)) {
-    return json({
-      ok: false,
-      error: 'Missing AI Gateway OpenAI configuration (OPENAI_API_KEY, AIG_ACCOUNT_ID, AIG_GATEWAY_ID).'
-    }, 400);
-  }
-
-  try {
-    const completion = await callOpenAiChatViaGateway(env, [
-      { role: 'user', content: 'Respond with exactly: AI Gateway OpenAI ready.' }
-    ]);
-    return json({ ok: true, provider: 'openai-via-aigateway', completion });
-  } catch (error) {
-    return json(
-      {
-        ok: false,
-        error: 'AI Gateway OpenAI test failed',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      },
-      500
-    );
-  }
-}
-
-async function enqueueSyncJob(env: Env, jobType: string, metadata: JsonRecord): Promise<void> {
-  await env.SKY_DB
-    .prepare(
-      `INSERT INTO sync_jobs (id, job_type, status, metadata_json, created_at, updated_at)
-       VALUES (?, ?, 'queued', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-    )
-    .bind(crypto.randomUUID(), jobType, JSON.stringify(metadata))
-    .run();
-}
+// ─── Outbound Mail ────────────────────────────────────────────────────────────
 
 async function queueOutboundMail(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
@@ -735,58 +1400,7 @@ async function markOutboundMailResult(request: Request, env: Env): Promise<Respo
   return json({ ok: true, id, status: 'failed' });
 }
 
-function normalizeAddresses(input: unknown): NormalizedAddress[] {
-  if (!Array.isArray(input)) return [];
-
-  const out: NormalizedAddress[] = [];
-  for (const item of input) {
-    if (!item || typeof item !== 'object') continue;
-    const record = item as Record<string, unknown>;
-    const email = stringOr(record.address) || stringOr(record.email);
-    if (!email) continue;
-    out.push({ email, name: stringOr(record.name) });
-  }
-  return out;
-}
-
-function deriveMessageDirection(
-  mailbox: string,
-  fromAddresses: NormalizedAddress[],
-  accountEmail: string
-): 'inbound' | 'outbound' | 'unknown' {
-  const mailboxLower = mailbox.trim().toLowerCase();
-  if (mailboxLower === 'sent' || mailboxLower === 'sent messages') {
-    return 'outbound';
-  }
-
-  const account = accountEmail.trim().toLowerCase();
-  if (account && account !== 'unknown') {
-    const fromMatch = fromAddresses.some((x) => x.email.toLowerCase() === account);
-    if (fromMatch) return 'outbound';
-  }
-
-  const hasSender = fromAddresses.length > 0;
-  const hasMailboxSignal = mailboxLower.length > 0;
-  if (!hasSender && !hasMailboxSignal) return 'unknown';
-  return 'inbound';
-}
-
-function buildSnippet(payload: JsonRecord, subject: string): string {
-  const bodyText = stringOr(payload.bodyText);
-  const raw = stringOr(payload.rawRfc822);
-  const candidate = bodyText || raw || subject;
-  return cleanEmailBody(candidate).slice(0, 500);
-}
-
-function buildChunkSource(payload: JsonRecord, subject: string, fallbackSnippet: string): string {
-  const bodyText = stringOr(payload.bodyText);
-  if (bodyText) return cleanEmailBody(bodyText).slice(0, MAX_CHUNK_SOURCE_CHARS);
-
-  const raw = stringOr(payload.rawRfc822);
-  if (raw) return cleanEmailBody(raw).slice(0, MAX_CHUNK_SOURCE_CHARS);
-
-  return cleanEmailBody(`${subject}\n\n${fallbackSnippet}`).slice(0, MAX_CHUNK_SOURCE_CHARS);
-}
+// ─── Classification ───────────────────────────────────────────────────────────
 
 function classifyEmailThread(input: {
   subject: string;
@@ -804,40 +1418,11 @@ function classifyEmailThread(input: {
   const urgentPatterns = [/\burgent\b/, /\basap\b/, /\bimmediately\b/, /\bcritical\b/, /\baction required\b/, /\boverdue\b/];
   const positivePatterns = [/\bthank(s| you)?\b/, /\bappreciate\b/, /\bgreat\b/, /\bawesome\b/, /\bexcited\b/, /\blove\b/];
   const replyPatterns = [/\?/, /\bplease (reply|respond|confirm|review)\b/, /\bcan you\b/, /\blet me know\b/, /\bfollow up\b/];
-
-  const customerSupportPatterns = [
-    /\bcustomer\b/,
-    /\bsupport\b/,
-    /\bhelp\b/,
-    /\bissue\b/,
-    /\bproblem\b/,
-    /\breturn\b/,
-    /\bwarranty\b/,
-    /\btracking\b/,
-    /\border\b/
-  ];
-  const vendorPatterns = [
-    /\bvendor\b/,
-    /\bsupplier\b/,
-    /\bmanufacturer\b/,
-    /\bpo\b/,
-    /\bpurchase order\b/,
-    /\bshipment\b/,
-    /\binventory\b/
-  ];
+  const customerSupportPatterns = [/\bcustomer\b/, /\bsupport\b/, /\bhelp\b/, /\bissue\b/, /\bproblem\b/, /\breturn\b/, /\bwarranty\b/, /\btracking\b/, /\border\b/];
+  const vendorPatterns = [/\bvendor\b/, /\bsupplier\b/, /\bmanufacturer\b/, /\bpo\b/, /\bpurchase order\b/, /\bshipment\b/, /\binventory\b/];
   const legalPatterns = [/\bcontract\b/, /\bagreement\b/, /\bnda\b/, /\blegal\b/, /\battorney\b/, /\bcounsel\b/, /\bcompliance\b/];
   const financialPatterns = [/\binvoice\b/, /\bpayment\b/, /\brefund\b/, /\bchargeback\b/, /\bbilling\b/, /\btax\b/, /\breceipt\b/];
-  const personalPatterns = [
-    /\bwife\b/,
-    /\bfamily\b/,
-    /\bdad\b/,
-    /\bmom\b/,
-    /\bkid(s)?\b/,
-    /\bbirthday\b/,
-    /\bvalentine\b/,
-    /\bdoctor\b/,
-    /\bdinner\b/
-  ];
+  const personalPatterns = [/\bwife\b/, /\bfamily\b/, /\bdad\b/, /\bmom\b/, /\bkid(s)?\b/, /\bbirthday\b/, /\bvalentine\b/, /\bdoctor\b/, /\bdinner\b/];
 
   let category: ThreadClassification['category'] = 'customer_support';
   if (has(legalPatterns)) category = 'legal';
@@ -885,15 +1470,21 @@ function classifyEmailThread(input: {
   };
 }
 
+// ─── Text Processing ──────────────────────────────────────────────────────────
+
 function chunkText(text: string, size: number, overlap: number, maxChunks: number): string[] {
   const normalized = cleanEmailBody(text).replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
 
   const chunks: string[] = [];
   let start = 0;
-  while (start < normalized.length && chunks.length < maxChunks) {
+  while (start < normalized.length) {
     const end = Math.min(normalized.length, start + size);
-    chunks.push(normalized.slice(start, end));
+    const candidate = cleanChunkCandidate(normalized.slice(start, end));
+    if (candidate && !isNoiseHeavyChunk(candidate)) {
+      chunks.push(candidate);
+    }
+    if (chunks.length >= maxChunks) break;
     if (end >= normalized.length) break;
     start = Math.max(0, end - overlap);
   }
@@ -906,45 +1497,400 @@ function cleanEmailBody(raw: string): string {
     '(Return-Path|Received|MIME-Version|Content-Type|Content-Transfer-Encoding|X-[\\w-]+|Message-ID|Date|From|To|Cc|Bcc|Subject|Reply-To|Delivered-To|Authentication-Results|DKIM-Signature|ARC-[\\w-]+)';
 
   let cleaned = raw
-    // Remove common transport and MIME headers.
     .replace(
       /^(Return-Path|Received|MIME-Version|Content-Type|Content-Transfer-Encoding|X-[\w-]+|Message-ID|Date|From|To|Cc|Bcc|Subject|Reply-To|Delivered-To|Authentication-Results|DKIM-Signature|ARC-[\w-]+):.*$/gim,
       ''
     )
-    // Remove quoted reply lines.
     .replace(/^>.*$/gm, '')
-    // Remove forwarded-block markers.
     .replace(/^-{3,}.*Forwarded.*-{3,}$/gim, '')
-    // Remove common footer boilerplate.
     .replace(/^(unsubscribe|this email was sent|you are receiving|view in browser|privacy policy).*/gim, '')
     .replace(/^(sent from my|get outlook for|this email and any attachments).*/gim, '')
-    // Remove calendar invite artifacts.
     .replace(/^(begin:vcalendar|end:vcalendar|begin:vevent|dtstart|dtend|organizer).*/gim, '')
-    // Remove disclaimer blocks.
     .replace(/^(confidentiality notice|this message is intended only for).*/gim, '')
-    // Collapse excessive line breaks.
     .replace(/\n{3,}/g, '\n\n')
+    .replace(/(?:^|\s)-{2,}=?_part_[^\s]+/gi, ' ')
+    .replace(/(?:^|\s)boundary\s*=\s*"[^"]*"/gi, ' ')
+    .replace(/(?:^|\s)boundary\s*=\s*[^"\s]+/gi, ' ')
+    .replace(/(?:^|\s)multipart\/[a-z0-9-]+/gi, ' ')
     .trim();
 
-  // Handle already-flattened legacy chunks where header lines were collapsed to one line.
   cleaned = cleaned.replace(
     new RegExp(`(?:^|\\s)${headerNames}:\\s*[^\\n]*?(?=(?:\\s${headerNames}:)|$)`, 'gi'),
     ' '
   );
 
   return cleaned
-    // Strip HTML tags.
-    .replace(/<[^>]*>/g, ' ')
-    // Remove long base64-like blobs.
     .replace(/[A-Za-z0-9+/]{100,}={0,2}/g, '')
-    // Remove URLs.
-    .replace(/https?:\/\/[^\s]+/g, '')
-    // Remove email addresses.
-    .replace(/[\w.-]+@[\w.-]+\.\w+/g, '')
-    // Final whitespace normalization.
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/=\n/g, '')
+    .replace(/https?:\/\/[^\s)>"']+/gi, (url: string) => sanitizeTrackedUrl(url))
+    .replace(/<[^>]{1,300}>/g, ' ')
+    .replace(/@font-face\s*\{[^}]*\}/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/(visit help center|contact airbnb|airbnb,\s*inc\.|unsubscribe|privacy policy)[\s\S]*$/i, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
+
+function cleanChunkCandidate(raw: string): string {
+  return raw
+    .replace(/https?:\/\/a0\.muscache\.com\/[^\s)>"']+/gi, ' ')
+    .replace(/https?:\/\/(?:www\.)?(facebook|instagram|twitter)\.com\/[^\s)>"']+/gi, ' ')
+    .replace(/\b(?:visit help center|contact airbnb)\b/gi, ' ')
+    .replace(/@font-face\b[^.]{0,500}/gi, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function isNoiseHeavyChunk(text: string): boolean {
+  const lower = text.toLowerCase();
+  const actionableHits = (lower.match(/\b(please|could you|can you|request|deadline|due|status|next step|additional information|invoice|contract|meeting|approved|denied|appeal|listing|support|question)\b|\?/g) || []).length;
+  const noiseHits = (lower.match(/(@font-face|<html|<head|<style|<\/?(div|table|tr|td|span)\b|mso-|viewport|airbnb,\s*inc\.|visit help center|contact airbnb|facebook\.com|instagram\.com|twitter\.com|a0\.muscache\.com|content="text\/html")/g) || []).length;
+  const linkCount = (text.match(/https?:\/\//g) || []).length;
+  const symbolCount = (text.match(/[<>{};=_]/g) || []).length;
+  const symbolRatio = text.length > 0 ? symbolCount / text.length : 0;
+
+  if (noiseHits >= 2 && actionableHits === 0) return true;
+  if (linkCount >= 5 && actionableHits === 0) return true;
+  if (symbolRatio > 0.2 && actionableHits === 0) return true;
+  return false;
+}
+
+function resolveBestMessageText(payload: JsonRecord, fallback: string): string {
+  const raw = stringOr(payload.rawRfc822);
+  if (raw) {
+    const parsed = cleanEmailBody(extractTextFromMimeMessage(raw));
+    if (parsed) return parsed;
+  }
+
+  const bodyText = stringOr(payload.bodyText);
+  if (bodyText) {
+    const cleaned = cleanEmailBody(bodyText);
+    if (cleaned) return cleaned;
+  }
+
+  return cleanEmailBody(fallback);
+}
+
+function buildSnippet(payload: JsonRecord, subject: string): string {
+  return resolveBestMessageText(payload, subject).slice(0, 500);
+}
+
+function buildChunkSource(payload: JsonRecord, subject: string, fallbackSnippet: string): string {
+  const resolved = resolveBestMessageText(payload, `${subject}\n\n${fallbackSnippet}`);
+  const parts = [
+    subject ? `Subject: ${subject}` : '',
+    fallbackSnippet ? `Snippet: ${fallbackSnippet}` : '',
+    resolved
+  ].filter(Boolean);
+  return parts.join('\n\n').slice(0, MAX_CHUNK_SOURCE_CHARS);
+}
+
+// ─── MIME Parsing ─────────────────────────────────────────────────────────────
+
+function extractTextFromMimeMessage(raw: string): string {
+  const normalized = raw.replace(/\r\n/g, '\n');
+  const extracted = extractTextFromMimeEntity(normalized);
+  const preferred = extracted.plainParts.filter(Boolean).join('\n\n').trim();
+  if (preferred) return preferred;
+  const html = extracted.htmlParts.filter(Boolean).join('\n\n').trim();
+  if (html) return html;
+  return extractBodyFallback(normalized);
+}
+
+function extractTextFromMimeEntity(entity: string): { plainParts: string[]; htmlParts: string[] } {
+  const splitAt = entity.indexOf('\n\n');
+  const rawHeaders = splitAt >= 0 ? entity.slice(0, splitAt) : '';
+  const rawBody = splitAt >= 0 ? entity.slice(splitAt + 2) : entity;
+  const headers = parseMimeHeaders(rawHeaders);
+  const contentType = (headers['content-type'] || 'text/plain').toLowerCase();
+  const transferEncoding = (headers['content-transfer-encoding'] || '7bit').toLowerCase();
+  const charset = parseMimeCharset(contentType);
+
+  if (contentType.includes('multipart/alternative')) {
+    const boundary = parseMimeBoundary(contentType);
+    if (!boundary) return { plainParts: [], htmlParts: [] };
+    const parts = splitMimeMultipartBody(rawBody, boundary);
+    const plainCandidates: string[] = [];
+    const htmlCandidates: string[] = [];
+    for (const part of parts) {
+      const nested = extractTextFromMimeEntity(part);
+      if (nested.plainParts.length > 0) plainCandidates.push(...nested.plainParts);
+      if (nested.htmlParts.length > 0) htmlCandidates.push(...nested.htmlParts);
+    }
+    if (plainCandidates.length > 0) return { plainParts: [plainCandidates[0]], htmlParts: [] };
+    if (htmlCandidates.length > 0) return { plainParts: [], htmlParts: [htmlCandidates[0]] };
+    return { plainParts: [], htmlParts: [] };
+  }
+
+  if (contentType.includes('multipart/')) {
+    const boundary = parseMimeBoundary(contentType);
+    if (!boundary) return { plainParts: [], htmlParts: [] };
+    const parts = splitMimeMultipartBody(rawBody, boundary);
+    const plainParts: string[] = [];
+    const htmlParts: string[] = [];
+    for (const part of parts) {
+      const nested = extractTextFromMimeEntity(part);
+      plainParts.push(...nested.plainParts);
+      htmlParts.push(...nested.htmlParts);
+    }
+    return { plainParts, htmlParts };
+  }
+
+  if (contentType.includes('message/rfc822')) {
+    return extractTextFromMimeEntity(rawBody);
+  }
+
+  const decoded = decodeMimeTransferEncoding(rawBody, transferEncoding, charset);
+  if (contentType.includes('text/plain')) {
+    return { plainParts: [decoded], htmlParts: [] };
+  }
+  if (contentType.includes('text/html')) {
+    return { plainParts: [], htmlParts: [htmlToText(decoded)] };
+  }
+
+  return { plainParts: [], htmlParts: [] };
+}
+
+function parseMimeHeaders(rawHeaders: string): Record<string, string> {
+  const lines = rawHeaders.split('\n');
+  const unfolded: string[] = [];
+  for (const line of lines) {
+    if ((line.startsWith(' ') || line.startsWith('\t')) && unfolded.length > 0) {
+      unfolded[unfolded.length - 1] += ` ${line.trim()}`;
+      continue;
+    }
+    if (line.trim()) unfolded.push(line.trim());
+  }
+
+  const headers: Record<string, string> = {};
+  for (const line of unfolded) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim().toLowerCase();
+    const value = line.slice(idx + 1).trim();
+    const decodedValue = decodeMimeHeaderWords(value);
+    headers[key] = headers[key] ? `${headers[key]}, ${decodedValue}` : decodedValue;
+  }
+  return headers;
+}
+
+function parseMimeCharset(contentType: string): string {
+  const match = contentType.match(/charset=(?:"([^"]+)"|([^;]+))/i);
+  const charset = (match?.[1] || match?.[2] || 'utf-8').trim().toLowerCase();
+  return normalizeCharsetLabel(charset);
+}
+
+function parseMimeBoundary(contentType: string): string | null {
+  const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!match) return null;
+  return (match[1] || match[2] || '').trim();
+}
+
+function splitMimeMultipartBody(body: string, boundary: string): string[] {
+  const marker = `--${boundary}`;
+  const endMarker = `--${boundary}--`;
+  const lines = body.split('\n');
+  const parts: string[] = [];
+  let collecting = false;
+  let current: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith(endMarker)) {
+      if (collecting && current.length > 0) parts.push(current.join('\n'));
+      break;
+    }
+    if (line.startsWith(marker)) {
+      if (collecting && current.length > 0) parts.push(current.join('\n'));
+      collecting = true;
+      current = [];
+      continue;
+    }
+    if (collecting) current.push(line);
+  }
+
+  return parts.map((part) => part.trim()).filter(Boolean);
+}
+
+function decodeMimeTransferEncoding(body: string, transferEncoding: string, charset: string): string {
+  if (transferEncoding.includes('quoted-printable')) {
+    return decodeBytesWithCharset(decodeQuotedPrintableToBytes(body), charset);
+  }
+  if (transferEncoding.includes('base64')) {
+    return decodeBytesWithCharset(decodeBase64ToBytes(body), charset);
+  }
+  return decodeBytesWithCharset(stringToByteArray(body), charset);
+}
+
+function decodeQuotedPrintableToBytes(input: string): Uint8Array {
+  const softWrapped = input.replace(/=\n/g, '');
+  const bytes: number[] = [];
+  for (let i = 0; i < softWrapped.length; i += 1) {
+    const ch = softWrapped[i];
+    if (ch === '=' && i + 2 < softWrapped.length) {
+      const hex = softWrapped.slice(i + 1, i + 3);
+      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+        bytes.push(Number.parseInt(hex, 16));
+        i += 2;
+        continue;
+      }
+    }
+    bytes.push(ch.charCodeAt(0));
+  }
+  return new Uint8Array(bytes);
+}
+
+function decodeBase64ToBytes(input: string): Uint8Array {
+  const compact = input.replace(/\s+/g, '');
+  const binary = atob(compact);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function stringToByteArray(input: string): Uint8Array {
+  const bytes = new Uint8Array(input.length);
+  for (let i = 0; i < input.length; i += 1) {
+    bytes[i] = input.charCodeAt(i) & 0xff;
+  }
+  return bytes;
+}
+
+function decodeBytesWithCharset(bytes: Uint8Array, charset: string): string {
+  return new TextDecoder(charset, { fatal: false }).decode(bytes);
+}
+
+function normalizeCharsetLabel(charset: string): string {
+  const c = charset.trim().toLowerCase();
+  if (c === 'utf8') return 'utf-8';
+  if (c === 'latin1' || c === 'iso8859-1') return 'iso-8859-1';
+  if (c === 'win-1252') return 'windows-1252';
+  return c || 'utf-8';
+}
+
+function decodeMimeHeaderWords(input: string): string {
+  return input.replace(/=\?([^?]+)\?([bBqQ])\?([^?]+)\?=/g, (_m, rawCharset: string, enc: string, data: string) => {
+    const charset = normalizeCharsetLabel(String(rawCharset || 'utf-8'));
+    if (String(enc).toLowerCase() === 'b') {
+      return decodeBytesWithCharset(decodeBase64ToBytes(data), charset);
+    }
+    const q = data.replace(/_/g, ' ');
+    return decodeBytesWithCharset(decodeQuotedPrintableToBytes(q), charset);
+  });
+}
+
+function htmlToText(input: string): string {
+  const cleaned = input
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<head[\s\S]*?<\/head>/gi, ' ')
+    .replace(/<(script|style|noscript|svg|canvas|form|footer|nav|header)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]*style=["'][^"']*display\s*:\s*none[^"']*["'][^>]*>[\s\S]*?<\/[^>]+>/gi, ' ')
+    .replace(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, href: string, text: string) => {
+      const label = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      const sanitized = sanitizeTrackedUrl(href);
+      return label ? `${label} ${sanitized}` : sanitized;
+    })
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|section|article|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ');
+
+  return decodeHtmlEntities(cleaned)
+    .replace(/https?:\/\/[^\s)>"']+/gi, (url: string) => sanitizeTrackedUrl(url))
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function sanitizeTrackedUrl(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    if (u.hostname.endsWith('airbnb.com') && u.pathname === '/external_link') {
+      const target = u.searchParams.get('url');
+      if (target) {
+        return sanitizeTrackedUrl(target);
+      }
+    }
+    const kept = u.searchParams
+      .keys()
+      .filter((k) => !/^utm_/i.test(k) && !/^(gclid|fbclid|mc_eid|mc_cid|euid|trk|tracking|campaign|c)$/i.test(k));
+    const clean = new URL(`${u.protocol}//${u.host}${u.pathname}`);
+    for (const key of kept) {
+      const values = u.searchParams.getAll(key);
+      for (const value of values) clean.searchParams.append(key, value);
+    }
+    return clean.toString();
+  } catch {
+    return rawUrl.replace(/\?.*$/, '');
+  }
+}
+
+function decodeHtmlEntities(input: string): string {
+  return input
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCharCode(Number.parseInt(dec, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
+function extractBodyFallback(normalizedRaw: string): string {
+  const splitAt = normalizedRaw.indexOf('\n\n');
+  if (splitAt >= 0) return normalizedRaw.slice(splitAt + 2);
+  return normalizedRaw;
+}
+
+// ─── Address Helpers ──────────────────────────────────────────────────────────
+
+function normalizeAddresses(input: unknown): NormalizedAddress[] {
+  if (!Array.isArray(input)) return [];
+
+  const out: NormalizedAddress[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const email = stringOr(record.address) || stringOr(record.email);
+    if (!email) continue;
+    const rawName = stringOr(record.name);
+    out.push({ email, name: rawName ? decodeMimeHeaderWords(rawName) : null });
+  }
+  return out;
+}
+
+function parseAddressJson(input: unknown): NormalizedAddress[] {
+  if (typeof input === 'string') {
+    try { return normalizeAddresses(JSON.parse(input)); } catch { return []; }
+  }
+  return normalizeAddresses(input);
+}
+
+function deriveMessageDirection(
+  mailbox: string,
+  fromAddresses: NormalizedAddress[],
+  accountEmail: string
+): 'inbound' | 'outbound' | 'unknown' {
+  const mailboxLower = mailbox.trim().toLowerCase();
+  if (mailboxLower === 'sent' || mailboxLower === 'sent messages') {
+    return 'outbound';
+  }
+
+  const account = accountEmail.trim().toLowerCase();
+  if (account && account !== 'unknown') {
+    const fromMatch = fromAddresses.some((x) => x.email.toLowerCase() === account);
+    if (fromMatch) return 'outbound';
+  }
+
+  const hasSender = fromAddresses.length > 0;
+  const hasMailboxSignal = mailboxLower.length > 0;
+  if (!hasSender && !hasMailboxSignal) return 'unknown';
+  return 'inbound';
+}
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
 
 function buildSourceMessageKey(input: {
   workspaceId: string;
@@ -959,11 +1905,9 @@ function buildSourceMessageKey(input: {
   if (input.providerUid !== null) {
     return `${input.workspaceId}:${input.accountId}:${input.mailbox}:uid:${input.providerUid}`;
   }
-
   if (input.providerMessageId) {
     return `${input.workspaceId}:${input.accountId}:mid:${input.providerMessageId}`;
   }
-
   return `${input.workspaceId}:${input.accountId}:${input.mailbox}:thread:${input.threadExternalId}:${input.sentAt || ''}:${input.subject}`;
 }
 
@@ -977,19 +1921,69 @@ async function sha256Hex(input: string): Promise<string> {
   return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
-function numberOr(input: unknown): number | null {
-  if (typeof input === 'number' && Number.isFinite(input)) {
-    return Math.trunc(input);
-  }
+async function ensureWorkspace(env: Env, workspaceId: string): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `INSERT OR IGNORE INTO workspaces (id, name, status, created_at, updated_at)
+       VALUES (?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    )
+    .bind(workspaceId, workspaceId)
+    .run();
+}
 
-  if (typeof input === 'string' && input.trim()) {
-    const n = Number(input);
-    if (Number.isFinite(n)) {
-      return Math.trunc(n);
-    }
-  }
+async function enqueueSyncJob(env: Env, jobType: string, metadata: JsonRecord): Promise<void> {
+  await env.SKY_DB
+    .prepare(
+      `INSERT INTO sync_jobs (id, job_type, status, metadata_json, created_at, updated_at)
+       VALUES (?, ?, 'queued', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    )
+    .bind(crypto.randomUUID(), jobType, JSON.stringify(metadata))
+    .run();
+}
 
+function computeBackoffMinutes(attempts: number): number {
+  return Math.min(240, Math.max(1, 2 ** Math.min(attempts, 8)));
+}
+
+function validateEntityType(v: unknown): EmailEntity['entity_type'] | null {
+  const valid = ['invoice', 'contract', 'payment', 'appointment', 'alert', 'request', 'correspondence'];
+  return valid.includes(v as string) ? (v as EmailEntity['entity_type']) : null;
+}
+
+function validateDirection(v: unknown): EmailEntity['direction'] | null {
+  const valid = ['ar', 'ap', 'inbound', 'outbound', 'unknown'];
+  return valid.includes(v as string) ? (v as EmailEntity['direction']) : null;
+}
+
+function validateStatus(v: unknown): EmailEntity['status'] | null {
+  const valid = ['open', 'paid', 'overdue', 'pending', 'requires_action', 'unknown'];
+  return valid.includes(v as string) ? (v as EmailEntity['status']) : null;
+}
+
+function validateRiskLevel(v: unknown): EmailEntity['risk_level'] | null {
+  const valid = ['low', 'medium', 'high', 'critical'];
+  return valid.includes(v as string) ? (v as EmailEntity['risk_level']) : null;
+}
+
+function stringOrNull(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
+function numberOrNull(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.round(v);
+  if (typeof v === 'string' && v.trim()) {
+    const n = Number(v);
+    if (Number.isFinite(n)) return Math.round(n);
+  }
   return null;
+}
+
+function stripJsonCodeFence(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('```')) {
+    return trimmed.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+  }
+  return raw;
 }
 
 function parseJsonObject(input: string | null | undefined): Record<string, unknown> {
@@ -1007,6 +2001,19 @@ function parseJsonObject(input: string | null | undefined): Record<string, unkno
 
 function stringOr(input: unknown): string | null {
   return typeof input === 'string' && input.trim() ? input.trim() : null;
+}
+
+function numberOr(input: unknown): number | null {
+  if (typeof input === 'number' && Number.isFinite(input)) {
+    return Math.trunc(input);
+  }
+  if (typeof input === 'string' && input.trim()) {
+    const n = Number(input);
+    if (Number.isFinite(n)) {
+      return Math.trunc(n);
+    }
+  }
+  return null;
 }
 
 function unauthorized(): Response {
@@ -1043,7 +2050,8 @@ function hasAiGatewayConfig(env: Env): boolean {
 
 async function callOpenAiChatViaGateway(
   env: Env,
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  maxTokens = 400
 ): Promise<string> {
   const gatewayUrl =
     `https://gateway.ai.cloudflare.com/v1/${env.AIG_ACCOUNT_ID}/${env.AIG_GATEWAY_ID}/openai/v1/chat/completions`;
@@ -1062,7 +2070,8 @@ async function callOpenAiChatViaGateway(
     headers,
     body: JSON.stringify({
       model: env.OPENAI_MODEL || 'gpt-4o-mini',
-      max_tokens: 120,
+      max_tokens: maxTokens,
+      temperature: 0,
       messages
     })
   });

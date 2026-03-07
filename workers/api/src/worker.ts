@@ -51,7 +51,7 @@ type Citation = {
   score: number;
 };
 
-type QueryIntent = 'find_email' | 'thread_summary';
+type QueryIntent = 'find_email' | 'thread_summary' | 'financial_query' | 'attention_query';
 
 type QueryResult = {
   intent: QueryIntent;
@@ -2054,6 +2054,17 @@ async function executeIntent(
   intent: QueryIntent,
   runId: string
 ): Promise<QueryResult> {
+  if (intent === 'financial_query' || intent === 'attention_query') {
+    const result = await executeEntityQuery(env, ctx, intent);
+    return {
+      intent,
+      answer: result.answer,
+      citations: result.citations,
+      citationStatus: result.citations.length > 0 ? 'sufficient' : 'insufficient',
+      searched: result.searched
+    };
+  }
+
   if (intent === 'thread_summary') {
     const summary = await buildThreadSummaryIntent(env, ctx.workspaceId, ctx.accountId, query);
     return {
@@ -2079,6 +2090,135 @@ async function executeIntent(
     citationStatus: unified.citations.length > 0 ? 'sufficient' : 'insufficient',
     searched: unified.searched
   };
+}
+
+async function executeEntityQuery(
+  env: Env,
+  ctx: { workspaceId: string; accountId: string },
+  intent: 'financial_query' | 'attention_query'
+): Promise<{ answer: string; citations: Citation[]; searched: JsonRecord }> {
+  const rowResult = intent === 'financial_query'
+    ? await env.SKY_DB
+        .prepare(
+          `SELECT ee.entity_type, ee.direction, ee.counterparty_name, ee.amount_cents, ee.currency,
+                  ee.due_date, ee.reference_number, ee.status, ee.action_required,
+                  ee.action_description, ee.risk_level, ee.message_id,
+                  em.subject, em.sent_at
+           FROM email_entities ee
+           LEFT JOIN email_messages em ON em.id = ee.message_id
+           WHERE ee.workspace_id = ? AND ee.account_id = ?
+             AND ee.entity_type IN ('invoice', 'payment', 'contract')
+             AND (
+               ee.resolved_group_id IS NULL
+               OR ee.id = (SELECT MIN(e2.id) FROM email_entities e2 WHERE e2.resolved_group_id = ee.resolved_group_id)
+             )
+           ORDER BY
+             CASE ee.risk_level WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END ASC,
+             ee.action_required DESC,
+             datetime(COALESCE(ee.due_date, '2999-12-31')) ASC
+           LIMIT 20`
+        )
+        .bind(ctx.workspaceId, ctx.accountId)
+        .all<{
+          entity_type: string;
+          direction: string;
+          counterparty_name: string | null;
+          amount_cents: number | null;
+          currency: string | null;
+          due_date: string | null;
+          reference_number: string | null;
+          status: string;
+          action_required: number;
+          action_description: string | null;
+          risk_level: string;
+          subject: string | null;
+          message_id: string;
+          sent_at: string | null;
+        }>()
+    : await env.SKY_DB
+        .prepare(
+          `SELECT ee.entity_type, ee.direction, ee.counterparty_name, ee.amount_cents, ee.currency,
+                  ee.due_date, ee.reference_number, ee.status, ee.action_required,
+                  ee.action_description, ee.risk_level, ee.message_id,
+                  em.subject, em.sent_at
+           FROM email_entities ee
+           LEFT JOIN email_messages em ON em.id = ee.message_id
+           WHERE ee.workspace_id = ? AND ee.account_id = ?
+             AND ee.action_required = 1
+             AND (
+               ee.resolved_group_id IS NULL
+               OR ee.id = (SELECT MIN(e2.id) FROM email_entities e2 WHERE e2.resolved_group_id = ee.resolved_group_id)
+             )
+           ORDER BY
+             CASE ee.risk_level WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END ASC,
+             datetime(COALESCE(ee.due_date, '2999-12-31')) ASC
+           LIMIT 15`
+        )
+        .bind(ctx.workspaceId, ctx.accountId)
+        .all<{
+          entity_type: string;
+          direction: string;
+          counterparty_name: string | null;
+          amount_cents: number | null;
+          currency: string | null;
+          due_date: string | null;
+          reference_number: string | null;
+          status: string;
+          action_required: number;
+          action_description: string | null;
+          risk_level: string;
+          subject: string | null;
+          message_id: string;
+          sent_at: string | null;
+        }>();
+
+  const rows = rowResult.results || [];
+
+  if (rows.length === 0) {
+    return {
+      answer: intent === 'financial_query'
+        ? 'No invoices, payments, or contracts found in your email history.'
+        : 'Nothing requiring your attention was found.',
+      citations: [],
+      searched: { intent, source: 'email_entities' }
+    };
+  }
+
+  const formatCents = (cents: number | null, currency: string | null): string => {
+    if (!Number.isFinite(Number(cents)) || Number(cents) <= 0) return '';
+    return ` - ${currency || 'USD'} $${(Number(cents) / 100).toFixed(2)}`;
+  };
+
+  const contextLines = rows.map((e) =>
+    `[${String(e.risk_level || 'low').toUpperCase()}] ${e.entity_type} | ${e.direction} | ${e.counterparty_name || 'unknown'}${formatCents(e.amount_cents, e.currency)} | status: ${e.status} | action_required: ${e.action_required ? 'yes' : 'no'} | ${e.action_description || e.subject || ''} | message_id: ${e.message_id}`
+  ).join('\n');
+
+  const systemPrompt = intent === 'financial_query'
+    ? 'You are Jarvis, an AI chief-of-staff. Summarize the user\'s financial position from these structured email entity facts. Be specific with names and amounts. Distinguish clearly between money they are OWED (AR, direction=ar) and money they OWE (AP, direction=ap). Flag anything overdue or high risk. End with the single most important financial action they should take right now. Be concise.'
+    : 'You are Jarvis, an AI chief-of-staff. The user wants to know what needs their attention. Here are structured facts extracted from their emails, ranked by risk. For each item requiring action, state who it involves, what is needed, and why it matters. Be specific. End with the single highest-leverage action they should take first. No filler.';
+
+  const answer = await callOpenAiChatViaGateway(
+    env,
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: contextLines }
+    ],
+    undefined,
+    { workspaceId: ctx.workspaceId, accountId: ctx.accountId, operation: 'entity_query', endpoint: '/chat/query' }
+  );
+
+  const citations: Citation[] = rows
+    .filter((e) => Boolean(e.message_id))
+    .slice(0, 5)
+    .map((e) => ({
+      messageId: e.message_id,
+      date: e.sent_at,
+      from: e.counterparty_name || '',
+      subject: e.subject || e.entity_type,
+      score: e.risk_level === 'critical' ? 1.0 : e.risk_level === 'high' ? 0.9 : e.risk_level === 'medium' ? 0.75 : 0.6
+    }));
+
+  return { answer, citations, searched: { intent, source: 'email_entities', rows_found: rows.length } };
 }
 
 async function buildThreadSummaryIntent(
@@ -2157,15 +2297,36 @@ function detectIntent(query: string): QueryIntent {
   if (q.includes('thread summary') || q.includes('summarize thread')) {
     return 'thread_summary';
   }
+
+  if (
+    /\b(owe|owed|invoice|invoices|unpaid|payment|payments|ar|ap|receivable|payable|outstanding|balance due|collect|collections)\b/.test(q)
+  ) {
+    return 'financial_query';
+  }
+
+  if (
+    isDailyBriefingQuery(query) ||
+    /\b(attention|priorit|action|urgent|today|this week|need to do|focus on|catch me up)\b/.test(q)
+  ) {
+    return 'attention_query';
+  }
+
   return 'find_email';
 }
 
 function isDailyBriefingQuery(query: string): boolean {
   const q = query.toLowerCase();
+  const hasToday = /\btoday\b/.test(q);
+  const hasBriefingCue =
+    /\bdaily\s+briefing\b/.test(q) ||
+    /\bgood\s+morning\b/.test(q) ||
+    /\btop\s+priorit/.test(q) ||
+    /\btake\s+care\b/.test(q) ||
+    /\btoday\s+actions?\b/.test(q);
+  const hasUrgencyCue = /\b(attention|priorit|urgent|need)\b/.test(q);
   return (
-    (q.includes('today') && (q.includes('attention') || q.includes('priority') || q.includes('urgent') || q.includes('need'))) ||
-    q.includes('today actions') ||
-    q.includes('daily briefing')
+    (hasToday && hasUrgencyCue) ||
+    hasBriefingCue
   );
 }
 
@@ -3219,6 +3380,209 @@ async function performSemanticSearch(
     .slice(0, k);
 }
 
+async function buildDailyBriefingHitSet(
+  env: Env,
+  workspaceId: string,
+  accountId: string,
+  semanticHits: SearchResult[]
+): Promise<SearchResult[]> {
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT
+         em.id AS message_id,
+         em.thread_id AS thread_id,
+         em.sent_at AS sent_at,
+         COALESCE(
+           json_extract(em.from_json, '$[0].email'),
+           json_extract(em.from_json, '$[0].address'),
+           ''
+         ) AS sender,
+         em.subject AS subject,
+         em.snippet AS snippet
+       FROM email_messages em
+       WHERE em.workspace_id = ?
+         AND em.account_id = ?
+       ORDER BY datetime(COALESCE(em.sent_at, em.created_at)) DESC
+       LIMIT 80`
+    )
+    .bind(workspaceId, accountId)
+    .all<{
+      message_id: string;
+      thread_id: string | null;
+      sent_at: string | null;
+      sender: string | null;
+      subject: string | null;
+      snippet: string | null;
+    }>();
+
+  const synthetic: SearchResult[] = (rows.results || [])
+    .map((row) => {
+      const subject = row.subject || '(no subject)';
+      const excerpt = (row.snippet || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      const priority = computeBriefingPriorityScore(`${subject}\n${excerpt}`, row.sent_at);
+      return {
+        message_id: row.message_id,
+        thread_id: row.thread_id,
+        date: row.sent_at,
+        from: row.sender || 'unknown',
+        subject,
+        excerpt,
+        score: priority,
+        chunk_id: `msg:${row.message_id}`
+      };
+    })
+    .filter((row) => row.score >= 0.35);
+
+  const byMessageId = new Map<string, SearchResult>();
+  for (const hit of synthetic) {
+    byMessageId.set(hit.message_id, hit);
+  }
+  for (const hit of semanticHits) {
+    const briefScore = computeBriefingPriorityScore(`${hit.subject}\n${hit.excerpt}`, hit.date);
+    const merged: SearchResult = {
+      ...hit,
+      score: Number((briefScore * 0.7 + Number(hit.score || 0) * 0.3).toFixed(6))
+    };
+    const existing = byMessageId.get(hit.message_id);
+    if (!existing || merged.score > existing.score) {
+      byMessageId.set(hit.message_id, merged);
+    }
+  }
+
+  return Array.from(byMessageId.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 12);
+}
+
+function computeBriefingPriorityScore(text: string, sentAt: string | null): number {
+  const lower = text.toLowerCase();
+  let score = 0.1;
+
+  const highRiskPhrases = [
+    'listing removal',
+    'appeal',
+    'account suspended',
+    'compliance',
+    'legal',
+    'contract breach',
+    'overdue invoice',
+    'payment overdue',
+    'final notice'
+  ];
+  const mediumRiskPhrases = [
+    'invoice',
+    'payment',
+    'additional information needed',
+    'please reply',
+    'can you',
+    'could you',
+    'needs your response',
+    'question'
+  ];
+  const lowValuePhrases = ['newsletter', 'marketing automations', "we'd love your feedback", 'new feature', 'announcement'];
+
+  for (const phrase of highRiskPhrases) {
+    if (lower.includes(phrase)) score += 0.45;
+  }
+  for (const phrase of mediumRiskPhrases) {
+    if (lower.includes(phrase)) score += 0.2;
+  }
+  for (const phrase of lowValuePhrases) {
+    if (lower.includes(phrase)) score -= 0.2;
+  }
+  if (/\bwithin the next\s+\d+\s+days\b/.test(lower) || /\bdue\b/.test(lower) || /\boverdue\b/.test(lower)) {
+    score += 0.2;
+  }
+
+  const recencyBoost = computeRecencyBoost(sentAt);
+  score += recencyBoost;
+  return Math.max(0, Math.min(1, Number(score.toFixed(6))));
+}
+
+function computeRecencyBoost(sentAt: string | null): number {
+  if (!sentAt) return 0;
+  const ts = Date.parse(sentAt);
+  if (!Number.isFinite(ts)) return 0;
+  const ageHours = (Date.now() - ts) / (1000 * 60 * 60);
+  if (ageHours <= 24) return 0.12;
+  if (ageHours <= 72) return 0.06;
+  if (ageHours <= 168) return 0.03;
+  return 0;
+}
+
+function computeBriefingPriorityReason(text: string): string {
+  const lower = text.toLowerCase();
+  if (lower.includes('listing removal') || lower.includes('appeal')) return 'account risk';
+  if (lower.includes('overdue') || lower.includes('invoice') || lower.includes('payment')) return 'financial risk';
+  if (lower.includes('additional information needed') || lower.includes('please reply') || lower.includes('question')) return 'requires response';
+  if (lower.includes('marketing automations') || lower.includes('announcement')) return 'informational notice';
+  return 'general priority';
+}
+
+function buildDeterministicDailyBriefing(hits: SearchResult[]): { answer: string; citations: Citation[] } {
+  const ranked = hits
+    .slice()
+    .sort((a, b) => b.score - a.score)
+    .filter((h) => h.score >= 0.4)
+    .slice(0, 5);
+  const selected = ranked.length > 0 ? ranked.slice(0, 3) : hits.slice(0, 3);
+  const citations: Citation[] = selected.map((h) => ({
+    messageId: h.message_id,
+    date: h.date,
+    from: h.from || 'unknown',
+    subject: h.subject || '(no subject)',
+    score: h.score
+  }));
+  if (selected.length === 0) {
+    return {
+      answer: 'No priority items were found for today from indexed email context. Next action: review inbox for new urgent requests.',
+      citations: []
+    };
+  }
+
+  const lines = selected.map((hit, index) => {
+    const priority = classifyBriefingPriority(hit.score);
+    const requested = extractRequestedActionFromText(`${hit.subject}\n${hit.excerpt}`);
+    return `${index + 1}. [${priority}] ${hit.subject} (${hit.from || 'unknown'}) - ${requested}`;
+  });
+  const nextAction = extractRequestedActionFromText(`${selected[0].subject}\n${selected[0].excerpt}`);
+  const answer = [
+    'Top priorities today:',
+    ...lines,
+    `Next action: ${nextAction}`
+  ].join('\n');
+  return { answer, citations };
+}
+
+function classifyBriefingPriority(score: number): 'Critical' | 'High' | 'Medium' {
+  if (score >= 0.8) return 'Critical';
+  if (score >= 0.6) return 'High';
+  return 'Medium';
+}
+
+function extractRequestedActionFromText(text: string): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const lower = normalized.toLowerCase();
+  if (lower.includes('additional information needed') || lower.includes('listing removal appeal')) {
+    return 'Provide the requested additional appeal details within 7 days.';
+  }
+  if (lower.includes('overdue invoice')) {
+    return 'Resolve the overdue invoice immediately.';
+  }
+  if (lower.includes('invoice')) {
+    return 'Review and pay the invoice if approved.';
+  }
+  if (lower.includes('can you') || lower.includes('could you') || lower.includes('?')) {
+    const q = normalized.match(/([^.!?]*\?)/);
+    if (q?.[1]) return q[1].trim();
+    return 'Respond to the sender with the requested details.';
+  }
+  if (lower.includes('due ') || lower.includes('deadline')) {
+    return 'Complete the requested task before the stated deadline.';
+  }
+  return 'Review and respond with a concrete decision.';
+}
+
 async function loadAgentProfile(
   env: Env,
   agentId: string
@@ -3283,7 +3647,7 @@ async function callOpenAiChatViaGateway(
     body: JSON.stringify({
       model: env.OPENAI_MODEL || 'gpt-4o-mini',
       messages,
-      temperature: 0.2,
+      temperature: responseFormat?.type === 'json_object' ? 0 : 0.2,
       ...(responseFormat ? { response_format: responseFormat } : {})
     })
   });
@@ -3418,18 +3782,36 @@ async function executeUnifiedFindEmailQuery(
 }> {
   const includeProposals = input.includeProposals === true;
   const isDailyBriefing = isDailyBriefingQuery(input.query);
-  const hits = await performSemanticSearch(env, input.workspaceId, input.accountId, input.query, 10, {
+  let hits = await performSemanticSearch(env, input.workspaceId, input.accountId, input.query, 10, {
     workspaceId: input.workspaceId,
     accountId: input.accountId,
     runId: input.runId,
     operation: 'chat_query_unified_retrieval',
     endpoint: '/chat/query'
   });
+  if (isDailyBriefing) {
+    hits = await buildDailyBriefingHitSet(env, input.workspaceId, input.accountId, hits);
+  }
   if (hits.length === 0) {
     return {
       answer: 'Insufficient sources for a factual answer. I searched indexed email content and did not find high-confidence matches.',
       citations: [],
       searched: { intent: 'find_email', mode: isDailyBriefing ? 'daily_briefing' : 'default', strategy: 'vector_search+llm_unified', k: 10, hits: 0 },
+      proposals: []
+    };
+  }
+  if (isDailyBriefing) {
+    const briefing = buildDeterministicDailyBriefing(hits);
+    return {
+      answer: briefing.answer,
+      citations: briefing.citations,
+      searched: {
+        intent: 'find_email',
+        mode: 'daily_briefing',
+        strategy: 'daily_priority_heuristic',
+        k: 10,
+        hits: hits.length
+      },
       proposals: []
     };
   }
@@ -3458,7 +3840,9 @@ async function executeUnifiedFindEmailQuery(
     from: h.from,
     subject: h.subject,
     excerpt: h.excerpt,
-    body_text: truncateText(fullChunkByVectorId.get(h.chunk_id) || h.excerpt || '', 3000)
+    body_text: truncateText(fullChunkByVectorId.get(h.chunk_id) || h.excerpt || '', 3000),
+    priority_score: h.score,
+    priority_reason: computeBriefingPriorityReason(`${h.subject}\n${h.excerpt}`)
   }));
 
   const raw = await callOpenAiChatViaGateway(
@@ -3473,6 +3857,8 @@ Return exactly one JSON object with this exact shape and field names:
 {
   "answer": "short, useful narrative answer in plain English",
   "citation_ids": ["message_id_1"],
+  "missing_info": ["specific missing detail required to complete task"],
+  "next_action": "single concrete next action",
   "proposals": [
     {
       "title": "one line describing the situation",
@@ -3492,9 +3878,12 @@ Rules:
 - Never end your answer with a question. State what you found, what needs to happen, and what you have prepared. The user will decide what to do next.
 - Use only information present in context.
 - "citation_ids" must reference message_id values from context.
+- "missing_info" must list concrete gaps that block a complete answer/draft.
+- "next_action" must be a concrete, executable next step.
 - If no valid evidence exists, set "answer" to: "insufficient sources" and use empty citation_ids/proposals.
 - Only generate a proposal if you can populate a complete executable payload from the email content. If you cannot identify a specific recipient, action target, or required fields, include the item in the answer text instead of creating a proposal.
-- If the user asks what needs attention today (or similar), answer as a daily briefing: rank the top priorities first, explain urgency/risk in one line each, and end with the single most important next action.
+- If context says additional information is needed but does not specify the exact items, explicitly say that the exact requested items are not visible in email context and ask the user to share them from the source system page.
+- If the user asks what needs attention today, what is urgent, or what to focus on: answer as a daily briefing ranked by real-world impact. State who each item involves, what they want, and why it matters. End with the single most important next action.
 - If proposing a response to an email, action_type MUST be exactly "reply_email" (never "send_email").
 - For every "reply_email" proposal, include at least one valid message_id in "citations" and provide a complete "reply_body".
 - For reply_email proposals, reply_body must contain only greeting, body, and closing, and be signed with "${accountOwnerName}".
@@ -3524,6 +3913,8 @@ Rules:
   const parsed = JSON.parse(stripJsonCodeFence(raw)) as {
     answer?: unknown;
     citation_ids?: unknown;
+    missing_info?: unknown;
+    next_action?: unknown;
     proposals?: unknown;
   };
   const answer = stringOr(parsed.answer);
@@ -3549,6 +3940,9 @@ Rules:
     });
     if (citations.length >= 6) break;
   }
+  const missingInfo = collectMissingInfo(parsed.missing_info, context);
+  const nextAction = stringOr(parsed.next_action);
+  const finalAnswer = normalizeJarvisAnswer(answer, missingInfo, nextAction);
 
   let proposals: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }> = [];
   if (includeProposals) {
@@ -3565,7 +3959,7 @@ Rules:
   }
 
   return {
-    answer,
+    answer: finalAnswer,
     citations,
     searched: {
       intent: 'find_email',
@@ -3743,6 +4137,7 @@ Only generate a proposal if you can populate a complete executable payload from 
           })
         }
       ],
+      { type: 'json_object' },
       {
         workspaceId: input.workspaceId,
         accountId: input.accountId,
@@ -3814,8 +4209,41 @@ function isSummaryLikeDraft(text: string): boolean {
 }
 
 function containsTemplatePlaceholder(text: string): boolean {
-  const placeholderPatterns = [/\[(?:your|client|sender|recipient)[^\]]*\]/i, /{{[^}]*name[^}]*}}/i];
+  const placeholderPatterns = [/\[[^\]]{1,120}\]/i, /{{[^}]{1,120}}/i, /\binsert\b/i, /\bplaceholder\b/i, /\btbd\b/i];
   return placeholderPatterns.some((pattern) => pattern.test(text));
+}
+
+function collectMissingInfo(rawMissingInfo: unknown, context: Array<{ body_text: string }>): string[] {
+  const missing: string[] = [];
+  if (Array.isArray(rawMissingInfo)) {
+    for (const item of rawMissingInfo) {
+      const value = stringOr(item);
+      if (!value) continue;
+      if (!missing.includes(value)) missing.push(value);
+    }
+  }
+
+  const fullContext = context.map((c) => c.body_text.toLowerCase()).join('\n');
+  const hasAdditionalNeeded = fullContext.includes('additional information needed');
+  const pointsToListingIssuesPage = fullContext.includes('listing issues page');
+  const hasSpecificChecklist =
+    /provide (the )?following/i.test(fullContext) ||
+    /required documents/i.test(fullContext) ||
+    /please include/i.test(fullContext);
+  if (hasAdditionalNeeded && pointsToListingIssuesPage && !hasSpecificChecklist) {
+    const inferred = 'Exact requested items from the Airbnb Listing Issues page are not present in the email context.';
+    if (!missing.includes(inferred)) missing.push(inferred);
+  }
+
+  return missing.slice(0, 4);
+}
+
+function normalizeJarvisAnswer(answer: string, missingInfo: string[], nextAction: string | null): string {
+  const base = answer.trim().replace(/\?+\s*$/, '.');
+  if (missingInfo.length === 0 && !nextAction) return base;
+  const gaps = missingInfo.length > 0 ? `Missing information: ${missingInfo.join(' ')}` : null;
+  const action = nextAction ? `Next action: ${nextAction.replace(/\?+\s*$/, '.')}` : null;
+  return [base, gaps, action].filter((part): part is string => Boolean(part)).join('\n');
 }
 
 function deriveAccountOwnerName(row?: { display_name: string | null; label: string | null; email: string | null }): string {

@@ -827,7 +827,7 @@ async function processSingleEmbeddingJob(
 
   try {
     const prepared = (chunkRows.results || []).map((row) => {
-      const cleaned = cleanEmailBody(row.chunk_text || '').replace(/\s+/g, ' ').trim();
+      const cleaned = cleanChunkCandidate(cleanEmailBody(row.chunk_text || '').replace(/\s+/g, ' ').trim());
       return { ...row, cleaned };
     });
 
@@ -841,12 +841,7 @@ async function processSingleEmbeddingJob(
       }
     }
 
-    const vectorIds = prepared.map((x) => x.vector_id).filter((x): x is string => Boolean(x));
-    if (vectorIds.length > 0) {
-      await env.SKY_VECTORIZE.delete(vectorIds);
-    }
-
-    const validRows = prepared.filter((x) => Boolean(x.cleaned));
+    const validRows = prepared.filter((x) => Boolean(x.cleaned) && !isNoiseHeavyChunk(x.cleaned));
     const chunks = validRows.map((x) => x.cleaned);
     if (chunks.length === 0) {
       await markEmbeddingJobIndexed(env, job.id, Number(job.attempts || 0) + 1);
@@ -1062,10 +1057,11 @@ function workersAiGatewayOptions(env: Env): Record<string, unknown> | undefined 
 }
 
 function cleanEmailBody(raw: string): string {
+  const parsed = extractTextFromMimeMessage(raw);
   const headerNames =
     '(Return-Path|Received|MIME-Version|Content-Type|Content-Transfer-Encoding|X-[\\w-]+|Message-ID|Date|From|To|Cc|Bcc|Subject|Reply-To|Delivered-To|Authentication-Results|DKIM-Signature|ARC-[\\w-]+)';
 
-  let cleaned = raw
+  let cleaned = parsed
     .replace(
       /^(Return-Path|Received|MIME-Version|Content-Type|Content-Transfer-Encoding|X-[\w-]+|Message-ID|Date|From|To|Cc|Bcc|Subject|Reply-To|Delivered-To|Authentication-Results|DKIM-Signature|ARC-[\w-]+):.*$/gim,
       ''
@@ -1077,6 +1073,10 @@ function cleanEmailBody(raw: string): string {
     .replace(/^(begin:vcalendar|end:vcalendar|begin:vevent|dtstart|dtend|organizer).*/gim, '')
     .replace(/^(confidentiality notice|this message is intended only for).*/gim, '')
     .replace(/\n{3,}/g, '\n\n')
+    .replace(/(?:^|\s)-{2,}=?_part_[^\s]+/gi, ' ')
+    .replace(/(?:^|\s)boundary\s*=\s*"[^"]*"/gi, ' ')
+    .replace(/(?:^|\s)boundary\s*=\s*[^"\s]+/gi, ' ')
+    .replace(/(?:^|\s)multipart\/[a-z0-9-]+/gi, ' ')
     .trim();
 
   cleaned = cleaned.replace(
@@ -1085,12 +1085,296 @@ function cleanEmailBody(raw: string): string {
   );
 
   return cleaned
-    .replace(/<[^>]*>/g, ' ')
     .replace(/[A-Za-z0-9+/]{100,}={0,2}/g, '')
-    .replace(/https?:\/\/[^\s]+/g, '')
-    .replace(/[\w.-]+@[\w.-]+\.\w+/g, '')
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/=\n/g, '')
+    .replace(/https?:\/\/[^\s)>"']+/gi, (url: string) => sanitizeTrackedUrl(url))
+    .replace(/<[^>]{1,300}>/g, ' ')
+    .replace(/@font-face\s*\{[^}]*\}/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/(visit help center|contact airbnb|airbnb,\s*inc\.|unsubscribe|privacy policy)[\s\S]*$/i, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+function cleanChunkCandidate(raw: string): string {
+  return raw
+    .replace(/https?:\/\/a0\.muscache\.com\/[^\s)>"']+/gi, ' ')
+    .replace(/https?:\/\/(?:www\.)?(facebook|instagram|twitter)\.com\/[^\s)>"']+/gi, ' ')
+    .replace(/\b(?:visit help center|contact airbnb)\b/gi, ' ')
+    .replace(/@font-face\b[^.]{0,500}/gi, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function isNoiseHeavyChunk(text: string): boolean {
+  const lower = text.toLowerCase();
+  const actionableHits = (lower.match(/\b(please|could you|can you|request|deadline|due|status|next step|additional information|invoice|contract|meeting|approved|denied|appeal|listing|support|question)\b|\?/g) || []).length;
+  const noiseHits = (lower.match(/(@font-face|<html|<head|<style|<\/?(div|table|tr|td|span)\b|mso-|viewport|airbnb,\s*inc\.|visit help center|contact airbnb|facebook\.com|instagram\.com|twitter\.com|a0\.muscache\.com|content="text\/html")/g) || []).length;
+  const linkCount = (text.match(/https?:\/\//g) || []).length;
+  const symbolCount = (text.match(/[<>{};=_]/g) || []).length;
+  const symbolRatio = text.length > 0 ? symbolCount / text.length : 0;
+
+  if (noiseHits >= 2 && actionableHits === 0) return true;
+  if (linkCount >= 5 && actionableHits === 0) return true;
+  if (symbolRatio > 0.2 && actionableHits === 0) return true;
+  return false;
+}
+
+function extractTextFromMimeMessage(raw: string): string {
+  const normalized = raw.replace(/\r\n/g, '\n');
+  const extracted = extractTextFromMimeEntity(normalized);
+  const preferred = extracted.plainParts.filter(Boolean).join('\n\n').trim();
+  if (preferred) return preferred;
+  const html = extracted.htmlParts.filter(Boolean).join('\n\n').trim();
+  if (html) return html;
+  return extractBodyFallback(normalized);
+}
+
+function extractTextFromMimeEntity(entity: string): { plainParts: string[]; htmlParts: string[] } {
+  const splitAt = entity.indexOf('\n\n');
+  const rawHeaders = splitAt >= 0 ? entity.slice(0, splitAt) : '';
+  const rawBody = splitAt >= 0 ? entity.slice(splitAt + 2) : entity;
+  const headers = parseMimeHeaders(rawHeaders);
+  const contentType = (headers['content-type'] || 'text/plain').toLowerCase();
+  const transferEncoding = (headers['content-transfer-encoding'] || '7bit').toLowerCase();
+  const charset = parseMimeCharset(contentType);
+
+  if (contentType.includes('multipart/alternative')) {
+    const boundary = parseMimeBoundary(contentType);
+    if (!boundary) return { plainParts: [], htmlParts: [] };
+    const parts = splitMimeMultipartBody(rawBody, boundary);
+    const plainCandidates: string[] = [];
+    const htmlCandidates: string[] = [];
+    for (const part of parts) {
+      const nested = extractTextFromMimeEntity(part);
+      if (nested.plainParts.length > 0) plainCandidates.push(...nested.plainParts);
+      if (nested.htmlParts.length > 0) htmlCandidates.push(...nested.htmlParts);
+    }
+    if (plainCandidates.length > 0) return { plainParts: [plainCandidates[0]], htmlParts: [] };
+    if (htmlCandidates.length > 0) return { plainParts: [], htmlParts: [htmlCandidates[0]] };
+    return { plainParts: [], htmlParts: [] };
+  }
+
+  if (contentType.includes('multipart/')) {
+    const boundary = parseMimeBoundary(contentType);
+    if (!boundary) return { plainParts: [], htmlParts: [] };
+    const parts = splitMimeMultipartBody(rawBody, boundary);
+    const plainParts: string[] = [];
+    const htmlParts: string[] = [];
+    for (const part of parts) {
+      const nested = extractTextFromMimeEntity(part);
+      plainParts.push(...nested.plainParts);
+      htmlParts.push(...nested.htmlParts);
+    }
+    return { plainParts, htmlParts };
+  }
+
+  if (contentType.includes('message/rfc822')) {
+    return extractTextFromMimeEntity(rawBody);
+  }
+
+  const decoded = decodeMimeTransferEncoding(rawBody, transferEncoding, charset);
+  if (contentType.includes('text/plain')) {
+    return { plainParts: [decoded], htmlParts: [] };
+  }
+  if (contentType.includes('text/html')) {
+    return { plainParts: [], htmlParts: [htmlToText(decoded)] };
+  }
+
+  return { plainParts: [], htmlParts: [] };
+}
+
+function parseMimeHeaders(rawHeaders: string): Record<string, string> {
+  const lines = rawHeaders.split('\n');
+  const unfolded: string[] = [];
+  for (const line of lines) {
+    if ((line.startsWith(' ') || line.startsWith('\t')) && unfolded.length > 0) {
+      unfolded[unfolded.length - 1] += ` ${line.trim()}`;
+      continue;
+    }
+    if (line.trim()) unfolded.push(line.trim());
+  }
+
+  const headers: Record<string, string> = {};
+  for (const line of unfolded) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim().toLowerCase();
+    const value = line.slice(idx + 1).trim();
+    const decodedValue = decodeMimeHeaderWords(value);
+    headers[key] = headers[key] ? `${headers[key]}, ${decodedValue}` : decodedValue;
+  }
+  return headers;
+}
+
+function parseMimeCharset(contentType: string): string {
+  const match = contentType.match(/charset=(?:"([^"]+)"|([^;]+))/i);
+  const charset = (match?.[1] || match?.[2] || 'utf-8').trim().toLowerCase();
+  return normalizeCharsetLabel(charset);
+}
+
+function parseMimeBoundary(contentType: string): string | null {
+  const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!match) return null;
+  return (match[1] || match[2] || '').trim();
+}
+
+function splitMimeMultipartBody(body: string, boundary: string): string[] {
+  const marker = `--${boundary}`;
+  const endMarker = `--${boundary}--`;
+  const lines = body.split('\n');
+  const parts: string[] = [];
+  let collecting = false;
+  let current: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith(endMarker)) {
+      if (collecting && current.length > 0) parts.push(current.join('\n'));
+      break;
+    }
+    if (line.startsWith(marker)) {
+      if (collecting && current.length > 0) parts.push(current.join('\n'));
+      collecting = true;
+      current = [];
+      continue;
+    }
+    if (collecting) current.push(line);
+  }
+
+  return parts.map((part) => part.trim()).filter(Boolean);
+}
+
+function decodeMimeTransferEncoding(body: string, transferEncoding: string, charset: string): string {
+  if (transferEncoding.includes('quoted-printable')) {
+    return decodeBytesWithCharset(decodeQuotedPrintableToBytes(body), charset);
+  }
+  if (transferEncoding.includes('base64')) {
+    return decodeBytesWithCharset(decodeBase64ToBytes(body), charset);
+  }
+  return decodeBytesWithCharset(stringToByteArray(body), charset);
+}
+
+function decodeQuotedPrintableToBytes(input: string): Uint8Array {
+  const softWrapped = input.replace(/=\n/g, '');
+  const bytes: number[] = [];
+  for (let i = 0; i < softWrapped.length; i += 1) {
+    const ch = softWrapped[i];
+    if (ch === '=' && i + 2 < softWrapped.length) {
+      const hex = softWrapped.slice(i + 1, i + 3);
+      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+        bytes.push(Number.parseInt(hex, 16));
+        i += 2;
+        continue;
+      }
+    }
+    bytes.push(ch.charCodeAt(0));
+  }
+  return new Uint8Array(bytes);
+}
+
+function decodeBase64ToBytes(input: string): Uint8Array {
+  const compact = input.replace(/\s+/g, '');
+  const binary = atob(compact);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function stringToByteArray(input: string): Uint8Array {
+  const bytes = new Uint8Array(input.length);
+  for (let i = 0; i < input.length; i += 1) {
+    bytes[i] = input.charCodeAt(i) & 0xff;
+  }
+  return bytes;
+}
+
+function decodeBytesWithCharset(bytes: Uint8Array, charset: string): string {
+  return new TextDecoder(charset, { fatal: false }).decode(bytes);
+}
+
+function normalizeCharsetLabel(charset: string): string {
+  const c = charset.trim().toLowerCase();
+  if (c === 'utf8') return 'utf-8';
+  if (c === 'latin1' || c === 'iso8859-1') return 'iso-8859-1';
+  if (c === 'win-1252') return 'windows-1252';
+  return c || 'utf-8';
+}
+
+function decodeMimeHeaderWords(input: string): string {
+  return input.replace(/=\?([^?]+)\?([bBqQ])\?([^?]+)\?=/g, (_m, rawCharset: string, enc: string, data: string) => {
+    const charset = normalizeCharsetLabel(String(rawCharset || 'utf-8'));
+    if (String(enc).toLowerCase() === 'b') {
+      return decodeBytesWithCharset(decodeBase64ToBytes(data), charset);
+    }
+    const q = data.replace(/_/g, ' ');
+    return decodeBytesWithCharset(decodeQuotedPrintableToBytes(q), charset);
+  });
+}
+
+function htmlToText(input: string): string {
+  const cleaned = input
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<head[\s\S]*?<\/head>/gi, ' ')
+    .replace(/<(script|style|noscript|svg|canvas|form|footer|nav|header)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]*style=["'][^"']*display\s*:\s*none[^"']*["'][^>]*>[\s\S]*?<\/[^>]+>/gi, ' ')
+    .replace(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, href: string, text: string) => {
+      const label = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      const sanitized = sanitizeTrackedUrl(href);
+      return label ? `${label} ${sanitized}` : sanitized;
+    })
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|section|article|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ');
+
+  return decodeHtmlEntities(cleaned)
+    .replace(/https?:\/\/[^\s)>"']+/gi, (url: string) => sanitizeTrackedUrl(url))
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function sanitizeTrackedUrl(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    if (u.hostname.endsWith('airbnb.com') && u.pathname === '/external_link') {
+      const target = u.searchParams.get('url');
+      if (target) {
+        return sanitizeTrackedUrl(target);
+      }
+    }
+    const kept = u.searchParams
+      .keys()
+      .filter((k) => !/^utm_/i.test(k) && !/^(gclid|fbclid|mc_eid|mc_cid|euid|trk|tracking|campaign|c)$/i.test(k));
+    const clean = new URL(`${u.protocol}//${u.host}${u.pathname}`);
+    for (const key of kept) {
+      const values = u.searchParams.getAll(key);
+      for (const value of values) clean.searchParams.append(key, value);
+    }
+    return clean.toString();
+  } catch {
+    return rawUrl.replace(/\?.*$/, '');
+  }
+}
+
+function decodeHtmlEntities(input: string): string {
+  return input
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCharCode(Number.parseInt(dec, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
+function extractBodyFallback(normalizedRaw: string): string {
+  const splitAt = normalizedRaw.indexOf('\n\n');
+  if (splitAt >= 0) return normalizedRaw.slice(splitAt + 2);
+  return normalizedRaw;
 }
 
 function parseJsonObject(input: string | null | undefined): Record<string, unknown> {

@@ -26,6 +26,9 @@ bucket_name = "sky-ai-artifacts-dev"
 binding = "SKY_VECTORIZE"
 index_name = "sky-ai-memory-dev"
 
+[ai]
+binding = "AI"
+
 [[queues.producers]]
 binding = "EMBEDDING_QUEUE"
 queue = "sky-ai-embeddings-dev"
@@ -58,6 +61,9 @@ bucket_name = "sky-ai-artifacts-prod"
 [[env.prod.vectorize]]
 binding = "SKY_VECTORIZE"
 index_name = "sky-ai-memory-prod"
+
+[env.prod.ai]
+binding = "AI"
 
 [[env.prod.queues.producers]]
 binding = "EMBEDDING_QUEUE"
