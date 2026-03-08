@@ -2079,9 +2079,15 @@ async function getTriageStats(request: Request, env: Env): Promise<Response> {
   });
 }
 
+function authorizeOpsRequest(request: Request, env: Env): boolean {
+  const token = extractBearerToken(request);
+  return !!(env.WORKER_API_KEY && token === env.WORKER_API_KEY);
+}
+
 async function runBlawbySkill(request: Request, env: Env): Promise<Response> {
-  const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!authorizeOpsRequest(request, env)) {
+    return json({ ok: false, error: 'unauthorized' }, 401);
+  }
 
   const payload = (await request.json()) as JsonRecord;
   const skill = stringOr(payload.skill);
@@ -2116,8 +2122,9 @@ async function runBlawbySkill(request: Request, env: Env): Promise<Response> {
 }
 
 async function getBlawbyContext(request: Request, env: Env): Promise<Response> {
-  const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!authorizeOpsRequest(request, env)) {
+    return json({ ok: false, error: 'unauthorized' }, 401);
+  }
 
   const agent = await getAgentByName<Env, BlawbyAgent>(
     env.BLAWBY_AGENT as DurableObjectNamespace<BlawbyAgent>,
