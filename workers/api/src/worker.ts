@@ -1,4 +1,4 @@
-import { routeAgentRequest } from 'agents';
+import { getAgentByName, routeAgentRequest } from 'agents';
 import {
   extractBearerToken,
   principalFromAccessClaims,
@@ -667,6 +667,16 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
 
   const runId = crypto.randomUUID();
   const intent = detectIntent(query);
+  let blawbyContext = '';
+  try {
+    const agent = await getAgentByName<Env, BlawbyAgent>(
+      env.BLAWBY_AGENT as DurableObjectNamespace<BlawbyAgent>,
+      'primary'
+    );
+    blawbyContext = await agent.getContext();
+  } catch {
+    // non-fatal — proceed without memory context
+  }
 
   const userTurnId = await insertTurn(env, {
     sessionId,
@@ -687,6 +697,7 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
       accountId,
       query,
       runId,
+      blawbyContext,
       includeProposals: true
     });
     result = enforceCitationContract(query, {
@@ -2067,8 +2078,19 @@ async function executeIntent(
   intent: QueryIntent,
   runId: string
 ): Promise<QueryResult> {
+  let blawbyContext = '';
+  try {
+    const agent = await getAgentByName<Env, BlawbyAgent>(
+      env.BLAWBY_AGENT as DurableObjectNamespace<BlawbyAgent>,
+      'primary'
+    );
+    blawbyContext = await agent.getContext();
+  } catch {
+    // non-fatal — proceed without memory context
+  }
+
   if (intent === 'financial_query' || intent === 'attention_query') {
-    const result = await executeEntityQuery(env, ctx, intent);
+    const result = await executeEntityQuery(env, ctx, intent, blawbyContext);
     return {
       intent,
       answer: result.answer,
@@ -2079,7 +2101,7 @@ async function executeIntent(
   }
 
   if (intent === 'calendar_query') {
-    const result = await executeCalendarQuery(env, ctx, query);
+    const result = await executeCalendarQuery(env, ctx, query, blawbyContext);
     return {
       intent,
       answer: result.answer,
@@ -2105,6 +2127,7 @@ async function executeIntent(
     accountId: ctx.accountId,
     query,
     runId,
+    blawbyContext,
     includeProposals: false
   });
   return {
@@ -2119,7 +2142,8 @@ async function executeIntent(
 async function executeEntityQuery(
   env: Env,
   ctx: { workspaceId: string; accountId: string },
-  intent: 'financial_query' | 'attention_query'
+  intent: 'financial_query' | 'attention_query',
+  blawbyContext: string
 ): Promise<{ answer: string; citations: Citation[]; searched: JsonRecord }> {
   const rowResult = intent === 'financial_query'
     ? await env.SKY_DB
@@ -2218,8 +2242,8 @@ async function executeEntityQuery(
   ).join('\n');
 
   const systemPrompt = intent === 'financial_query'
-    ? 'You are Blawby, an AI chief-of-staff. Summarize the user\'s financial position from these structured email entity facts. Be specific with names and amounts. Distinguish clearly between money they are OWED (AR, direction=ar) and money they OWE (AP, direction=ap). Flag anything overdue or high risk. End with the single most important financial action they should take right now. Be concise.'
-    : 'You are Blawby, an AI chief-of-staff. The user wants to know what needs their attention. Here are structured facts extracted from their emails, ranked by risk. For each item requiring action, state who it involves, what is needed, and why it matters. Be specific. End with the single highest-leverage action they should take first. No filler.';
+    ? `You are Blawby, an AI chief-of-staff.${blawbyContext ? `\n\n## What You Know\n${blawbyContext}` : ''} Summarize the user's financial position from these structured email entity facts. Be specific with names and amounts. Distinguish clearly between money they are OWED (AR, direction=ar) and money they OWE (AP, direction=ap). Flag anything overdue or high risk. End with the single most important financial action they should take right now. Be concise.`
+    : `You are Blawby, an AI chief-of-staff.${blawbyContext ? `\n\n## What You Know\n${blawbyContext}` : ''} The user wants to know what needs their attention. Here are structured facts extracted from their emails, ranked by risk. For each item requiring action, state who it involves, what is needed, and why it matters. Be specific. End with the single highest-leverage action they should take first. No filler.`;
 
   const answer = await callOpenAiChatViaGateway(
     env,
@@ -2248,7 +2272,8 @@ async function executeEntityQuery(
 async function executeCalendarQuery(
   env: Env,
   ctx: { workspaceId: string; accountId: string },
-  query: string
+  query: string,
+  blawbyContext: string
 ): Promise<{ answer: string; citations: Citation[]; searched: JsonRecord }> {
   const rowsResult = await env.SKY_DB
     .prepare(
@@ -2310,7 +2335,7 @@ async function executeCalendarQuery(
     [
       {
         role: 'system',
-        content: 'You are Blawby, an AI chief-of-staff. Answer schedule and calendar questions using the provided event facts only. Be concise, chronological, and explicit about times.'
+        content: `You are Blawby, an AI chief-of-staff.${blawbyContext ? `\n\n## What You Know\n${blawbyContext}` : ''} Answer schedule and calendar questions using the provided event facts only. Be concise, chronological, and explicit about times.`
       },
       {
         role: 'user',
@@ -3893,6 +3918,7 @@ async function executeUnifiedFindEmailQuery(
     accountId: string;
     query: string;
     runId: string;
+    blawbyContext: string;
     includeProposals?: boolean;
   }
 ): Promise<{
@@ -3972,7 +3998,9 @@ async function executeUnifiedFindEmailQuery(
       {
         role: 'system',
         content:
-          `You are Blawby, an AI chief-of-staff. Use the provided email context to answer the user naturally and practically.
+          `You are Blawby, an AI chief-of-staff.${input.blawbyContext ? `\n\n## What You Know\n${input.blawbyContext}` : ''}
+
+Use the provided email context to answer the user naturally and practically.
 
 Return exactly one JSON object with this exact shape and field names:
 {
