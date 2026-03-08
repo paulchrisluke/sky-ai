@@ -1,6 +1,7 @@
 name = "sky-ai-api"
 main = "workers/api/src/worker.ts"
 compatibility_date = "2026-03-05"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 [vars]
@@ -36,7 +37,17 @@ class_name = "ChatCoordinator"
 tag = "v1"
 new_classes = ["ChatCoordinator"]
 
+[[durable_objects.bindings]]
+name = "BLAWBY_AGENT"
+class_name = "BlawbyAgent"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["BlawbyAgent"]
+
 [env.prod]
+compatibility_date = "2026-03-05"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 [env.prod.vars]
@@ -67,3 +78,7 @@ binding = "AI"
 [[env.prod.durable_objects.bindings]]
 name = "CHAT_COORDINATOR"
 class_name = "ChatCoordinator"
+
+[[env.prod.durable_objects.bindings]]
+name = "BLAWBY_AGENT"
+class_name = "BlawbyAgent"

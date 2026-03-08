@@ -1,3 +1,4 @@
+import { routeAgentRequest } from 'agents';
 import {
   extractBearerToken,
   principalFromAccessClaims,
@@ -14,14 +15,16 @@ import {
   isProviderTemporarilyDisabled,
   markProviderHealthy
 } from '../../shared/providerHealth';
+import { BlawbyAgent } from './agents/blawby';
 
-interface Env extends AccessAuthEnv {
+export interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
   SKY_VECTORIZE: VectorizeIndex;
   AI?: {
     run(model: string, input: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
   };
   CHAT_COORDINATOR: DurableObjectNamespace;
+  BLAWBY_AGENT: DurableObjectNamespace;
   WORKER_API_KEY?: string;
   ACCESS_AUTH_ENABLED?: string;
   ALLOW_API_KEY_BYPASS?: string;
@@ -107,6 +110,14 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (url.pathname.startsWith('/agents/')) {
+      const auth = await authorizeHttpRequest(request, env);
+      if (!auth.ok) return auth.response;
+      const response = await routeAgentRequest(request, env);
+      if (response) return response;
+      return json({ ok: false, error: 'Not found' }, 404);
+    }
+
     if (request.method === 'GET' && url.pathname === '/health') {
       return json({ ok: true, service: 'sky-ai-api', env: env.ENVIRONMENT || 'unknown' });
     }
@@ -190,6 +201,8 @@ export default {
     return json({ ok: false, error: 'Not found' }, 404);
   }
 };
+
+export { BlawbyAgent };
 
 export class ChatCoordinator {
   private state: DurableObjectState;
@@ -2205,8 +2218,8 @@ async function executeEntityQuery(
   ).join('\n');
 
   const systemPrompt = intent === 'financial_query'
-    ? 'You are Jarvis, an AI chief-of-staff. Summarize the user\'s financial position from these structured email entity facts. Be specific with names and amounts. Distinguish clearly between money they are OWED (AR, direction=ar) and money they OWE (AP, direction=ap). Flag anything overdue or high risk. End with the single most important financial action they should take right now. Be concise.'
-    : 'You are Jarvis, an AI chief-of-staff. The user wants to know what needs their attention. Here are structured facts extracted from their emails, ranked by risk. For each item requiring action, state who it involves, what is needed, and why it matters. Be specific. End with the single highest-leverage action they should take first. No filler.';
+    ? 'You are Blawby, an AI chief-of-staff. Summarize the user\'s financial position from these structured email entity facts. Be specific with names and amounts. Distinguish clearly between money they are OWED (AR, direction=ar) and money they OWE (AP, direction=ap). Flag anything overdue or high risk. End with the single most important financial action they should take right now. Be concise.'
+    : 'You are Blawby, an AI chief-of-staff. The user wants to know what needs their attention. Here are structured facts extracted from their emails, ranked by risk. For each item requiring action, state who it involves, what is needed, and why it matters. Be specific. End with the single highest-leverage action they should take first. No filler.';
 
   const answer = await callOpenAiChatViaGateway(
     env,
@@ -2297,7 +2310,7 @@ async function executeCalendarQuery(
     [
       {
         role: 'system',
-        content: 'You are Jarvis, an AI chief-of-staff. Answer schedule and calendar questions using the provided event facts only. Be concise, chronological, and explicit about times.'
+        content: 'You are Blawby, an AI chief-of-staff. Answer schedule and calendar questions using the provided event facts only. Be concise, chronological, and explicit about times.'
       },
       {
         role: 'user',
@@ -3959,7 +3972,7 @@ async function executeUnifiedFindEmailQuery(
       {
         role: 'system',
         content:
-          `You are Jarvis, an AI chief-of-staff. Use the provided email context to answer the user naturally and practically.
+          `You are Blawby, an AI chief-of-staff. Use the provided email context to answer the user naturally and practically.
 
 Return exactly one JSON object with this exact shape and field names:
 {
@@ -4050,7 +4063,7 @@ Rules:
   }
   const missingInfo = collectMissingInfo(parsed.missing_info, context);
   const nextAction = stringOr(parsed.next_action);
-  const finalAnswer = normalizeJarvisAnswer(answer, missingInfo, nextAction);
+  const finalAnswer = normalizeBlawbyAnswer(answer, missingInfo, nextAction);
 
   let proposals: Array<{ id: string; type: string; title: string; draft_payload_json: JsonRecord; risk_level: string }> = [];
   if (includeProposals) {
@@ -4346,7 +4359,7 @@ function collectMissingInfo(rawMissingInfo: unknown, context: Array<{ body_text:
   return missing.slice(0, 4);
 }
 
-function normalizeJarvisAnswer(answer: string, missingInfo: string[], nextAction: string | null): string {
+function normalizeBlawbyAnswer(answer: string, missingInfo: string[], nextAction: string | null): string {
   const base = answer.trim().replace(/\?+\s*$/, '.');
   if (missingInfo.length === 0 && !nextAction) return base;
   const gaps = missingInfo.length > 0 ? `Missing information: ${missingInfo.join(' ')}` : null;

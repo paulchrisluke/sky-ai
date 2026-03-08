@@ -22,10 +22,13 @@
     "cf:d1:migrate:prod:jobs": "wrangler d1 migrations apply sky-ai-prod --config wrangler.jobs.toml --env prod"
   },
   "devDependencies": {
-    "wrangler": "^4.6.0",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "wrangler": "^4.6.0"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "agents": "^0.7.5"
   }
 }
