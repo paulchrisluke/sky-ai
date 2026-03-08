@@ -28,11 +28,12 @@ Fill `agent/.env` with:
 
 - `APPLE_ID` / `APPLE_APP_PASSWORD`
 - `WORKER_INGEST_URL`
+- `WORKER_WS_URL` (for Blawby WebSocket push)
 - `WORKER_OUTBOUND_NEXT_URL`
 - `WORKER_OUTBOUND_RESULT_URL`
 - `WORKER_API_KEY` (required; must match Worker secret)
+- `WORKSPACE_ID` (default: `default`)
 - `MAILBOXES` (default: `INBOX,Sent Messages`)
-- `POLL_INTERVAL_MS` (recommended: `60000`)
 - `STATE_FILE` (default: `../data/mailbox-state.json`)
 - SMTP defaults for iCloud are already in `.env.example` (`smtp.mail.me.com:587`)
 
@@ -79,13 +80,24 @@ Optional flags:
 
 Checkpoint state is written to `~/sky-ai/data/backfill-state.json`.
 
-## Suggested sync interval
+## If IMAP/CalDAV auth fails
 
-Start with `POLL_INTERVAL_MS=60000` (60s). If rate-limited, move to `120000`-`300000`.
+Symptoms:
+
+- IMAP: `AUTHENTICATIONFAILED`
+- CalDAV: `401` / `caldav_principal_not_found`
+
+Fix on Skyler account:
+
+1. Go to `https://appleid.apple.com`
+2. Sign in -> Security -> App-Specific Passwords
+3. Generate a new app password labeled `Blawby Mac Mini`
+4. Update `APPLE_APP_PASSWORD` in `agent/.env`
+5. Restart: `npx pm2 restart all`
 
 ## Notes
 
 - Cloudflare Tunnel is not used in the current architecture.
-- Agent now does both:
-  - IMAP ingest (`INBOX`, `Sent Messages`) -> Worker `/ingest/mail-thread`
+- Agent now does:
+  - IMAP IDLE + CalDAV poll -> WebSocket push to `/agents/blawby-agent/primary`
   - SMTP send on behalf of `APPLE_ID` by polling Worker `/mail/outbound/next`
