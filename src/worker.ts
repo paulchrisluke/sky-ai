@@ -98,6 +98,11 @@ export default {
       return resolveEntityDuplicates(request, env);
     }
 
+    if (request.method === 'POST' && url.pathname === '/ingest/calendar-events') {
+      if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
+      return ingestCalendarEvents(request, env);
+    }
+
     if (request.method === 'POST' && url.pathname === '/mail/send') {
       if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
       return queueOutboundMail(request, env);
@@ -239,44 +244,148 @@ async function persistEmailEntity(
     threadId: string | null;
     workspaceId: string;
     accountId: string;
+    sentAt?: string | null;
     entity: EmailEntity;
   }
 ): Promise<void> {
-  try {
-    await env.SKY_DB
+  // Lifecycle merge: a paid payment/receipt can close an existing open invoice/contract.
+  if ((input.entity.entity_type === 'payment' || input.entity.status === 'paid') && input.entity.amount_cents) {
+    const normalizedName = normalizeName(input.entity.counterparty_name);
+    const normalizedEmail = normalizeEmail(input.entity.counterparty_email);
+    const normalizedReference = normalizeReference(input.entity.reference_number);
+    const invoiceMatch = await env.SKY_DB
       .prepare(
-        `INSERT OR REPLACE INTO email_entities
-         (id, workspace_id, account_id, message_id, thread_id, entity_type, direction,
-          counterparty_name, counterparty_email, amount_cents, currency, due_date,
-          reference_number, status, action_required, action_description, risk_level,
-          confidence, raw_json, extracted_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        `SELECT id
+         FROM email_entities
+         WHERE workspace_id = ?
+           AND account_id = ?
+           AND amount_cents = ?
+           AND entity_type IN ('invoice', 'contract')
+           AND status != 'paid'
+           AND (
+             (? IS NOT NULL AND (
+               lower(COALESCE(counterparty_name, '')) = ?
+               OR lower(COALESCE(counterparty_name, '')) LIKE '%' || ? || '%'
+               OR ? LIKE '%' || lower(COALESCE(counterparty_name, '')) || '%'
+             ))
+             OR (? IS NOT NULL AND lower(COALESCE(counterparty_email, '')) = ?)
+             OR (? IS NOT NULL AND lower(trim(COALESCE(reference_number, ''))) = ?)
+           )
+         ORDER BY datetime(created_at) DESC
+         LIMIT 1`
       )
       .bind(
-        crypto.randomUUID(),
         input.workspaceId,
         input.accountId,
-        input.messageId,
-        input.threadId,
-        input.entity.entity_type,
-        input.entity.direction,
-        input.entity.counterparty_name,
-        input.entity.counterparty_email,
         input.entity.amount_cents,
-        input.entity.currency,
-        input.entity.due_date,
-        input.entity.reference_number,
-        input.entity.status,
-        input.entity.action_required ? 1 : 0,
-        input.entity.action_description,
-        input.entity.risk_level,
-        input.entity.confidence,
-        JSON.stringify(input.entity)
+        normalizedName,
+        normalizedName,
+        normalizedName,
+        normalizedName,
+        normalizedEmail,
+        normalizedEmail,
+        normalizedReference,
+        normalizedReference
+      )
+      .first<{ id: string }>();
+
+    if (invoiceMatch?.id) {
+      await env.SKY_DB
+        .prepare(
+          `UPDATE email_entities
+           SET status = 'paid',
+               action_required = 0,
+               action_description = NULL,
+               resolution_note = 'Closed by payment confirmation',
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`
+        )
+        .bind(invoiceMatch.id)
+        .run();
+      return;
+    }
+  }
+
+  const existing = await findEntityForMerge(env, input);
+  if (existing) {
+    const merged = mergeEmailEntities(existing, input.entity);
+    await env.SKY_DB
+      .prepare(
+        `UPDATE email_entities
+         SET thread_id = COALESCE(thread_id, ?),
+             entity_type = ?,
+             direction = ?,
+             counterparty_name = ?,
+             counterparty_email = ?,
+             amount_cents = ?,
+             currency = ?,
+             due_date = ?,
+             reference_number = ?,
+             status = ?,
+             action_required = ?,
+             action_description = ?,
+             risk_level = ?,
+             confidence = ?,
+             raw_json = ?,
+             extracted_at = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`
+      )
+      .bind(
+        input.threadId,
+        merged.entity_type,
+        merged.direction,
+        merged.counterparty_name,
+        merged.counterparty_email,
+        merged.amount_cents,
+        merged.currency,
+        merged.due_date,
+        merged.reference_number,
+        merged.status,
+        merged.action_required ? 1 : 0,
+        merged.action_description,
+        merged.risk_level,
+        merged.confidence,
+        JSON.stringify(merged),
+        input.sentAt || new Date().toISOString(),
+        existing.id
       )
       .run();
-  } catch {
-    // entity extraction must never break the ingest path
+    return;
   }
+
+  await env.SKY_DB
+    .prepare(
+      `INSERT OR REPLACE INTO email_entities
+       (id, workspace_id, account_id, message_id, thread_id, entity_type, direction,
+        counterparty_name, counterparty_email, amount_cents, currency, due_date,
+        reference_number, status, action_required, action_description, risk_level,
+        confidence, raw_json, extracted_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    )
+    .bind(
+      crypto.randomUUID(),
+      input.workspaceId,
+      input.accountId,
+      input.messageId,
+      input.threadId,
+      input.entity.entity_type,
+      input.entity.direction,
+      input.entity.counterparty_name,
+      input.entity.counterparty_email,
+      input.entity.amount_cents,
+      input.entity.currency,
+      input.entity.due_date,
+      input.entity.reference_number,
+      input.entity.status,
+      input.entity.action_required ? 1 : 0,
+      input.entity.action_description,
+      input.entity.risk_level,
+      input.entity.confidence,
+      JSON.stringify(input.entity),
+      input.sentAt || new Date().toISOString()
+    )
+    .run();
 }
 
 async function backfillEntityExtraction(request: Request, env: Env): Promise<Response> {
@@ -381,6 +490,7 @@ async function backfillEntityExtraction(request: Request, env: Env): Promise<Res
             threadId: row.thread_id,
             workspaceId: row.workspace_id,
             accountId: row.account_id,
+            sentAt: row.sent_at,
             entity
           });
           extracted += 1;
@@ -431,6 +541,305 @@ async function resolveEntityDuplicates(request: Request, env: Env): Promise<Resp
     grouped: result.grouped,
     dryRun
   });
+}
+
+async function ingestCalendarEvents(request: Request, env: Env): Promise<Response> {
+  const payload = (await request.json()) as JsonRecord;
+  const workspaceId = stringOr(payload.workspaceId) || 'default';
+  const accountId = stringOr(payload.accountId);
+  const calendarId = stringOr(payload.calendarId);
+  const calendarName = stringOr(payload.calendarName);
+  const sourceProvider = stringOr(payload.sourceProvider) || 'calendar_icloud';
+  const events = Array.isArray(payload.events) ? payload.events as JsonRecord[] : [];
+
+  if (!accountId) return json({ ok: false, error: 'accountId is required' }, 400);
+  if (!calendarId) return json({ ok: false, error: 'calendarId is required' }, 400);
+  if (events.length === 0) return json({ ok: true, upserted: 0, skipped: 0 });
+
+  await ensureWorkspace(env, workspaceId);
+
+  let upserted = 0;
+  let skipped = 0;
+
+  for (const event of events.slice(0, 500)) {
+    const eventUid = stringOr(event.uid);
+    const startAt = stringOr(event.startAt);
+    const endAt = stringOr(event.endAt);
+
+    if (!eventUid || !startAt || !endAt) {
+      skipped += 1;
+      continue;
+    }
+
+    const id = crypto.randomUUID();
+    await env.SKY_DB
+      .prepare(
+        `INSERT INTO calendar_events
+         (id, workspace_id, account_id, calendar_id, calendar_name, event_uid,
+          title, description, location, start_at, end_at, all_day, recurrence_rule,
+          status, organizer_email, organizer_name, attendees_json, source_provider,
+          raw_ical, synced_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT(workspace_id, account_id, calendar_id, event_uid)
+         DO UPDATE SET
+           title = excluded.title,
+           description = excluded.description,
+           location = excluded.location,
+           start_at = excluded.start_at,
+           end_at = excluded.end_at,
+           all_day = excluded.all_day,
+           recurrence_rule = excluded.recurrence_rule,
+           status = excluded.status,
+           organizer_email = excluded.organizer_email,
+           organizer_name = excluded.organizer_name,
+           attendees_json = excluded.attendees_json,
+           raw_ical = excluded.raw_ical,
+           synced_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP`
+      )
+      .bind(
+        id,
+        workspaceId,
+        accountId,
+        calendarId,
+        calendarName,
+        eventUid,
+        stringOr(event.title),
+        stringOr(event.description),
+        stringOr(event.location),
+        startAt,
+        endAt,
+        event.allDay === true ? 1 : 0,
+        stringOr(event.recurrenceRule),
+        stringOr(event.status) || 'confirmed',
+        stringOr(event.organizerEmail),
+        stringOr(event.organizerName),
+        JSON.stringify(Array.isArray(event.attendees) ? event.attendees : []),
+        sourceProvider,
+        stringOr(event.rawIcal)
+      )
+      .run();
+
+    upserted += 1;
+  }
+
+  return json({ ok: true, upserted, skipped });
+}
+
+async function findEntityForMerge(
+  env: Env,
+  input: { workspaceId: string; accountId: string; sentAt?: string | null; entity: EmailEntity }
+): Promise<{
+  id: string;
+  entity_type: EmailEntity['entity_type'];
+  direction: EmailEntity['direction'];
+  counterparty_name: string | null;
+  counterparty_email: string | null;
+  amount_cents: number | null;
+  currency: string | null;
+  due_date: string | null;
+  reference_number: string | null;
+  status: EmailEntity['status'];
+  action_required: number;
+  action_description: string | null;
+  risk_level: EmailEntity['risk_level'];
+  confidence: number;
+} | null> {
+  const normalizedRef = normalizeReference(input.entity.reference_number);
+  if (normalizedRef) {
+    const byRef = await env.SKY_DB
+      .prepare(
+        `SELECT id, entity_type, direction, counterparty_name, counterparty_email, amount_cents, currency,
+                due_date, reference_number, status, action_required, action_description, risk_level, confidence
+         FROM email_entities
+         WHERE workspace_id = ?
+           AND account_id = ?
+           AND lower(trim(reference_number)) = ?
+           AND NOT ((direction = 'ar' AND ? = 'ap') OR (direction = 'ap' AND ? = 'ar'))
+         ORDER BY datetime(updated_at) DESC
+         LIMIT 1`
+      )
+      .bind(input.workspaceId, input.accountId, normalizedRef, input.entity.direction, input.entity.direction)
+      .first<{
+        id: string;
+        entity_type: EmailEntity['entity_type'];
+        direction: EmailEntity['direction'];
+        counterparty_name: string | null;
+        counterparty_email: string | null;
+        amount_cents: number | null;
+        currency: string | null;
+        due_date: string | null;
+        reference_number: string | null;
+        status: EmailEntity['status'];
+        action_required: number;
+        action_description: string | null;
+        risk_level: EmailEntity['risk_level'];
+        confidence: number;
+      }>();
+    if (byRef) return byRef;
+  }
+
+  const amount = input.entity.amount_cents;
+  const name = normalizeName(input.entity.counterparty_name);
+  const email = normalizeEmail(input.entity.counterparty_email);
+  if (!Number.isFinite(Number(amount)) || Number(amount) <= 0 || (!name && !email)) return null;
+
+  const targetDate = input.sentAt || new Date().toISOString();
+  const byAmountCounterparty = await env.SKY_DB
+    .prepare(
+      `SELECT id, entity_type, direction, counterparty_name, counterparty_email, amount_cents, currency,
+              due_date, reference_number, status, action_required, action_description, risk_level, confidence
+       FROM email_entities
+       WHERE workspace_id = ?
+         AND account_id = ?
+         AND amount_cents = ?
+         AND abs(julianday(extracted_at) - julianday(?)) <= 30
+         AND NOT ((direction = 'ar' AND ? = 'ap') OR (direction = 'ap' AND ? = 'ar'))
+         AND (
+           (? IS NOT NULL AND lower(COALESCE(counterparty_email, '')) = ?)
+           OR (
+             ? IS NOT NULL
+             AND (
+               lower(COALESCE(counterparty_name, '')) LIKE '%' || ? || '%'
+               OR ? LIKE '%' || lower(COALESCE(counterparty_name, '')) || '%'
+             )
+           )
+         )
+       ORDER BY datetime(updated_at) DESC
+       LIMIT 1`
+    )
+    .bind(
+      input.workspaceId,
+      input.accountId,
+      amount,
+      targetDate,
+      input.entity.direction,
+      input.entity.direction,
+      email,
+      email,
+      name,
+      name,
+      name
+    )
+    .first<{
+      id: string;
+      entity_type: EmailEntity['entity_type'];
+      direction: EmailEntity['direction'];
+      counterparty_name: string | null;
+      counterparty_email: string | null;
+      amount_cents: number | null;
+      currency: string | null;
+      due_date: string | null;
+      reference_number: string | null;
+      status: EmailEntity['status'];
+      action_required: number;
+      action_description: string | null;
+      risk_level: EmailEntity['risk_level'];
+      confidence: number;
+    }>();
+  return byAmountCounterparty || null;
+}
+
+function mergeEmailEntities(
+  existing: {
+    entity_type: EmailEntity['entity_type'];
+    direction: EmailEntity['direction'];
+    counterparty_name: string | null;
+    counterparty_email: string | null;
+    amount_cents: number | null;
+    currency: string | null;
+    due_date: string | null;
+    reference_number: string | null;
+    status: EmailEntity['status'];
+    action_required: number;
+    action_description: string | null;
+    risk_level: EmailEntity['risk_level'];
+    confidence: number;
+  },
+  incoming: EmailEntity
+): EmailEntity {
+  const mergedStatus = mergeEntityStatus(existing.status, incoming.status);
+  const mergedActionRequired = mergedStatus === 'paid'
+    ? false
+    : Boolean(existing.action_required) || incoming.action_required;
+  const mergedRisk = mergedStatus === 'paid'
+    ? 'low'
+    : chooseHigherRisk(existing.risk_level, incoming.risk_level);
+
+  return {
+    entity_type: chooseEntityType(existing.entity_type, incoming.entity_type),
+    direction: chooseDirection(existing.direction, incoming.direction),
+    counterparty_name: incoming.counterparty_name || existing.counterparty_name || null,
+    counterparty_email: incoming.counterparty_email || existing.counterparty_email || null,
+    amount_cents: incoming.amount_cents ?? existing.amount_cents ?? null,
+    currency: incoming.currency || existing.currency || null,
+    due_date: incoming.due_date || existing.due_date || null,
+    reference_number: incoming.reference_number || existing.reference_number || null,
+    status: mergedStatus,
+    action_required: mergedActionRequired,
+    action_description: mergedActionRequired
+      ? (incoming.action_description || existing.action_description || null)
+      : null,
+    risk_level: mergedRisk,
+    confidence: Math.max(Number(existing.confidence || 0), Number(incoming.confidence || 0))
+  };
+}
+
+function chooseEntityType(a: EmailEntity['entity_type'], b: EmailEntity['entity_type']): EmailEntity['entity_type'] {
+  const rank: Record<EmailEntity['entity_type'], number> = {
+    invoice: 7,
+    contract: 6,
+    payment: 5,
+    alert: 4,
+    request: 3,
+    correspondence: 2,
+    appointment: 1
+  };
+  return (rank[b] > rank[a] ? b : a);
+}
+
+function chooseDirection(a: EmailEntity['direction'], b: EmailEntity['direction']): EmailEntity['direction'] {
+  if (b === 'ar' || b === 'ap') return b;
+  if (a === 'ar' || a === 'ap') return a;
+  if (b === 'inbound' || b === 'outbound') return b;
+  return a || b || 'unknown';
+}
+
+function mergeEntityStatus(a: EmailEntity['status'], b: EmailEntity['status']): EmailEntity['status'] {
+  if (a === 'paid' || b === 'paid') return 'paid';
+  if (a === 'overdue' || b === 'overdue') return 'overdue';
+  if (a === 'requires_action' || b === 'requires_action') return 'requires_action';
+  if (a === 'open' || b === 'open') return 'open';
+  if (a === 'pending' || b === 'pending') return 'pending';
+  return 'unknown';
+}
+
+function chooseHigherRisk(a: EmailEntity['risk_level'], b: EmailEntity['risk_level']): EmailEntity['risk_level'] {
+  const rank: Record<EmailEntity['risk_level'], number> = {
+    low: 1,
+    medium: 2,
+    high: 3,
+    critical: 4
+  };
+  return rank[b] > rank[a] ? b : a;
+}
+
+function normalizeReference(v: string | null): string | null {
+  if (!v) return null;
+  const t = v.trim().toLowerCase();
+  return t.length > 0 ? t : null;
+}
+
+function normalizeEmail(v: string | null): string | null {
+  if (!v) return null;
+  const t = v.trim().toLowerCase();
+  return t.length > 0 ? t : null;
+}
+
+function normalizeName(v: string | null): string | null {
+  if (!v) return null;
+  const t = v.trim().toLowerCase();
+  return t.length > 0 ? t : null;
 }
 
 async function runEntityResolution(
@@ -703,7 +1112,7 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
       direction
     }).then((entity) => {
       if (entity) {
-        return persistEmailEntity(env, { messageId, threadId, workspaceId, accountId, entity }).then(() => {
+        return persistEmailEntity(env, { messageId, threadId, workspaceId, accountId, sentAt, entity }).then(() => {
           if (!Number.isFinite(Number(entity.amount_cents)) || Number(entity.amount_cents) <= 0) return;
           return runEntityResolution(env, {
             workspaceId,
@@ -1098,6 +1507,7 @@ async function rehydrateChunksFromArtifacts(request: Request, env: Env): Promise
             threadId: row.thread_id,
             workspaceId: row.workspace_id,
             accountId: targetAccountId,
+            sentAt: row.sent_at,
             entity
           });
           if (Number.isFinite(Number(entity.amount_cents)) && Number(entity.amount_cents) > 0) {

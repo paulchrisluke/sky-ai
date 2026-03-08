@@ -51,7 +51,7 @@ type Citation = {
   score: number;
 };
 
-type QueryIntent = 'find_email' | 'thread_summary' | 'financial_query' | 'attention_query';
+type QueryIntent = 'find_email' | 'thread_summary' | 'financial_query' | 'calendar_query' | 'attention_query';
 
 type QueryResult = {
   intent: QueryIntent;
@@ -2065,6 +2065,17 @@ async function executeIntent(
     };
   }
 
+  if (intent === 'calendar_query') {
+    const result = await executeCalendarQuery(env, ctx, query);
+    return {
+      intent,
+      answer: result.answer,
+      citations: result.citations,
+      citationStatus: result.citations.length > 0 ? 'sufficient' : 'insufficient',
+      searched: result.searched
+    };
+  }
+
   if (intent === 'thread_summary') {
     const summary = await buildThreadSummaryIntent(env, ctx.workspaceId, ctx.accountId, query);
     return {
@@ -2221,6 +2232,97 @@ async function executeEntityQuery(
   return { answer, citations, searched: { intent, source: 'email_entities', rows_found: rows.length } };
 }
 
+async function executeCalendarQuery(
+  env: Env,
+  ctx: { workspaceId: string; accountId: string },
+  query: string
+): Promise<{ answer: string; citations: Citation[]; searched: JsonRecord }> {
+  const rowsResult = await env.SKY_DB
+    .prepare(
+      `SELECT id,
+              title,
+              location,
+              start_at,
+              end_at,
+              all_day,
+              calendar_name,
+              attendees_json
+       FROM calendar_events
+       WHERE workspace_id = ?
+         AND account_id = ?
+         AND datetime(start_at) >= datetime(CURRENT_TIMESTAMP)
+         AND datetime(start_at) < datetime(CURRENT_TIMESTAMP, '+7 days')
+       ORDER BY datetime(start_at) ASC
+       LIMIT 50`
+    )
+    .bind(ctx.workspaceId, ctx.accountId)
+    .all<{
+      id: string;
+      title: string | null;
+      location: string | null;
+      start_at: string;
+      end_at: string;
+      all_day: number;
+      calendar_name: string | null;
+      attendees_json: string | null;
+    }>();
+
+  const rows = rowsResult.results || [];
+  if (rows.length === 0) {
+    return {
+      answer: 'No calendar events found for the next 7 days.',
+      citations: [],
+      searched: { intent: 'calendar_query', source: 'calendar_events', rows_found: 0 }
+    };
+  }
+
+  const contextLines = rows.map((e) => {
+    const attendees = (() => {
+      try {
+        const parsed = JSON.parse(e.attendees_json || '[]') as Array<Record<string, unknown>>;
+        return parsed
+          .map((a) => String(a.name || a.email || '').trim())
+          .filter(Boolean)
+          .slice(0, 4)
+          .join(', ');
+      } catch {
+        return '';
+      }
+    })();
+    return `[${e.start_at}] ${(e.title || '(untitled)')} | location: ${e.location || 'none'} | calendar: ${e.calendar_name || 'default'} | attendees: ${attendees || 'none'} | all_day: ${e.all_day ? 'yes' : 'no'} | event_id: ${e.id}`;
+  }).join('\n');
+
+  const answer = await callOpenAiChatViaGateway(
+    env,
+    [
+      {
+        role: 'system',
+        content: 'You are Jarvis, an AI chief-of-staff. Answer schedule and calendar questions using the provided event facts only. Be concise, chronological, and explicit about times.'
+      },
+      {
+        role: 'user',
+        content: `User question: ${query}\n\nCalendar events (next 7 days):\n${contextLines}`
+      }
+    ],
+    undefined,
+    { workspaceId: ctx.workspaceId, accountId: ctx.accountId, operation: 'calendar_query', endpoint: '/chat/query' }
+  );
+
+  const citations: Citation[] = rows.slice(0, 8).map((e, idx) => ({
+    messageId: e.id,
+    date: e.start_at,
+    from: e.calendar_name || 'calendar',
+    subject: e.title || '(untitled)',
+    score: Math.max(0.6, 1 - idx * 0.05)
+  }));
+
+  return {
+    answer,
+    citations,
+    searched: { intent: 'calendar_query', source: 'calendar_events', rows_found: rows.length }
+  };
+}
+
 async function buildThreadSummaryIntent(
   env: Env,
   workspaceId: string,
@@ -2302,6 +2404,12 @@ function detectIntent(query: string): QueryIntent {
     /\b(owe|owed|invoice|invoices|unpaid|payment|payments|ar|ap|receivable|payable|outstanding|balance due|collect|collections)\b/.test(q)
   ) {
     return 'financial_query';
+  }
+
+  if (
+    /\b(calendar|schedule|meeting|on my agenda|today'?s events|what do i have)\b/.test(q)
+  ) {
+    return 'calendar_query';
   }
 
   if (

@@ -40,12 +40,12 @@ type BriefingPayload = {
   account_id: string;
   workspace_id: string;
   sections: {
-    urgent_threads: Array<Record<string, unknown>>;
-    sla_breaches: Array<Record<string, unknown>>;
-    sla_fallback_count: number;
+    ar_open: Array<Record<string, unknown>>;
+    ap_open: Array<Record<string, unknown>>;
+    upcoming_events: Array<Record<string, unknown>>;
+    action_required: Array<Record<string, unknown>>;
     due_tasks: Array<Record<string, unknown>>;
     open_proposals: Array<Record<string, unknown>>;
-    triage_stats: Array<Record<string, unknown>>;
   };
   generated_at: string;
 };
@@ -330,71 +330,125 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
   const timezone = await getWorkspaceTimezone(env, workspaceId);
   const localDate = stringOr(metadata.localDate) || getLocalDateHour(timezone).date;
 
-  const [urgentThreads, slaBreaches, dueTasks, openProposals, triageStats] = await Promise.all([
+  const [arOpen, apOpen, upcomingEvents, actionRequired, dueTasks, openProposals] = await Promise.all([
     env.SKY_DB
       .prepare(
-        `SELECT t.id, t.subject, t.last_message_at, t.classification_json
-         FROM email_threads t
-         WHERE t.workspace_id = ?
-           AND t.account_id = ?
-           AND CAST(COALESCE(json_extract(t.classification_json, '$.needs_reply'), 0) AS INTEGER) = 1
-           AND json_extract(t.classification_json, '$.priority') IN ('P0', 'P1')
-         ORDER BY datetime(COALESCE(t.last_message_at, t.updated_at)) DESC
+        `SELECT id,
+                calendar_id,
+                calendar_name,
+                event_uid,
+                title,
+                location,
+                start_at,
+                end_at,
+                all_day,
+                attendees_json
+         FROM calendar_events
+         WHERE workspace_id = ?
+           AND account_id = ?
+           AND datetime(start_at) >= datetime(CURRENT_TIMESTAMP)
+           AND datetime(start_at) < datetime(CURRENT_TIMESTAMP, '+48 hours')
+         ORDER BY datetime(start_at) ASC
+         LIMIT 20`
+      )
+      .bind(workspaceId, accountId)
+      .all<Record<string, unknown>>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT
+            ee.id,
+            ee.message_id,
+            ee.counterparty_name,
+            ee.counterparty_email,
+            ee.amount_cents,
+            ee.currency,
+            ee.due_date,
+            ee.status,
+            ee.risk_level,
+            ee.action_required,
+            ee.action_description,
+            em.subject,
+            em.sent_at
+         FROM email_entities ee
+         LEFT JOIN email_messages em ON em.id = ee.message_id
+         WHERE ee.workspace_id = ?
+           AND ee.account_id = ?
+           AND ee.direction = 'ar'
+           AND ee.status != 'paid'
+           AND (ee.resolved_group_id IS NULL OR ee.id = (
+             SELECT MIN(e2.id) FROM email_entities e2 WHERE e2.resolved_group_id = ee.resolved_group_id
+           ))
+         ORDER BY
+           CASE ee.risk_level WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END ASC,
+           datetime(COALESCE(ee.due_date, '2999-12-31')) ASC,
+           datetime(COALESCE(em.sent_at, ee.extracted_at)) DESC
          LIMIT 10`
       )
       .bind(workspaceId, accountId)
       .all<Record<string, unknown>>(),
     env.SKY_DB
       .prepare(
-        `WITH agent_sla AS (
-           SELECT aa.account_id, MIN(a.response_sla_hours) AS response_sla_hours
-           FROM agent_accounts aa
-           JOIN agents a ON a.id = aa.agent_id
-           GROUP BY aa.account_id
-         ),
-         thread_scope AS (
-           SELECT
-             t.id,
-             t.subject,
-             t.last_message_at,
-             t.classification_json,
-             t.last_inbound_at,
-             t.last_outbound_at,
-             CASE
-               WHEN COALESCE(agent_sla.response_sla_hours, 48) > 0 THEN COALESCE(agent_sla.response_sla_hours, 48)
-               ELSE 48
-             END AS response_sla_hours,
-             CASE
-               WHEN agent_sla.response_sla_hours IS NULL OR agent_sla.response_sla_hours <= 0 THEN 1
-               ELSE 0
-             END AS used_fallback_sla,
-             CASE
-               WHEN t.last_inbound_at IS NULL THEN NULL
-               WHEN t.last_outbound_at IS NULL THEN t.last_inbound_at
-               WHEN datetime(t.last_outbound_at) < datetime(t.last_inbound_at) THEN t.last_inbound_at
-               ELSE NULL
-             END AS pending_reply_since
-           FROM email_threads t
-           LEFT JOIN agent_sla ON agent_sla.account_id = t.account_id
-           WHERE t.workspace_id = ?
-             AND t.account_id = ?
-             AND CAST(COALESCE(json_extract(t.classification_json, '$.needs_reply'), 0) AS INTEGER) = 1
-         )
-         SELECT
-           id,
-           subject,
-           last_message_at,
-           classification_json,
-           last_inbound_at,
-           last_outbound_at,
-           response_sla_hours,
-           used_fallback_sla,
-           pending_reply_since
-         FROM thread_scope
-         WHERE pending_reply_since IS NOT NULL
-           AND datetime(pending_reply_since) < datetime(CURRENT_TIMESTAMP, '-' || response_sla_hours || ' hours')
-         ORDER BY datetime(pending_reply_since) ASC
+        `SELECT
+            ee.id,
+            ee.message_id,
+            ee.counterparty_name,
+            ee.counterparty_email,
+            ee.amount_cents,
+            ee.currency,
+            ee.due_date,
+            ee.status,
+            ee.risk_level,
+            ee.action_required,
+            ee.action_description,
+            em.subject,
+            em.sent_at
+         FROM email_entities ee
+         LEFT JOIN email_messages em ON em.id = ee.message_id
+         WHERE ee.workspace_id = ?
+           AND ee.account_id = ?
+           AND ee.direction = 'ap'
+           AND ee.status != 'paid'
+           AND (ee.resolved_group_id IS NULL OR ee.id = (
+             SELECT MIN(e2.id) FROM email_entities e2 WHERE e2.resolved_group_id = ee.resolved_group_id
+           ))
+         ORDER BY
+           CASE ee.risk_level WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END ASC,
+           datetime(COALESCE(ee.due_date, '2999-12-31')) ASC,
+           datetime(COALESCE(em.sent_at, ee.extracted_at)) DESC
          LIMIT 10`
+      )
+      .bind(workspaceId, accountId)
+      .all<Record<string, unknown>>(),
+    env.SKY_DB
+      .prepare(
+        `SELECT
+            ee.id,
+            ee.message_id,
+            ee.counterparty_name,
+            ee.counterparty_email,
+            ee.amount_cents,
+            ee.currency,
+            ee.due_date,
+            ee.status,
+            ee.risk_level,
+            ee.action_required,
+            ee.action_description,
+            em.subject,
+            em.sent_at
+         FROM email_entities ee
+         LEFT JOIN email_messages em ON em.id = ee.message_id
+         WHERE ee.workspace_id = ?
+           AND ee.account_id = ?
+           AND ee.action_required = 1
+           AND ee.status != 'paid'
+           AND (ee.resolved_group_id IS NULL OR ee.id = (
+             SELECT MIN(e2.id) FROM email_entities e2 WHERE e2.resolved_group_id = ee.resolved_group_id
+           ))
+         ORDER BY
+           CASE ee.risk_level WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END ASC,
+           datetime(COALESCE(ee.due_date, '2999-12-31')) ASC,
+           datetime(COALESCE(em.sent_at, ee.extracted_at)) DESC
+         LIMIT 15`
       )
       .bind(workspaceId, accountId)
       .all<Record<string, unknown>>(),
@@ -440,17 +494,6 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
          LIMIT 10`
       )
       .bind(workspaceId, accountId)
-      .all<Record<string, unknown>>(),
-    env.SKY_DB
-      .prepare(
-        `SELECT json_extract(classification_json, '$.priority') AS priority, COUNT(*) AS count
-         FROM email_threads
-         WHERE workspace_id = ?
-           AND account_id = ?
-           AND date(COALESCE(last_message_at, updated_at)) = date('now', 'utc')
-         GROUP BY priority`
-      )
-      .bind(workspaceId, accountId)
       .all<Record<string, unknown>>()
   ]);
 
@@ -459,15 +502,12 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
     account_id: accountId,
     workspace_id: workspaceId,
     sections: {
-      urgent_threads: urgentThreads.results || [],
-      sla_breaches: slaBreaches.results || [],
-      sla_fallback_count: (slaBreaches.results || []).reduce((sum, row) => {
-        const v = Number(row.used_fallback_sla || 0);
-        return sum + (Number.isFinite(v) ? v : 0);
-      }, 0),
+      ar_open: arOpen.results || [],
+      ap_open: apOpen.results || [],
+      upcoming_events: upcomingEvents.results || [],
+      action_required: actionRequired.results || [],
       due_tasks: dueTasks.results || [],
-      open_proposals: openProposals.results || [],
-      triage_stats: triageStats.results || []
+      open_proposals: openProposals.results || []
     },
     generated_at: new Date().toISOString()
   };
@@ -528,10 +568,17 @@ async function processDailyBriefing(job: SyncJobRow, env: Env): Promise<string> 
 }
 
 async function generateBriefingNarrative(payload: BriefingPayload, env: Env): Promise<string> {
-  const urgent = payload.sections.urgent_threads;
-  const breaches = payload.sections.sla_breaches;
+  const arOpen = payload.sections.ar_open;
+  const apOpen = payload.sections.ap_open;
+  const upcomingEvents = payload.sections.upcoming_events;
+  const actionRequired = payload.sections.action_required;
   const tasks = payload.sections.due_tasks;
   const proposals = payload.sections.open_proposals;
+  const money = (cents: unknown, currency: unknown): string => {
+    const n = Number(cents || 0);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    return `${String(currency || 'USD')} $${(n / 100).toFixed(2)}`;
+  };
 
   const prompt = [
     'You are a chief of staff preparing a morning briefing.',
@@ -539,15 +586,31 @@ async function generateBriefingNarrative(payload: BriefingPayload, env: Env): Pr
     `Today is ${payload.date}.`,
     '',
     'DATA:',
-    'Urgent emails needing reply (P0/P1):',
-    formatLines(urgent, (t) => `- ${(t.subject as string) || '(no subject)'} | last: ${(t.last_message_at as string) || 'unknown'}`),
+    'Money expected to come in (AR open):',
+    formatLines(arOpen, (e) => `- ${(e.counterparty_name as string) || 'unknown'} | ${money(e.amount_cents, e.currency)} | status: ${(e.status as string) || 'unknown'} | ${(e.action_description as string) || ((e.subject as string) || '')}`),
     '',
-    'SLA breaches (pending reply older than configured SLA):',
-    formatLines(
-      breaches,
-      (t) =>
-        `- ${(t.subject as string) || '(no subject)'} | pending since: ${(t.pending_reply_since as string) || 'unknown'} | SLA: ${String(t.response_sla_hours || 48)}h`
-    ),
+    'Money owed by account owner (AP open):',
+    formatLines(apOpen, (e) => `- ${(e.counterparty_name as string) || 'unknown'} | ${money(e.amount_cents, e.currency)} | due: ${(e.due_date as string) || 'unspecified'} | risk: ${(e.risk_level as string) || 'low'}`),
+    '',
+    'Schedule (next 48 hours):',
+    formatLines(upcomingEvents, (e) => {
+      const attendees = (() => {
+        try {
+          const parsed = JSON.parse(String(e.attendees_json || '[]')) as Array<Record<string, unknown>>;
+          return parsed
+            .map((a) => String(a.name || a.email || '').trim())
+            .filter(Boolean)
+            .slice(0, 3)
+            .join(', ');
+        } catch {
+          return '';
+        }
+      })();
+      return `- [${String(e.start_at || 'unscheduled')}] ${String(e.title || '(untitled)')} | ${String(e.location || 'no location')} | ${attendees || 'no attendees'}`;
+    }),
+    '',
+    'Action required items:',
+    formatLines(actionRequired, (e) => `- ${(e.counterparty_name as string) || 'unknown'} | ${(e.action_description as string) || ((e.subject as string) || '')} | risk: ${(e.risk_level as string) || 'low'}`),
     '',
     'Tasks due today or overdue:',
     formatLines(tasks, (t) => `- [${(t.priority as string) || 'P2'}] ${(t.title as string) || '(untitled)'} | due: ${(t.due_at as string) || 'unspecified'}`),
@@ -556,21 +619,29 @@ async function generateBriefingNarrative(payload: BriefingPayload, env: Env): Pr
     formatLines(proposals, (p) => `- ${(p.title as string) || '(untitled)'} | risk: ${(p.risk_level as string) || 'low'}`),
     '',
     'Write a morning briefing with sections:',
-    '1. URGENT',
-    '2. OVERDUE',
-    '3. TODAY',
-    '4. PENDING',
+    '1. CASHFLOW',
+    '2. SCHEDULE',
+    '3. ACTIONS',
+    '4. TODAY',
+    '5. PENDING',
     '',
+    'Clearly separate money coming in vs money going out.',
+    'Never end with a question.',
+    'End with a single Most Important Next Action.',
     'Keep each section to 2-4 bullet points maximum.'
   ].join('\n');
 
   if (!hasAiGatewayConfig(env)) {
     return [
-      'URGENT',
-      ...toSimpleBullets(urgent, (t) => `${(t.subject as string) || '(no subject)'} — reply needed`),
+      'CASHFLOW',
+      ...toSimpleBullets(arOpen, (e) => `AR: ${(e.counterparty_name as string) || 'unknown'} ${money(e.amount_cents, e.currency)} | ${(e.status as string) || 'unknown'}`),
+      ...toSimpleBullets(apOpen, (e) => `AP: ${(e.counterparty_name as string) || 'unknown'} ${money(e.amount_cents, e.currency)} | due ${(e.due_date as string) || 'unspecified'}`),
       '',
-      'OVERDUE',
-      ...toSimpleBullets(breaches, (t) => `${(t.subject as string) || '(no subject)'} — SLA breach`),
+      'SCHEDULE',
+      ...toSimpleBullets(upcomingEvents, (e) => `[${String(e.start_at || 'unscheduled')}] ${String(e.title || '(untitled)')} | ${String(e.location || 'no location')}`),
+      '',
+      'ACTIONS',
+      ...toSimpleBullets(actionRequired, (e) => `${(e.action_description as string) || ((e.subject as string) || '(no subject)')}`),
       '',
       'TODAY',
       ...toSimpleBullets(tasks, (t) => `${(t.title as string) || '(untitled task)'}`),
@@ -584,11 +655,15 @@ async function generateBriefingNarrative(payload: BriefingPayload, env: Env): Pr
     return await callOpenAiChatViaGateway(env, [{ role: 'user', content: prompt }]);
   } catch {
     return [
-      'URGENT',
-      ...toSimpleBullets(urgent, (t) => `${(t.subject as string) || '(no subject)'} — reply needed`),
+      'CASHFLOW',
+      ...toSimpleBullets(arOpen, (e) => `AR: ${(e.counterparty_name as string) || 'unknown'} ${money(e.amount_cents, e.currency)} | ${(e.status as string) || 'unknown'}`),
+      ...toSimpleBullets(apOpen, (e) => `AP: ${(e.counterparty_name as string) || 'unknown'} ${money(e.amount_cents, e.currency)} | due ${(e.due_date as string) || 'unspecified'}`),
       '',
-      'OVERDUE',
-      ...toSimpleBullets(breaches, (t) => `${(t.subject as string) || '(no subject)'} — SLA breach`),
+      'SCHEDULE',
+      ...toSimpleBullets(upcomingEvents, (e) => `[${String(e.start_at || 'unscheduled')}] ${String(e.title || '(untitled)')} | ${String(e.location || 'no location')}`),
+      '',
+      'ACTIONS',
+      ...toSimpleBullets(actionRequired, (e) => `${(e.action_description as string) || ((e.subject as string) || '(no subject)')}`),
       '',
       'TODAY',
       ...toSimpleBullets(tasks, (t) => `${(t.title as string) || '(untitled task)'}`),

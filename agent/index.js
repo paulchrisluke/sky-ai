@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
+import { syncCalendars } from './calendar.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -194,6 +195,13 @@ async function run() {
   for (const account of ACCOUNTS) {
     await syncAccount(account, state);
   }
+
+  await syncCalendars(
+    ACCOUNTS[0],
+    process.env.WORKER_INGEST_URL,
+    process.env.WORKER_API_KEY,
+    process.env.WORKSPACE_ID || 'default'
+  );
 
   await processOutboundQueue();
   saveState(state);
