@@ -37,13 +37,13 @@ class_name = "ChatCoordinator"
 tag = "v1"
 new_classes = ["ChatCoordinator"]
 
-[[durable_objects.bindings]]
-name = "BLAWBY_AGENT"
-class_name = "BlawbyAgent"
-
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["BlawbyAgent"]
+
+[[migrations]]
+tag = "v3"
+deleted_classes = ["BlawbyAgent"]
 
 [env.prod]
 compatibility_date = "2026-03-05"
@@ -78,7 +78,3 @@ binding = "AI"
 [[env.prod.durable_objects.bindings]]
 name = "CHAT_COORDINATOR"
 class_name = "ChatCoordinator"
-
-[[env.prod.durable_objects.bindings]]
-name = "BLAWBY_AGENT"
-class_name = "BlawbyAgent"

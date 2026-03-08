@@ -2,6 +2,13 @@
 
 Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 
+## Development Mode
+
+- This repo is currently run in dev-only mode.
+- Use only root/default environments in Wrangler configs for active work.
+- Production deploy/migration npm scripts are intentionally blocked.
+- Do not use `--env prod` unless this policy is explicitly changed.
+
 ## Architecture
 
 - Cloudflare Workers API: ingestion, task orchestration, briefings

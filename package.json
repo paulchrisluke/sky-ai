@@ -11,15 +11,15 @@
     "cf:deploy": "wrangler deploy",
     "cf:deploy:api": "wrangler deploy --config wrangler.api.toml",
     "cf:deploy:jobs": "wrangler deploy --config wrangler.jobs.toml",
-    "cf:deploy:prod": "wrangler deploy --env prod",
-    "cf:deploy:api:prod": "wrangler deploy --config wrangler.api.toml --env prod",
-    "cf:deploy:jobs:prod": "wrangler deploy --config wrangler.jobs.toml --env prod",
+    "cf:deploy:prod": "node -e \"console.error('Blocked: prod deploy disabled in dev-only mode'); process.exit(1)\"",
+    "cf:deploy:api:prod": "node -e \"console.error('Blocked: prod deploy disabled in dev-only mode'); process.exit(1)\"",
+    "cf:deploy:jobs:prod": "node -e \"console.error('Blocked: prod deploy disabled in dev-only mode'); process.exit(1)\"",
     "cf:d1:migrate:dev": "wrangler d1 migrations apply sky-ai-dev",
     "cf:d1:migrate:dev:api": "wrangler d1 migrations apply sky-ai-dev --config wrangler.api.toml",
     "cf:d1:migrate:dev:jobs": "wrangler d1 migrations apply sky-ai-dev --config wrangler.jobs.toml",
-    "cf:d1:migrate:prod": "wrangler d1 migrations apply sky-ai-prod --env prod",
-    "cf:d1:migrate:prod:api": "wrangler d1 migrations apply sky-ai-prod --config wrangler.api.toml --env prod",
-    "cf:d1:migrate:prod:jobs": "wrangler d1 migrations apply sky-ai-prod --config wrangler.jobs.toml --env prod"
+    "cf:d1:migrate:prod": "node -e \"console.error('Blocked: prod migrations disabled in dev-only mode'); process.exit(1)\"",
+    "cf:d1:migrate:prod:api": "node -e \"console.error('Blocked: prod migrations disabled in dev-only mode'); process.exit(1)\"",
+    "cf:d1:migrate:prod:jobs": "node -e \"console.error('Blocked: prod migrations disabled in dev-only mode'); process.exit(1)\""
   },
   "devDependencies": {
     "typescript": "^5.8.2",
