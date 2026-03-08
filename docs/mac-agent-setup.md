@@ -95,6 +95,18 @@ Fix on Skyler account:
 4. Update `APPLE_APP_PASSWORD` in `agent/.env`
 5. Restart: `npx pm2 restart all`
 
+## After pulling latest changes
+
+Use this when syncing the Mac Mini to current code:
+
+```bash
+cd ~/sky-ai
+git pull
+cd agent
+npm install
+npx pm2 restart all
+```
+
 ## Notes
 
 - Cloudflare Tunnel is not used in the current architecture.
