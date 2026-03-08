@@ -3,8 +3,7 @@ import http from 'node:http';
 
 /**
  * Minimal CalDAV + iCal parser for Apple Calendar sync.
- * Polls all calendars for the account and POSTs normalized events
- * to the /ingest/calendar-events worker endpoint.
+ * Polls all calendars and emits normalized event payloads.
  */
 
 const CALDAV_HOST = process.env.CALDAV_HOST || 'caldav.icloud.com';
@@ -285,33 +284,7 @@ function decodeIcalText(str) {
     .trim();
 }
 
-async function postCalendarEvents(workerBaseUrl, apiKey, workspaceId, accountId, calendarId, calendarName, events) {
-  const url = workerBaseUrl.replace('/ingest/mail-thread', '/ingest/calendar-events');
-  const headers = { 'content-type': 'application/json' };
-  if (apiKey) headers['authorization'] = `Bearer ${apiKey}`;
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      workspaceId,
-      accountId,
-      calendarId,
-      calendarName,
-      sourceProvider: 'calendar_icloud',
-      events
-    })
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`calendar_ingest_failed (${res.status}): ${text.slice(0, 300)}`);
-  }
-
-  return res.json();
-}
-
-export async function syncCalendars(account, workerIngestUrl, workerApiKey, workspaceId) {
+export async function syncCalendars(account, workspaceId, emitCalendarPayload) {
   const rangeStart = new Date();
   const rangeEnd = addDays(rangeStart, LOOKAHEAD_DAYS);
 
@@ -355,17 +328,16 @@ export async function syncCalendars(account, workerIngestUrl, workerApiKey, work
 
       if (events.length === 0) continue;
 
-      const result = await postCalendarEvents(
-        workerIngestUrl,
-        workerApiKey,
+      await emitCalendarPayload({
+        type: 'calendar',
         workspaceId,
-        account.id,
-        calendar.id,
-        calendar.name,
+        accountId: account.id,
+        calendarId: calendar.id,
+        calendarName: calendar.name,
+        sourceProvider: 'calendar_icloud',
         events
-      );
-
-      console.log(`[calendar-sync] ${account.email} / ${calendar.name}: upserted=${result.upserted} skipped=${result.skipped}`);
+      });
+      console.log(`[calendar-sync] ${account.email} / ${calendar.name}: emitted=${events.length}`);
     } catch (err) {
       console.error(`[calendar-sync] failed for calendar ${calendar.name}: ${err.message}`);
     }

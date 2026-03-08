@@ -33,6 +33,11 @@ binding = "AI"
 name = "CHAT_COORDINATOR"
 class_name = "ChatCoordinator"
 
+[[durable_objects.bindings]]
+name = "BLAWBY_AGENT"
+class_name = "BlawbyAgent"
+script_name = "sky-ai"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["ChatCoordinator"]
@@ -78,3 +83,8 @@ binding = "AI"
 [[env.prod.durable_objects.bindings]]
 name = "CHAT_COORDINATOR"
 class_name = "ChatCoordinator"
+
+[[env.prod.durable_objects.bindings]]
+name = "BLAWBY_AGENT"
+class_name = "BlawbyAgent"
+script_name = "sky-ai-prod"

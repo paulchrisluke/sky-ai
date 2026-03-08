@@ -1,6 +1,7 @@
 name = "sky-ai"
 main = "src/worker.ts"
 compatibility_date = "2026-03-05"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 [vars]
@@ -28,6 +29,14 @@ index_name = "sky-ai-memory-dev"
 
 [ai]
 binding = "AI"
+
+[[durable_objects.bindings]]
+name = "BLAWBY_AGENT"
+class_name = "BlawbyAgent"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BlawbyAgent"]
 
 [[queues.producers]]
 binding = "EMBEDDING_QUEUE"
@@ -64,6 +73,10 @@ index_name = "sky-ai-memory-prod"
 
 [env.prod.ai]
 binding = "AI"
+
+[[env.prod.durable_objects.bindings]]
+name = "BLAWBY_AGENT"
+class_name = "BlawbyAgent"
 
 [[env.prod.queues.producers]]
 binding = "EMBEDDING_QUEUE"

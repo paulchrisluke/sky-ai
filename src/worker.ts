@@ -1,9 +1,13 @@
 import { extractBearerToken, verifyAccessJwtClaims, type AccessAuthEnv } from '../workers/shared/auth';
+import { ingestCalendarEventsCore, ingestMailThreadCore } from '../workers/shared/ingestCore';
+import { routeAgentRequest } from 'agents';
+import { BlawbyAgent as BlawbyAgentBase } from '../workers/agents/blawby';
 
 interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;
   SKY_ARTIFACTS: R2Bucket;
   SKY_VECTORIZE: VectorizeIndex;
+  BLAWBY_AGENT: DurableObjectNamespace;
   AI?: {
     run(model: string, input: Record<string, unknown>): Promise<unknown>;
   };
@@ -27,6 +31,8 @@ type NormalizedAddress = {
   email: string;
   name: string | null;
 };
+
+export class BlawbyAgent extends BlawbyAgentBase {}
 
 type ThreadClassification = {
   priority: 'P0' | 'P1' | 'P2' | 'P3';
@@ -67,6 +73,12 @@ const MAX_CHUNKS_PER_MESSAGE = 24;
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname.startsWith('/agents/')) {
+      const response = await routeAgentRequest(request, env);
+      if (response) return response;
+      return json({ ok: false, error: 'Not found' }, 404);
+    }
 
     if (request.method === 'GET' && url.pathname === '/health') {
       return json({ ok: true, service: 'sky-ai-worker', env: env.ENVIRONMENT || 'unknown' });
@@ -544,86 +556,14 @@ async function resolveEntityDuplicates(request: Request, env: Env): Promise<Resp
 }
 
 async function ingestCalendarEvents(request: Request, env: Env): Promise<Response> {
-  const payload = (await request.json()) as JsonRecord;
-  const workspaceId = stringOr(payload.workspaceId) || 'default';
-  const accountId = stringOr(payload.accountId);
-  const calendarId = stringOr(payload.calendarId);
-  const calendarName = stringOr(payload.calendarName);
-  const sourceProvider = stringOr(payload.sourceProvider) || 'calendar_icloud';
-  const events = Array.isArray(payload.events) ? payload.events as JsonRecord[] : [];
-
-  if (!accountId) return json({ ok: false, error: 'accountId is required' }, 400);
-  if (!calendarId) return json({ ok: false, error: 'calendarId is required' }, 400);
-  if (events.length === 0) return json({ ok: true, upserted: 0, skipped: 0 });
-
-  await ensureWorkspace(env, workspaceId);
-
-  let upserted = 0;
-  let skipped = 0;
-
-  for (const event of events.slice(0, 500)) {
-    const eventUid = stringOr(event.uid);
-    const startAt = stringOr(event.startAt);
-    const endAt = stringOr(event.endAt);
-
-    if (!eventUid || !startAt || !endAt) {
-      skipped += 1;
-      continue;
-    }
-
-    const id = crypto.randomUUID();
-    await env.SKY_DB
-      .prepare(
-        `INSERT INTO calendar_events
-         (id, workspace_id, account_id, calendar_id, calendar_name, event_uid,
-          title, description, location, start_at, end_at, all_day, recurrence_rule,
-          status, organizer_email, organizer_name, attendees_json, source_provider,
-          raw_ical, synced_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT(workspace_id, account_id, calendar_id, event_uid)
-         DO UPDATE SET
-           title = excluded.title,
-           description = excluded.description,
-           location = excluded.location,
-           start_at = excluded.start_at,
-           end_at = excluded.end_at,
-           all_day = excluded.all_day,
-           recurrence_rule = excluded.recurrence_rule,
-           status = excluded.status,
-           organizer_email = excluded.organizer_email,
-           organizer_name = excluded.organizer_name,
-           attendees_json = excluded.attendees_json,
-           raw_ical = excluded.raw_ical,
-           synced_at = CURRENT_TIMESTAMP,
-           updated_at = CURRENT_TIMESTAMP`
-      )
-      .bind(
-        id,
-        workspaceId,
-        accountId,
-        calendarId,
-        calendarName,
-        eventUid,
-        stringOr(event.title),
-        stringOr(event.description),
-        stringOr(event.location),
-        startAt,
-        endAt,
-        event.allDay === true ? 1 : 0,
-        stringOr(event.recurrenceRule),
-        stringOr(event.status) || 'confirmed',
-        stringOr(event.organizerEmail),
-        stringOr(event.organizerName),
-        JSON.stringify(Array.isArray(event.attendees) ? event.attendees : []),
-        sourceProvider,
-        stringOr(event.rawIcal)
-      )
-      .run();
-
-    upserted += 1;
+  try {
+    const payload = (await request.json()) as JsonRecord;
+    const result = await ingestCalendarEventsCore(env, payload);
+    return json({ ok: true, upserted: result.upserted, skipped: result.skipped });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return json({ ok: false, error: message }, 400);
   }
-
-  return json({ ok: true, upserted, skipped });
 }
 
 async function findEntityForMerge(
@@ -955,51 +895,37 @@ async function runEntityResolution(
 
 async function ingestMailThread(request: Request, env: Env): Promise<Response> {
   const payload = (await request.json()) as JsonRecord;
-  const workspaceId = stringOr(payload.workspaceId) || 'default';
-  const accountEmail = stringOr(payload.accountEmail) || 'unknown';
-  const accountId = stringOr(payload.accountId) || accountEmail;
-  const mailbox = stringOr(payload.mailbox) || 'INBOX';
-  const threadExternalId = stringOr(payload.threadId);
   const providerUid = numberOr(payload.uid);
   const providerMessageId = stringOr(payload.messageId);
-  const subject = decodeMimeHeaderWords(stringOr(payload.subject) || '');
-  const sentAt = stringOr(payload.date);
-
-  if (!threadExternalId) {
-    return json({ ok: false, error: 'threadId is required' }, 400);
+  let ingested;
+  try {
+    ingested = await ingestMailThreadCore(env, payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return json({ ok: false, error: message }, 400);
   }
 
-  const sourceMessageKey = buildSourceMessageKey({
-    workspaceId,
-    accountId,
-    mailbox,
-    providerUid,
-    providerMessageId,
-    threadExternalId,
-    sentAt,
-    subject
-  });
-
-  await ensureWorkspace(env, workspaceId);
-
-  const existingMessage = await env.SKY_DB
-    .prepare(`SELECT id FROM email_messages WHERE source_message_key = ? LIMIT 1`)
-    .bind(sourceMessageKey)
-    .first<{ id: string }>();
-
-  if (existingMessage) {
-    return json({ ok: true, deduped: true, messageId: existingMessage.id, sourceMessageKey });
-  }
-
-  const threadId = await upsertEmailThread(env, {
+  const {
+    deduped,
     workspaceId,
     accountId,
     accountEmail,
     mailbox,
-    threadExternalId,
+    threadId,
+    messageId,
+    sourceMessageKey,
     subject,
-    sentAt
-  });
+    snippet,
+    sentAt,
+    fromAddresses,
+    toAddresses,
+    direction
+  } = ingested;
+  const threadExternalId = stringOr(payload.threadId) || threadId;
+
+  if (deduped) {
+    return json({ ok: true, deduped: true, messageId, sourceMessageKey });
+  }
 
   const artifactKey = `mail/${workspaceId}/threads/${threadExternalId}/${Date.now()}-${safeForKey(sourceMessageKey)}.json`;
   await env.SKY_ARTIFACTS.put(artifactKey, JSON.stringify(payload), {
@@ -1022,7 +948,6 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
     .run();
 
   const recordId = crypto.randomUUID();
-  const snippet = buildSnippet(payload, subject);
   await env.SKY_DB
     .prepare(
       `INSERT INTO normalized_records (id, workspace_id, record_type, source_artifact_id, body_json, created_at, updated_at)
@@ -1046,44 +971,22 @@ async function ingestMailThread(request: Request, env: Env): Promise<Response> {
     )
     .run();
 
-  const messageId = crypto.randomUUID();
-  const fromAddresses = normalizeAddresses(payload.from);
-  const toAddresses = normalizeAddresses(payload.to);
-  const direction = deriveMessageDirection(mailbox, fromAddresses, accountEmail);
   const rawSource = stringOr(payload.rawRfc822) || '';
   const rawSha256 = rawSource ? await sha256Hex(rawSource) : null;
-
   await env.SKY_DB
     .prepare(
-      `INSERT INTO email_messages
-       (id, workspace_id, thread_id, account_id, account_email, mailbox, provider_uid, provider_message_id, source_message_key, subject,
-        sent_at, from_json, to_json, snippet, artifact_id, raw_sha256, direction, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      `UPDATE email_messages
+       SET artifact_id = ?,
+           raw_sha256 = COALESCE(?, raw_sha256),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
     )
     .bind(
-      messageId,
-      workspaceId,
-      threadId,
-      accountId,
-      accountEmail,
-      mailbox,
-      providerUid,
-      providerMessageId,
-      sourceMessageKey,
-      subject || null,
-      sentAt,
-      JSON.stringify(fromAddresses),
-      JSON.stringify(toAddresses),
-      snippet,
       artifactId,
       rawSha256,
-      direction
+      messageId
     )
     .run();
-
-  await upsertParticipants(env, workspaceId, messageId, fromAddresses, 'from');
-  await upsertParticipants(env, workspaceId, messageId, toAddresses, 'to');
-  await updateThreadLastMessage(env, threadId, subject, sentAt);
 
   const chunkSource = buildChunkSource(payload, subject, snippet);
   const classification = classifyEmailThread({

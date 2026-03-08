@@ -1,3 +1,4 @@
+import { getAgentByName } from 'agents';
 import {
   extractBearerToken,
   principalFromAccessClaims,
@@ -22,6 +23,7 @@ export interface Env extends AccessAuthEnv {
     run(model: string, input: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
   };
   CHAT_COORDINATOR: DurableObjectNamespace;
+  BLAWBY_AGENT: DurableObjectNamespace;
   WORKER_API_KEY?: string;
   ACCESS_AUTH_ENABLED?: string;
   ALLOW_API_KEY_BYPASS?: string;
@@ -101,13 +103,6 @@ type AuthPrincipal = {
   type: 'access' | 'service' | 'anonymous';
   subject: string;
   email: string | null;
-};
-
-type BlawbyAgentState = {
-  immediateContext: string;
-  shortTermMemory: string;
-  longTermMemory: string;
-  knowledgeProfile: string;
 };
 
 export default {
@@ -207,9 +202,6 @@ export default {
 };
 
 export class ChatCoordinator {
-  private static readonly BLAWBY_STATE_KEY = 'blawby:state';
-  private static readonly BLAWBY_SCHEDULE_KEY = 'blawby:schedule';
-  private static readonly BLAWBY_STARTED_KEY = 'blawby:started';
   private state: DurableObjectState;
   private env: Env;
   private sockets: Set<WebSocket>;
@@ -222,37 +214,11 @@ export class ChatCoordinator {
     this.sockets = new Set();
     this.sessionLocks = new Map();
     this.socketContexts = new Map();
-    void this.onStart();
+    this.state.storage.setAlarm(Date.now() + 60_000);
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-
-    if (request.method === 'GET' && url.pathname === '/blawby/context') {
-      const context = await this.getContext();
-      return json({ ok: true, context, generatedAt: new Date().toISOString() });
-    }
-
-    if (request.method === 'POST' && url.pathname === '/blawby/run-skill') {
-      const payload = (await request.json()) as JsonRecord;
-      const skill = stringOr(payload.skill);
-      if (!skill) return json({ ok: false, error: 'skill is required' }, 400);
-
-      if (skill === 'immediateContext') {
-        await this.skillImmediateContext();
-      } else if (skill === 'shortTermMemory') {
-        await this.skillShortTermMemory();
-      } else if (skill === 'longTermMemory') {
-        await this.skillLongTermMemory();
-      } else if (skill === 'knowledgeProfile') {
-        await this.skillKnowledgeProfile();
-      } else {
-        return json({ ok: false, error: 'invalid skill' }, 400);
-      }
-
-      const context = await this.getContext();
-      return json({ ok: true, skill, context, generatedAt: new Date().toISOString() });
-    }
 
     if (request.method === 'GET' && url.pathname === '/connect') {
       if (request.headers.get('Upgrade') !== 'websocket') {
@@ -484,230 +450,6 @@ export class ChatCoordinator {
     }
   }
 
-  async skillImmediateContext(): Promise<void> {
-    console.log('[blawby] skill_immediate_context started');
-    const calendarResult = await this.env.SKY_DB
-      .prepare(
-        `SELECT start_at, title
-         FROM calendar_events
-         WHERE datetime(start_at) >= datetime(CURRENT_TIMESTAMP)
-           AND datetime(start_at) < datetime(CURRENT_TIMESTAMP, '+4 hours')
-         ORDER BY datetime(start_at) ASC
-         LIMIT 10`
-      )
-      .all<{ start_at: string; title: string | null }>();
-    const urgentEntityResult = await this.env.SKY_DB
-      .prepare(
-        `SELECT counterparty_name, entity_type, action_description
-         FROM email_entities
-         WHERE action_required = 1
-           AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-2 hours')
-         ORDER BY datetime(created_at) DESC
-         LIMIT 10`
-      )
-      .all<{ counterparty_name: string | null; entity_type: string; action_description: string | null }>();
-
-    const calendarRows = calendarResult.results || [];
-    const urgentRows = urgentEntityResult.results || [];
-    const calendarLines = calendarRows.map((event) => `[${event.start_at}] ${event.title || ''}`);
-    const urgentLines = urgentRows.map((entity) => `${entity.counterparty_name || ''} | ${entity.entity_type} | ${entity.action_description || ''}`);
-
-    const next = await this.readBlawbyState();
-    next.immediateContext = [
-      'Immediate Context',
-      'Calendar (next 4h):',
-      ...calendarLines,
-      'Urgent Entities (last 2h):',
-      ...urgentLines
-    ].join('\n');
-    await this.writeBlawbyState(next);
-    console.log(`[blawby] immediate_context updated: ${calendarRows.length} calendar events, ${urgentRows.length} urgent entities`);
-  }
-
-  async skillShortTermMemory(): Promise<void> {
-    console.log('[blawby] skill_short_term_memory started');
-    const entitiesResult = await this.env.SKY_DB
-      .prepare(
-        `SELECT *
-         FROM email_entities
-         WHERE datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-48 hours')
-         ORDER BY datetime(created_at) DESC
-         LIMIT 50`
-      )
-      .all<Record<string, unknown>>();
-    const calendarResult = await this.env.SKY_DB
-      .prepare(
-        `SELECT id, title, start_at, end_at, location, calendar_name
-         FROM calendar_events
-         WHERE datetime(start_at) >= datetime(CURRENT_TIMESTAMP)
-           AND datetime(start_at) < datetime(CURRENT_TIMESTAMP, '+48 hours')
-         ORDER BY datetime(start_at) ASC
-         LIMIT 20`
-      )
-      .all<{
-        id: string;
-        title: string | null;
-        start_at: string;
-        end_at: string;
-        location: string | null;
-        calendar_name: string | null;
-      }>();
-    const entityRows = entitiesResult.results || [];
-    const calendarRows = calendarResult.results || [];
-    const financialItems = entityRows
-      .filter((row) => {
-        const direction = String(row.direction || '').toLowerCase();
-        const type = String(row.entity_type || '').toLowerCase();
-        return direction === 'ar' || direction === 'ap' || type.includes('invoice') || type.includes('payment') || type.includes('bill');
-      })
-      .map((row) => `${String(row.created_at || '')} | ${String(row.counterparty_name || '')} | ${String(row.entity_type || '')} | ${String(row.action_description || '')}`);
-    const correspondenceItems = entityRows
-      .filter((row) => {
-        const direction = String(row.direction || '').toLowerCase();
-        const type = String(row.entity_type || '').toLowerCase();
-        return !(direction === 'ar' || direction === 'ap' || type.includes('invoice') || type.includes('payment') || type.includes('bill'));
-      })
-      .map((row) => `${String(row.created_at || '')} | ${String(row.counterparty_name || '')} | ${String(row.entity_type || '')} | ${String(row.action_description || '')}`);
-    const calendarItems = calendarRows
-      .map((event) => `${event.start_at} | ${event.title || ''} | ${event.location || ''} | ${event.calendar_name || ''}`);
-    const combinedContext = [
-      'Financial Items:',
-      ...financialItems,
-      'Correspondence Items:',
-      ...correspondenceItems,
-      'Calendar Items:',
-      ...calendarItems
-    ].join('\n');
-    const summary = await generateGatewaySummary(this.env, 'You are Blawby, an AI chief-of-staff. Summarize the user context from the last 48 hours into 3-5 concise bullet points usable as working memory.', combinedContext, 400);
-    const next = await this.readBlawbyState();
-    next.shortTermMemory = summary;
-    await this.writeBlawbyState(next);
-  }
-
-  async skillLongTermMemory(): Promise<void> {
-    console.log('[blawby] skill_long_term_memory started');
-    const counterpartyResult = await this.env.SKY_DB
-      .prepare(
-        `SELECT counterparty_name,
-                COUNT(*) AS appearances,
-                GROUP_CONCAT(DISTINCT entity_type) AS types_seen,
-                GROUP_CONCAT(DISTINCT direction) AS directions,
-                MAX(created_at) AS most_recent_date
-         FROM email_entities
-         GROUP BY counterparty_name
-         ORDER BY appearances DESC
-         LIMIT 30`
-      )
-      .all<{
-        counterparty_name: string | null;
-        appearances: number;
-        types_seen: string | null;
-        directions: string | null;
-        most_recent_date: string | null;
-      }>();
-    const meetingResult = await this.env.SKY_DB
-      .prepare(
-        `SELECT title,
-                COUNT(*) AS occurrences,
-                MAX(start_at) AS most_recent_date
-         FROM calendar_events
-         GROUP BY title
-         ORDER BY occurrences DESC
-         LIMIT 20`
-      )
-      .all<{
-        title: string | null;
-        occurrences: number;
-        most_recent_date: string | null;
-      }>();
-    const counterparties = (counterpartyResult.results || [])
-      .map((row) => `${row.counterparty_name || ''} | appearances: ${row.appearances} | types: ${row.types_seen || ''} | directions: ${row.directions || ''} | most recent: ${row.most_recent_date || ''}`);
-    const meetings = (meetingResult.results || [])
-      .map((row) => `${row.title || ''} | occurrences: ${row.occurrences} | most recent: ${row.most_recent_date || ''}`);
-    const context = [
-      'Counterparty Patterns:',
-      ...counterparties,
-      'Recurring Calendar Commitments:',
-      ...meetings
-    ].join('\n');
-    const summary = await generateGatewaySummary(this.env, 'Identify recurring relationships and what they represent, recurring calendar commitments, and patterns worth remembering such as regular payments, standing meetings, and frequent contacts.', context, 400);
-    const next = await this.readBlawbyState();
-    next.longTermMemory = summary;
-    await this.writeBlawbyState(next);
-  }
-
-  async skillKnowledgeProfile(): Promise<void> {
-    console.log('[blawby] skill_knowledge_profile started');
-    const state = await this.readBlawbyState();
-    const context = [
-      'Immediate Context:',
-      state.immediateContext,
-      'Short-Term Memory:',
-      state.shortTermMemory,
-      'Long-Term Memory:',
-      state.longTermMemory
-    ].join('\n');
-    const profile = await generateGatewaySummary(this.env, 'Synthesize a concise system-prompt addendum describing who Skyler is, what businesses he runs, who his key relationships are, and what his current priorities appear to be.', context, 600);
-    state.knowledgeProfile = profile;
-    await this.writeBlawbyState(state);
-  }
-
-  async getContext(): Promise<string> {
-    const state = await this.readBlawbyState();
-    return [
-      '## Immediate Context',
-      state.immediateContext,
-      '## Short-Term Memory',
-      state.shortTermMemory,
-      '## Long-Term Memory',
-      state.longTermMemory,
-      '## Knowledge Profile',
-      state.knowledgeProfile
-    ].join('\n\n');
-  }
-
-  async onStart(): Promise<void> {
-    const started = await this.state.storage.get<boolean>(ChatCoordinator.BLAWBY_STARTED_KEY);
-    if (started) return;
-    await this.state.storage.put(ChatCoordinator.BLAWBY_STARTED_KEY, true);
-    await this.state.storage.setAlarm(Date.now() + 60_000);
-  }
-
-  private async runDueBlawbySkills(now: number): Promise<void> {
-    const schedule = (await this.state.storage.get<Record<string, number>>(ChatCoordinator.BLAWBY_SCHEDULE_KEY)) || {};
-    if (!schedule.immediateContext || now - schedule.immediateContext >= 15 * 60 * 1000) {
-      await this.skillImmediateContext();
-      schedule.immediateContext = now;
-    }
-    if (!schedule.shortTermMemory || now - schedule.shortTermMemory >= 60 * 60 * 1000) {
-      await this.skillShortTermMemory();
-      schedule.shortTermMemory = now;
-    }
-    if (!schedule.longTermMemory || now - schedule.longTermMemory >= 24 * 60 * 60 * 1000) {
-      await this.skillLongTermMemory();
-      schedule.longTermMemory = now;
-    }
-    if (!schedule.knowledgeProfile || now - schedule.knowledgeProfile >= 7 * 24 * 60 * 60 * 1000) {
-      await this.skillKnowledgeProfile();
-      schedule.knowledgeProfile = now;
-    }
-    await this.state.storage.put(ChatCoordinator.BLAWBY_SCHEDULE_KEY, schedule);
-  }
-
-  private async readBlawbyState(): Promise<BlawbyAgentState> {
-    const existing = await this.state.storage.get<BlawbyAgentState>(ChatCoordinator.BLAWBY_STATE_KEY);
-    return {
-      immediateContext: existing?.immediateContext || '',
-      shortTermMemory: existing?.shortTermMemory || '',
-      longTermMemory: existing?.longTermMemory || '',
-      knowledgeProfile: existing?.knowledgeProfile || ''
-    };
-  }
-
-  private async writeBlawbyState(next: BlawbyAgentState): Promise<void> {
-    await this.state.storage.put(ChatCoordinator.BLAWBY_STATE_KEY, next);
-  }
-
   async alarm(): Promise<void> {
     const now = Date.now();
     const timeoutMs = 2 * 60 * 1000;
@@ -740,7 +482,6 @@ export class ChatCoordinator {
       await this.state.storage.delete(key);
       await clearSessionActiveRun(this.env, sessionId).catch(() => {});
     }
-    await this.runDueBlawbySkills(now);
     await this.state.storage.setAlarm(Date.now() + 60_000);
   }
 
@@ -2322,36 +2063,11 @@ function authorizeOpsRequest(request: Request, env: Env): boolean {
   return !!(env.WORKER_API_KEY && token === env.WORKER_API_KEY);
 }
 
-function getPrimaryCoordinatorStub(env: Env): DurableObjectStub {
-  const id = env.CHAT_COORDINATOR.idFromName('primary');
-  return env.CHAT_COORDINATOR.get(id);
-}
-
 async function loadBlawbyContext(env: Env): Promise<string> {
-  try {
-    const stub = getPrimaryCoordinatorStub(env);
-    const response = await stub.fetch(new Request('https://chat-coordinator/blawby/context', { method: 'GET' }));
-    if (!response.ok) return '';
-    const payload = (await response.json()) as { context?: unknown };
-    return typeof payload.context === 'string' ? payload.context : '';
-  } catch {
-    return '';
-  }
-}
-
-async function generateGatewaySummary(env: Env, systemPrompt: string, userContent: string, maxTokens: number): Promise<string> {
-  const summary = await callOpenAiChatViaGateway(
-    env,
-    [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userContent }
-    ],
-    undefined,
-    { operation: 'blawby_memory_summary', endpoint: '/ops/blawby/run-skill' },
-    maxTokens
-  );
-  if (!summary.trim()) throw new Error('blawby_summary_empty');
-  return summary.trim();
+  const agent = getAgentByName(env.BLAWBY_AGENT, 'primary') as {
+    getContext(): Promise<string>;
+  };
+  return agent.getContext();
 }
 
 async function runBlawbySkill(request: Request, env: Env): Promise<Response> {
@@ -2368,14 +2084,26 @@ async function runBlawbySkill(request: Request, env: Env): Promise<Response> {
   if (!['immediateContext', 'shortTermMemory', 'longTermMemory', 'knowledgeProfile'].includes(skill)) {
     return json({ ok: false, error: 'invalid skill' }, 400);
   }
-  const stub = getPrimaryCoordinatorStub(env);
-  return stub.fetch(
-    new Request('https://chat-coordinator/blawby/run-skill', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ skill })
-    })
-  );
+  const agent = getAgentByName(env.BLAWBY_AGENT, 'primary') as {
+    skillImmediateContext(): Promise<void>;
+    skillShortTermMemory(): Promise<void>;
+    skillLongTermMemory(): Promise<void>;
+    skillKnowledgeProfile(): Promise<void>;
+    getContext(): Promise<string>;
+  };
+
+  if (skill === 'immediateContext') await agent.skillImmediateContext();
+  if (skill === 'shortTermMemory') await agent.skillShortTermMemory();
+  if (skill === 'longTermMemory') await agent.skillLongTermMemory();
+  if (skill === 'knowledgeProfile') await agent.skillKnowledgeProfile();
+
+  const context = await agent.getContext();
+  return json({
+    ok: true,
+    skill,
+    context,
+    generatedAt: new Date().toISOString()
+  });
 }
 
 async function getBlawbyContext(request: Request, env: Env): Promise<Response> {
@@ -2383,8 +2111,11 @@ async function getBlawbyContext(request: Request, env: Env): Promise<Response> {
     return json({ ok: false, error: 'unauthorized' }, 401);
   }
 
-  const stub = getPrimaryCoordinatorStub(env);
-  return stub.fetch(new Request('https://chat-coordinator/blawby/context', { method: 'GET' }));
+  const agent = getAgentByName(env.BLAWBY_AGENT, 'primary') as {
+    getContext(): Promise<string>;
+  };
+  const context = await agent.getContext();
+  return json({ ok: true, context, generatedAt: new Date().toISOString() });
 }
 
 async function executeIntent(

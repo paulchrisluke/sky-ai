@@ -4,26 +4,33 @@ import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
+import WebSocket from 'ws';
 import { syncCalendars } from './calendar.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, '.env') });
 
-const REQUIRED = ['WORKER_INGEST_URL', 'APPLE_ID', 'APPLE_APP_PASSWORD'];
+const REQUIRED = ['WORKER_WS_URL', 'WORKER_API_KEY', 'APPLE_ID', 'APPLE_APP_PASSWORD'];
 for (const key of REQUIRED) {
   if (!process.env[key]) {
     throw new Error(`Missing required env var: ${key}`);
   }
 }
 
-const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || '30000');
 const MAILBOXES = (process.env.MAILBOXES || 'INBOX,Sent Messages')
   .split(',')
   .map((x) => x.trim())
   .filter(Boolean);
 
+const WORKSPACE_ID = process.env.WORKSPACE_ID || 'default';
 const STATE_FILE = path.resolve(__dirname, process.env.STATE_FILE || '../data/mailbox-state.json');
+const WS_PING_INTERVAL_MS = 30_000;
+const CALENDAR_SYNC_INTERVAL_MS = 15 * 60 * 1000;
+const RECONNECT_MIN_MS = 5_000;
+const RECONNECT_MAX_MS = 60_000;
+const OUTBOUND_POLL_INTERVAL_MS = 15_000;
+
 const ACCOUNTS = [
   {
     id: sanitizeAccountId(process.env.APPLE_ID),
@@ -48,21 +55,14 @@ function redact(value) {
 }
 
 function describeError(error) {
-  if (!(error instanceof Error)) {
-    return redact(String(error));
-  }
-
-  const parts = [
-    `message=${redact(error.message)}`
-  ];
-
+  if (!(error instanceof Error)) return redact(String(error));
+  const parts = [`message=${redact(error.message)}`];
   if (error.code) parts.push(`code=${redact(error.code)}`);
   if (error.responseStatus) parts.push(`responseStatus=${redact(error.responseStatus)}`);
   if (error.responseText) parts.push(`responseText=${redact(error.responseText)}`);
   if (error.executedCommand) parts.push(`executedCommand=${redact(error.executedCommand)}`);
   if (error.serverResponseCode) parts.push(`serverResponseCode=${redact(error.serverResponseCode)}`);
   if (error.status) parts.push(`status=${redact(error.status)}`);
-
   return parts.join(' | ');
 }
 
@@ -80,29 +80,196 @@ function saveState(state) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-async function postToWorker(payload) {
-  const headers = { 'content-type': 'application/json' };
-  if (process.env.WORKER_API_KEY) {
-    headers['authorization'] = `Bearer ${process.env.WORKER_API_KEY}`;
-  }
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  const res = await fetch(process.env.WORKER_INGEST_URL, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload)
+function buildWsUrl() {
+  const base = process.env.WORKER_WS_URL.replace(/\/+$/, '');
+  const url = new URL(`${base}/agents/blawby-agent/primary`);
+  url.searchParams.set('token', process.env.WORKER_API_KEY);
+  return url.toString();
+}
+
+function connectWebSocket() {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(buildWsUrl());
+    const onError = (error) => {
+      ws.removeAllListeners('open');
+      reject(error);
+    };
+    ws.once('error', onError);
+    ws.once('open', () => {
+      ws.removeListener('error', onError);
+      resolve(ws);
+    });
+  });
+}
+
+function sendWs(ws, payload) {
+  if (ws.readyState !== WebSocket.OPEN) {
+    throw new Error('websocket_not_open');
+  }
+  ws.send(JSON.stringify(payload));
+}
+
+async function syncAllMailboxes(client, account, accountState, ws, state) {
+  for (const mailbox of MAILBOXES) {
+    await client.mailboxOpen(mailbox, { readOnly: true });
+
+    const lastUid = Number(accountState.mailboxes[mailbox]?.lastUid || 0);
+    const uidNext = Number(client.mailbox?.uidNext || 1);
+    let maxSeenUid = lastUid;
+    const startUid = Math.max(1, lastUid + 1);
+
+    if (startUid >= uidNext) {
+      accountState.mailboxes[mailbox] = { lastUid, syncedAt: new Date().toISOString() };
+      continue;
+    }
+
+    const range = `${startUid}:*`;
+    try {
+      for await (const msg of client.fetch(
+        range,
+        {
+          uid: true,
+          envelope: true,
+          source: true,
+          internalDate: true
+        },
+        { uid: true }
+      )) {
+        maxSeenUid = Math.max(maxSeenUid, msg.uid);
+        sendWs(ws, {
+          type: 'email',
+          workspaceId: WORKSPACE_ID,
+          source: 'imap',
+          mailbox,
+          accountId: account.id,
+          accountEmail: account.email,
+          threadId: String(msg.envelope?.messageId || msg.uid),
+          uid: msg.uid,
+          subject: msg.envelope?.subject || '',
+          from: msg.envelope?.from || [],
+          to: msg.envelope?.to || [],
+          date: msg.internalDate ? new Date(msg.internalDate).toISOString() : null,
+          rawRfc822: msg.source?.toString('utf8') || ''
+        });
+      }
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      if (!/Invalid message number/i.test(text)) throw error;
+    }
+
+    accountState.mailboxes[mailbox] = { lastUid: maxSeenUid, syncedAt: new Date().toISOString() };
+    saveState(state);
+  }
+}
+
+async function runImapIdleLoop(account, state, ws, stopSignal) {
+  const client = new ImapFlow({
+    host: process.env.IMAP_HOST || 'imap.mail.me.com',
+    port: Number(process.env.IMAP_PORT || '993'),
+    secure: (process.env.IMAP_SECURE || 'true') === 'true',
+    auth: {
+      user: account.email,
+      pass: account.password
+    },
+    logger: false
   });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Worker ingest failed (${res.status}): ${text.slice(0, 400)}`);
+  const accountState = (state.accounts[account.id] ||= { mailboxes: {} });
+  await client.connect();
+  try {
+    while (!stopSignal.stopped && ws.readyState === WebSocket.OPEN) {
+      await syncAllMailboxes(client, account, accountState, ws, state);
+      await client.mailboxOpen('INBOX', { readOnly: true });
+      await Promise.race([
+        client.idle(),
+        stopSignal.closed
+      ]);
+    }
+  } finally {
+    await client.logout().catch(() => {});
+  }
+}
+
+async function watchAccount(account, state) {
+  let backoffMs = RECONNECT_MIN_MS;
+
+  while (true) {
+    const stopSignal = {
+      stopped: false,
+      closeResolve: () => {}
+    };
+    stopSignal.closed = new Promise((resolve) => {
+      stopSignal.closeResolve = resolve;
+    });
+
+    let ws;
+    let pingTimer;
+    let calendarTimer;
+    try {
+      ws = await connectWebSocket();
+      backoffMs = RECONNECT_MIN_MS;
+      console.log('[email-sync] websocket connected');
+
+      ws.on('message', (raw) => {
+        try {
+          const payload = JSON.parse(String(raw));
+          if (payload.type === 'pong') return;
+        } catch {
+          // ignore non-json payloads
+        }
+      });
+
+      ws.on('close', () => {
+        stopSignal.stopped = true;
+        stopSignal.closeResolve();
+      });
+      ws.on('error', () => {
+        stopSignal.stopped = true;
+        stopSignal.closeResolve();
+      });
+
+      pingTimer = setInterval(() => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }, WS_PING_INTERVAL_MS);
+
+      const emitCalendarPayload = async (payload) => {
+        sendWs(ws, payload);
+      };
+
+      await syncCalendars(account, WORKSPACE_ID, emitCalendarPayload);
+      calendarTimer = setInterval(() => {
+        syncCalendars(account, WORKSPACE_ID, emitCalendarPayload).catch((error) => {
+          console.error(`[calendar-sync] periodic sync failed: ${describeError(error)}`);
+        });
+      }, CALENDAR_SYNC_INTERVAL_MS);
+
+      await runImapIdleLoop(account, state, ws, stopSignal);
+    } catch (error) {
+      console.error(`[email-sync] watch loop error: ${describeError(error)}`);
+    } finally {
+      stopSignal.stopped = true;
+      stopSignal.closeResolve();
+      if (pingTimer) clearInterval(pingTimer);
+      if (calendarTimer) clearInterval(calendarTimer);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+      saveState(state);
+    }
+
+    await sleep(backoffMs);
+    backoffMs = Math.min(backoffMs * 2, RECONNECT_MAX_MS);
   }
 }
 
 function workerHeaders() {
   const headers = { 'content-type': 'application/json' };
-  if (process.env.WORKER_API_KEY) {
-    headers['authorization'] = `Bearer ${process.env.WORKER_API_KEY}`;
-  }
+  if (process.env.WORKER_API_KEY) headers.authorization = `Bearer ${process.env.WORKER_API_KEY}`;
   return headers;
 }
 
@@ -116,153 +283,66 @@ const smtpTransport = nodemailer.createTransport({
   }
 });
 
-async function syncAccount(account, state) {
-  const client = new ImapFlow({
-    host: process.env.IMAP_HOST || 'imap.mail.me.com',
-    port: Number(process.env.IMAP_PORT || '993'),
-    secure: (process.env.IMAP_SECURE || 'true') === 'true',
-    auth: {
-      user: account.email,
-      pass: account.password
-    },
-    logger: false
-  });
-
-  const accountState = (state.accounts[account.id] ||= { mailboxes: {} });
-
-  await client.connect();
+let outboundRunning = false;
+async function processOutboundQueue() {
+  if (outboundRunning) return;
+  outboundRunning = true;
   try {
-    for (const mailbox of MAILBOXES) {
-      await client.mailboxOpen(mailbox, { readOnly: true });
+    const nextUrl = process.env.WORKER_OUTBOUND_NEXT_URL || '';
+    const resultUrl = process.env.WORKER_OUTBOUND_RESULT_URL || '';
+    if (!nextUrl || !resultUrl) return;
 
-      const lastUid = Number(accountState.mailboxes[mailbox]?.lastUid || 0);
-      const uidNext = Number(client.mailbox?.uidNext || 1);
-      let maxSeenUid = lastUid;
-      const startUid = Math.max(1, lastUid + 1);
+    while (true) {
+      const nextRes = await fetch(nextUrl, { method: 'GET', headers: workerHeaders() });
+      if (!nextRes.ok) throw new Error(`Failed to poll outbound queue (${nextRes.status})`);
 
-      // iCloud IMAP returns "Invalid message number" if FETCH range starts past uidNext.
-      if (startUid >= uidNext) {
-        accountState.mailboxes[mailbox] = { lastUid, syncedAt: new Date().toISOString() };
-        continue;
-      }
-
-      const range = `${startUid}:*`;
+      const nextJson = await nextRes.json();
+      const item = nextJson?.item;
+      if (!item) return;
 
       try {
-        for await (const msg of client.fetch(
-          range,
-          {
-            uid: true,
-            envelope: true,
-            source: true,
-            internalDate: true
-          },
-          {
-            uid: true
-          }
-        )) {
-          maxSeenUid = Math.max(maxSeenUid, msg.uid);
-          await postToWorker({
-            source: 'imap',
-            mailbox,
-            accountEmail: account.email,
-            threadId: String(msg.envelope?.messageId || msg.uid),
-            uid: msg.uid,
-            subject: msg.envelope?.subject || '',
-            from: msg.envelope?.from || [],
-            to: msg.envelope?.to || [],
-            date: msg.internalDate ? new Date(msg.internalDate).toISOString() : null,
-            rawRfc822: msg.source?.toString('utf8') || ''
-          });
-        }
-      } catch (error) {
-        const text = error instanceof Error ? error.message : String(error);
-        if (!/Invalid message number/i.test(text)) {
-          throw error;
-        }
-      }
+        await smtpTransport.sendMail({
+          from: process.env.APPLE_ID,
+          to: item.to,
+          subject: item.subject,
+          text: item.text || undefined,
+          html: item.html || undefined
+        });
 
-      accountState.mailboxes[mailbox] = { lastUid: maxSeenUid, syncedAt: new Date().toISOString() };
+        await fetch(resultUrl, {
+          method: 'POST',
+          headers: workerHeaders(),
+          body: JSON.stringify({ id: item.id, status: 'sent' })
+        });
+      } catch (error) {
+        await fetch(resultUrl, {
+          method: 'POST',
+          headers: workerHeaders(),
+          body: JSON.stringify({
+            id: item.id,
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error)
+          })
+        });
+      }
     }
   } finally {
-    await client.logout().catch(() => {});
+    outboundRunning = false;
   }
 }
 
-async function run() {
+async function main() {
   const state = loadState();
+  setInterval(() => {
+    processOutboundQueue().catch((error) => {
+      console.error(`[email-sync] outbound queue error: ${describeError(error)}`);
+    });
+  }, OUTBOUND_POLL_INTERVAL_MS);
 
-  for (const account of ACCOUNTS) {
-    await syncAccount(account, state);
-  }
-
-  await syncCalendars(
-    ACCOUNTS[0],
-    process.env.WORKER_INGEST_URL,
-    process.env.WORKER_API_KEY,
-    process.env.WORKSPACE_ID || 'default'
-  );
-
-  await processOutboundQueue();
-  saveState(state);
-  console.log(`[email-sync] sync complete at ${new Date().toISOString()}`);
+  await watchAccount(ACCOUNTS[0], state);
 }
 
-async function processOutboundQueue() {
-  const nextUrl = process.env.WORKER_OUTBOUND_NEXT_URL || process.env.WORKER_INGEST_URL.replace('/ingest/mail-thread', '/mail/outbound/next');
-  const resultUrl =
-    process.env.WORKER_OUTBOUND_RESULT_URL || process.env.WORKER_INGEST_URL.replace('/ingest/mail-thread', '/mail/outbound/result');
-
-  while (true) {
-    const nextRes = await fetch(nextUrl, { method: 'GET', headers: workerHeaders() });
-    if (!nextRes.ok) {
-      throw new Error(`Failed to poll outbound queue (${nextRes.status})`);
-    }
-
-    const nextJson = await nextRes.json();
-    const item = nextJson?.item;
-    if (!item) {
-      return;
-    }
-
-    try {
-      await smtpTransport.sendMail({
-        from: process.env.APPLE_ID,
-        to: item.to,
-        subject: item.subject,
-        text: item.text || undefined,
-        html: item.html || undefined
-      });
-
-      await fetch(resultUrl, {
-        method: 'POST',
-        headers: workerHeaders(),
-        body: JSON.stringify({ id: item.id, status: 'sent' })
-      });
-    } catch (error) {
-      await fetch(resultUrl, {
-        method: 'POST',
-        headers: workerHeaders(),
-        body: JSON.stringify({
-          id: item.id,
-          status: 'failed',
-          error: error instanceof Error ? error.message : String(error)
-        })
-      });
-    }
-  }
-}
-
-async function loop() {
-  while (true) {
-    try {
-      await run();
-    } catch (error) {
-      console.error('[email-sync] sync error', describeError(error));
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-  }
-}
-
-loop();
+main().catch((error) => {
+  console.error(`[email-sync] fatal error: ${describeError(error)}`);
+  process.exit(1);
+});
