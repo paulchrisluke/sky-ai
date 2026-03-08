@@ -12,28 +12,31 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 - Mac Mailbox Agent (`agent/`): IMAP sync from iCloud mailboxes to Worker ingest endpoint
 - PM2 on Mac: process persistence and always-on connectivity
 
-## Project Layout
+## Structure (Living)
 
-- `src/worker.ts`
-- `src/types.d.ts`
-- `workers/api/src/worker.ts`
-- `workers/jobs/src/worker.ts`
-- `db/migrations/0001_init.sql`
-- `db/migrations/0002_outbound_messages.sql`
-- `db/migrations/0003_email_canonical_schema.sql`
-- `db/migrations/0004_embedding_jobs.sql`
-- `db/migrations/0005_chat_sessions_and_actions.sql`
-- `db/migrations/0006_account_id_on_email_memory.sql`
-- `db/migrations/0007_action_extraction_and_briefing.sql`
-- `db/migrations/0008_access_subject_permissions.sql`
-- `wrangler.toml`
-- `wrangler.api.toml`
-- `wrangler.jobs.toml`
-- `docs/cloudflare-setup.md`
-- `agent/index.js`
-- `agent/.env.example`
-- `agent/ecosystem.config.cjs`
-- `docs/mac-agent-setup.md`
+- `workers/api`: request-time APIs, query execution, WebSocket coordination, Blawby memory injection
+- `workers/jobs`: async/background processing (queue consumers, cron job execution)
+- `workers/shared`: shared contracts/utilities (citation contract, run events)
+- `workers/api/src/agents/blawby.ts`: Cloudflare Agents SDK memory agent (`BlawbyAgent`)
+- `db/migrations`: D1 schema evolution
+- `agent/`: Mac-side mailbox connector + backfill tooling
+
+## Tools
+
+- Runtime: Cloudflare Workers + Durable Objects + Cloudflare Agents SDK (`agents`)
+- Data: D1 (`SKY_DB`) + Vectorize (`SKY_VECTORIZE`) + R2 artifacts
+- AI: OpenAI models through Cloudflare AI Gateway
+- Scheduling: jobs worker cron/queue for platform jobs
+- Scheduling: `BlawbyAgent` internal schedules for memory layers
+- Auth: Cloudflare Access JWT + optional service API key bypass
+
+## Blawby Skills (Track 2)
+
+- `skillImmediateContext` (every 15m): next-4h calendar + last-2h urgent entities
+- `skillShortTermMemory` (hourly): 48h synthesis from entities + upcoming calendar
+- `skillLongTermMemory` (daily 3am): recurring counterparty/meeting pattern synthesis
+- `skillKnowledgeProfile` (weekly Sun 4am): profile synthesis for prompt-time memory injection
+- `getContext()`: returns all memory layers with headers for prompt injection
 
 ## Quickstart
 

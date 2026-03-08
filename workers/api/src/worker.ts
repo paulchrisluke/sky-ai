@@ -198,6 +198,14 @@ export default {
       return getTriageStats(request, env);
     }
 
+    if (request.method === 'POST' && url.pathname === '/ops/blawby/run-skill') {
+      return runBlawbySkill(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/ops/blawby/context') {
+      return getBlawbyContext(request, env);
+    }
+
     return json({ ok: false, error: 'Not found' }, 404);
   }
 };
@@ -2067,6 +2075,58 @@ async function getTriageStats(request: Request, env: Env): Promise<Response> {
         false: Number((replyRows.results || []).find((x) => Number(x.key) === 0)?.c || 0)
       }
     },
+    generatedAt: new Date().toISOString()
+  });
+}
+
+async function runBlawbySkill(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+
+  const payload = (await request.json()) as JsonRecord;
+  const skill = stringOr(payload.skill);
+  if (!skill) {
+    return json({ ok: false, error: 'skill is required' }, 400);
+  }
+
+  const agent = await getAgentByName<Env, BlawbyAgent>(
+    env.BLAWBY_AGENT as DurableObjectNamespace<BlawbyAgent>,
+    'primary'
+  );
+
+  if (skill === 'immediateContext') {
+    await agent.skillImmediateContext();
+  } else if (skill === 'shortTermMemory') {
+    await agent.skillShortTermMemory();
+  } else if (skill === 'longTermMemory') {
+    await agent.skillLongTermMemory();
+  } else if (skill === 'knowledgeProfile') {
+    await agent.skillKnowledgeProfile();
+  } else {
+    return json({ ok: false, error: 'invalid skill' }, 400);
+  }
+
+  const context = await agent.getContext();
+  return json({
+    ok: true,
+    skill,
+    context,
+    generatedAt: new Date().toISOString()
+  });
+}
+
+async function getBlawbyContext(request: Request, env: Env): Promise<Response> {
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+
+  const agent = await getAgentByName<Env, BlawbyAgent>(
+    env.BLAWBY_AGENT as DurableObjectNamespace<BlawbyAgent>,
+    'primary'
+  );
+  const context = await agent.getContext();
+  return json({
+    ok: true,
+    context,
     generatedAt: new Date().toISOString()
   });
 }
