@@ -40,7 +40,9 @@ targets:
         product: GRDB
     settings:
       base:
+        DEVELOPMENT_TEAM: 948S9JG4VL
         CODE_SIGN_ENTITLEMENTS: BlawbyAgent/BlawbyAgent.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         OTHER_LDFLAGS: "-framework EventKit -framework Contacts -framework ScriptingBridge"
   BlawbyAgentTests:
     type: bundle.unit-test

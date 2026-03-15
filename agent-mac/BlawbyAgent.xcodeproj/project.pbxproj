@@ -234,6 +234,7 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					82ED3CBA1FADC94B14E23293 = {
+						DevelopmentTeam = 948S9JG4VL;
 						ProvisioningStyle = Automatic;
 					};
 					A64338D7CAC7F6FBADFA6099 = {
@@ -444,14 +445,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = (
-					"-framework",
-					EventKit,
-					"-framework",
-					Contacts,
-					"-framework",
-					ScriptingBridge,
-				);
+				OTHER_LDFLAGS = "-framework EventKit -framework Contacts -framework ScriptingBridge";
 				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgent;
 				SDKROOT = macosx;
 			};
@@ -485,14 +479,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = (
-					"-framework",
-					EventKit,
-					"-framework",
-					Contacts,
-					"-framework",
-					ScriptingBridge,
-				);
+				OTHER_LDFLAGS = "-framework EventKit -framework Contacts -framework ScriptingBridge";
 				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgent;
 				SDKROOT = macosx;
 			};
