@@ -150,9 +150,8 @@ final class MailWatcher: @unchecked Sendable {
 
                         let subject = message.value(forKey: "subject") as? String ?? ""
                         let sender = message.value(forKey: "sender") as? String ?? ""
-                        let toRecipients = recipientEmails(from: message.value(forKey: "toRecipients"))
-                        let content = message.value(forKey: "content") as? String ?? subject
-                        let bodyText = truncate(content, maxLength: 2000)
+                        let toRecipients: [String] = []
+                        let bodyText = truncate(subject, maxLength: 500)
 
                         rawMessages.append(
                             RawMessage(
@@ -258,6 +257,9 @@ final class MailWatcher: @unchecked Sendable {
                         break
                     }
                     inspected += 1
+                    if inspected % 1000 == 0 {
+                        logger.info("mail backfill progress inspected=\(inspected) matched=\(rawMessages.count) mailbox=\(mailboxName)")
+                    }
 
                     guard let dateSent = message.value(forKey: "dateSent") as? Date else {
                         if index == 0 { break }
@@ -283,9 +285,8 @@ final class MailWatcher: @unchecked Sendable {
 
                         let subject = message.value(forKey: "subject") as? String ?? ""
                         let sender = message.value(forKey: "sender") as? String ?? ""
-                        let toRecipients = recipientEmails(from: message.value(forKey: "toRecipients"))
-                        let content = message.value(forKey: "content") as? String ?? subject
-                        let bodyText = truncate(content, maxLength: 2000)
+                        let toRecipients: [String] = []
+                        let bodyText = truncate(subject, maxLength: 500)
 
                         rawMessages.append(
                             RawMessage(
@@ -372,18 +373,12 @@ final class MailWatcher: @unchecked Sendable {
     }
 
     private func selectableBackfillMailboxes(from mailboxes: [NSObject]) -> [NSObject] {
-        let excludedNames: Set<String> = [
-            "trash",
-            "junk",
-            "spam",
-            "deleted messages",
-            "bin"
-        ]
+        let includeKeywords = ["inbox", "sent"]
         return mailboxes.filter { mailbox in
             let name = (mailbox.value(forKey: "name") as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
-            return !excludedNames.contains(name)
+            return includeKeywords.contains(where: { name.contains($0) })
         }
     }
 }

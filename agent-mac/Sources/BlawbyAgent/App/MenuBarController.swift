@@ -7,26 +7,19 @@ final class MenuBarController: NSObject {
     private let setSyncEnabledHandler: @MainActor (Bool) -> Void
     private let preferencesHandler: () -> Void
 
-    private let statusHeaderItem = NSMenuItem(title: "Status", action: nil, keyEquivalent: "")
-    private let servicesHeaderItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
-    private let activityHeaderItem = NSMenuItem(title: "Activity", action: nil, keyEquivalent: "")
+    private let syncToggleMenuItem = NSMenuItem(title: "Sync: Off", action: #selector(syncToggleAction), keyEquivalent: "")
     private let connectionItem = NSMenuItem(title: "Connection: Connecting", action: nil, keyEquivalent: "")
-    private let syncStateItem = NSMenuItem(title: "Sync: Idle", action: nil, keyEquivalent: "")
     private let issuesItem = NSMenuItem(title: "Issues: None", action: nil, keyEquivalent: "")
-    private let mailStatusItem = NSMenuItem(title: "Mail: Waiting", action: nil, keyEquivalent: "")
-    private let calendarStatusItem = NSMenuItem(title: "Calendar: Waiting", action: nil, keyEquivalent: "")
-    private let messagesStatusItem = NSMenuItem(title: "Messages: Waiting", action: nil, keyEquivalent: "")
-    private let mailDetailsItem = NSMenuItem(title: "Mail Details", action: nil, keyEquivalent: "")
-    private let calendarDetailsItem = NSMenuItem(title: "Calendar Details", action: nil, keyEquivalent: "")
-    private let messagesDetailsItem = NSMenuItem(title: "Messages Details", action: nil, keyEquivalent: "")
-    private let lastSyncItem = NSMenuItem(title: "Last sync: -", action: nil, keyEquivalent: "")
-    private let todayTotalsItem = NSMenuItem(title: "Today: Mail 0  Calendar 0", action: nil, keyEquivalent: "")
+
+    private let mailGroupItem = NSMenuItem(title: "Mail", action: nil, keyEquivalent: "")
+    private let calendarGroupItem = NSMenuItem(title: "Calendar", action: nil, keyEquivalent: "")
+    private let messagesGroupItem = NSMenuItem(title: "Messages", action: nil, keyEquivalent: "")
     private let mailDetailsMenu = NSMenu()
     private let calendarDetailsMenu = NSMenu()
     private let messagesDetailsMenu = NSMenu()
-    private let syncToggleItem = NSMenuItem()
-    private let syncSwitch = NSSwitch(frame: .zero)
-    private var suppressSwitchStateUpdatesUntil: Date?
+
+    private let lastSyncItem = NSMenuItem(title: "Last sync: -", action: nil, keyEquivalent: "")
+    private let todayTotalsItem = NSMenuItem(title: "Today: Mail 0  Calendar 0", action: nil, keyEquivalent: "")
 
     init(setSyncEnabled: @escaping @MainActor (Bool) -> Void, preferences: @escaping () -> Void) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -50,48 +43,43 @@ final class MenuBarController: NSObject {
             }
         }
 
-        menu.addItem(NSMenuItem(title: "Blawby", action: nil, keyEquivalent: ""))
-        configureHeader(statusHeaderItem)
-        menu.addItem(statusHeaderItem)
+        syncToggleMenuItem.target = self
+        configureReadOnly(syncToggleMenuItem, symbolName: "arrow.triangle.2.circlepath")
+        menu.addItem(syncToggleMenuItem)
+
         configureReadOnly(connectionItem, symbolName: "network")
         menu.addItem(connectionItem)
-        configureReadOnly(syncStateItem, symbolName: "arrow.triangle.2.circlepath")
-        menu.addItem(syncStateItem)
+
         configureReadOnly(issuesItem, symbolName: "exclamationmark.triangle")
         menu.addItem(issuesItem)
-        menu.addItem(.separator())
-        configureHeader(servicesHeaderItem)
-        menu.addItem(servicesHeaderItem)
-        configureReadOnly(mailStatusItem, symbolName: "envelope")
-        menu.addItem(mailStatusItem)
-        configureReadOnly(calendarStatusItem, symbolName: "calendar")
-        menu.addItem(calendarStatusItem)
-        configureReadOnly(messagesStatusItem, symbolName: "message")
-        menu.addItem(messagesStatusItem)
-        configureDetailsItem(mailDetailsItem, symbolName: "chevron.right")
-        mailDetailsItem.submenu = mailDetailsMenu
-        menu.addItem(mailDetailsItem)
-        configureDetailsItem(calendarDetailsItem, symbolName: "chevron.right")
-        calendarDetailsItem.submenu = calendarDetailsMenu
-        menu.addItem(calendarDetailsItem)
-        configureDetailsItem(messagesDetailsItem, symbolName: "chevron.right")
-        messagesDetailsItem.submenu = messagesDetailsMenu
-        menu.addItem(messagesDetailsItem)
-        menu.addItem(.separator())
-        configureHeader(activityHeaderItem)
-        menu.addItem(activityHeaderItem)
-        menu.addItem(lastSyncItem)
-        menu.addItem(todayTotalsItem)
+
         menu.addItem(.separator())
 
-        syncToggleItem.view = buildSyncToggleRow()
-        menu.addItem(syncToggleItem)
+        configureDetailsItem(mailGroupItem, symbolName: "envelope")
+        mailGroupItem.submenu = mailDetailsMenu
+        menu.addItem(mailGroupItem)
+
+        configureDetailsItem(calendarGroupItem, symbolName: "calendar")
+        calendarGroupItem.submenu = calendarDetailsMenu
+        menu.addItem(calendarGroupItem)
+
+        configureDetailsItem(messagesGroupItem, symbolName: "message")
+        messagesGroupItem.submenu = messagesDetailsMenu
+        menu.addItem(messagesGroupItem)
+
+        menu.addItem(.separator())
+
+        menu.addItem(lastSyncItem)
+        menu.addItem(todayTotalsItem)
+
+        menu.addItem(.separator())
 
         let prefsItem = NSMenuItem(title: "Preferences...", action: #selector(preferencesAction), keyEquivalent: "")
         prefsItem.target = self
         menu.addItem(prefsItem)
 
         menu.addItem(.separator())
+
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitAction), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -120,14 +108,22 @@ final class MenuBarController: NSObject {
         lastSyncItem.title = "Last sync: \(lastSync)"
         todayTotalsItem.title = "Today: Mail \(mailProcessed)  Calendar \(calendarSynced)"
         connectionItem.title = "Connection: \(connection)"
+
         setLeadingTrailingTitle(
-            item: syncStateItem,
+            item: syncToggleMenuItem,
             leading: "Sync: \(syncState)",
             trailing: syncProgress.map { "\($0)%" } ?? "—"
         )
-        mailStatusItem.title = "Mail: \(mailStatus)"
-        calendarStatusItem.title = "Calendar: \(calendarStatus)"
-        messagesStatusItem.title = "Messages: \(messagesStatus)"
+        syncToggleMenuItem.state = syncActivated ? .on : .off
+        if let image = NSImage(systemSymbolName: syncActivated ? "arrow.triangle.2.circlepath.circle.fill" : "pause.circle", accessibilityDescription: nil) {
+            image.isTemplate = true
+            syncToggleMenuItem.image = image
+        }
+
+        mailGroupItem.title = "Mail: \(mailStatus)"
+        calendarGroupItem.title = "Calendar: \(calendarStatus)"
+        messagesGroupItem.title = "Messages: \(messagesStatus)"
+
         updateIssuesItem(
             connectedMailAccounts: connectedMailAccounts,
             knownMailAccounts: knownMailAccounts,
@@ -136,7 +132,11 @@ final class MenuBarController: NSObject {
             messagesSourceConnected: messagesSourceConnected,
             messagesSourceAvailable: messagesSourceAvailable
         )
+
         updateDetailsMenus(
+            mailStatus: mailStatus,
+            calendarStatus: calendarStatus,
+            messagesStatus: messagesStatus,
             connectedMailAccounts: connectedMailAccounts,
             knownMailAccounts: knownMailAccounts,
             connectedCalendarSources: connectedCalendarSources,
@@ -144,31 +144,18 @@ final class MenuBarController: NSObject {
             messagesSourceConnected: messagesSourceConnected,
             messagesSourceAvailable: messagesSourceAvailable
         )
-        let desiredState: NSControl.StateValue = syncActivated ? .on : .off
-        let now = Date()
-        let suppress = suppressSwitchStateUpdatesUntil.map { now < $0 } ?? false
-        if !suppress && syncSwitch.state != desiredState {
-            syncSwitch.state = desiredState
-        }
+
         updateStatusIcon(connection: connection, syncState: syncState)
     }
 
     private func setLeadingTrailingTitle(item: NSMenuItem, leading: String, trailing: String) {
-        let full = "\(leading)\t\(trailing)"
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.defaultTabInterval = 280
-        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: 280)]
-        item.attributedTitle = NSAttributedString(
-            string: full,
-            attributes: [
-                .font: NSFont.menuFont(ofSize: 0),
-                .foregroundColor: NSColor.labelColor,
-                .paragraphStyle: paragraph
-            ]
-        )
+        item.attributedTitle = NSAttributedString(string: "\(leading)\t\(trailing)")
     }
 
     private func updateDetailsMenus(
+        mailStatus: String,
+        calendarStatus: String,
+        messagesStatus: String,
         connectedMailAccounts: [String],
         knownMailAccounts: [String],
         connectedCalendarSources: [String],
@@ -178,6 +165,7 @@ final class MenuBarController: NSObject {
     ) {
         rebuildDetailsMenu(
             menu: mailDetailsMenu,
+            summary: mailStatus,
             connected: connectedMailAccounts,
             known: knownMailAccounts,
             connectedSymbol: "person.crop.circle.badge.checkmark",
@@ -185,6 +173,7 @@ final class MenuBarController: NSObject {
         )
         rebuildDetailsMenu(
             menu: calendarDetailsMenu,
+            summary: calendarStatus,
             connected: connectedCalendarSources,
             known: knownCalendarSources,
             connectedSymbol: "calendar.badge.checkmark",
@@ -192,6 +181,11 @@ final class MenuBarController: NSObject {
         )
 
         messagesDetailsMenu.removeAllItems()
+        let messagesSummary = NSMenuItem(title: messagesStatus, action: nil, keyEquivalent: "")
+        messagesSummary.isEnabled = false
+        messagesDetailsMenu.addItem(messagesSummary)
+        messagesDetailsMenu.addItem(.separator())
+
         if messagesSourceAvailable {
             let status = messagesSourceConnected ? "Connected" : "Disconnected"
             let symbol = messagesSourceConnected ? "checkmark.circle.fill" : "exclamationmark.circle"
@@ -211,12 +205,19 @@ final class MenuBarController: NSObject {
 
     private func rebuildDetailsMenu(
         menu detailsMenu: NSMenu,
+        summary: String,
         connected: [String],
         known: [String],
         connectedSymbol: String,
         disconnectedSymbol: String
     ) {
         detailsMenu.removeAllItems()
+
+        let summaryItem = NSMenuItem(title: summary, action: nil, keyEquivalent: "")
+        summaryItem.isEnabled = false
+        detailsMenu.addItem(summaryItem)
+        detailsMenu.addItem(.separator())
+
         let connectedSet = Set(connected)
         let all = known.isEmpty ? connected : known
         if all.isEmpty {
@@ -270,17 +271,6 @@ final class MenuBarController: NSObject {
         issuesItem.title = "Issues: " + parts.joined(separator: " • ")
     }
 
-    private func configureHeader(_ item: NSMenuItem) {
-        item.isEnabled = true
-        item.attributedTitle = NSAttributedString(
-            string: item.title,
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-                .foregroundColor: NSColor.secondaryLabelColor
-            ]
-        )
-    }
-
     private func configureReadOnly(_ item: NSMenuItem, symbolName: String) {
         item.isEnabled = true
         if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) {
@@ -297,30 +287,6 @@ final class MenuBarController: NSObject {
         }
     }
 
-    private func buildSyncToggleRow() -> NSView {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 30))
-
-        let label = NSTextField(labelWithString: "Sync")
-        label.font = NSFont.menuFont(ofSize: 0)
-        label.textColor = .labelColor
-        label.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(label)
-
-        syncSwitch.target = self
-        syncSwitch.action = #selector(syncSwitchChanged(_:))
-        syncSwitch.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(syncSwitch)
-
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
-            label.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            syncSwitch.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
-            syncSwitch.centerYAnchor.constraint(equalTo: container.centerYAnchor)
-        ])
-
-        return container
-    }
-
     private func updateStatusIcon(connection: String, syncState: String) {
         guard let button = statusItem.button else {
             return
@@ -328,7 +294,7 @@ final class MenuBarController: NSObject {
 
         let symbolName: String
         if connection.lowercased().hasPrefix("connected") {
-            if syncState.lowercased().hasPrefix("on") {
+            if syncState.lowercased() != "off" {
                 symbolName = "arrow.triangle.2.circlepath.circle.fill"
             } else {
                 symbolName = "bolt.horizontal.circle.fill"
@@ -348,9 +314,9 @@ final class MenuBarController: NSObject {
         button.title = "Blawby"
     }
 
-    @objc private func syncSwitchChanged(_ sender: NSSwitch) {
-        suppressSwitchStateUpdatesUntil = Date().addingTimeInterval(1.0)
-        setSyncEnabledHandler(sender.state == .on)
+    @objc private func syncToggleAction() {
+        let enable = syncToggleMenuItem.state != .on
+        setSyncEnabledHandler(enable)
     }
 
     @objc private func preferencesAction() {

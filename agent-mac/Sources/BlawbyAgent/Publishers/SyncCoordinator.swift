@@ -45,9 +45,9 @@ protocol CalendarWatching {
 }
 
 final class SyncCoordinator: @unchecked Sendable {
-    private let bootstrapMailDays = 3650
+    private let bootstrapMailDays = 90
     private let bootstrapMailChunkDays = 30
-    private let bootstrapMailChunkLimit = 1500
+    private let bootstrapMailChunkLimit = 100
 
     private let stateQueue = DispatchQueue(label: "com.blawby.agent.sync.state")
     private var mailSyncRunning = false
@@ -251,14 +251,16 @@ final class SyncCoordinator: @unchecked Sendable {
                     return
                 }
                 guard beginMailSync(mode: "backfill") else {
-                    logger.info("[sync] bootstrap mail backfill paused: mail sync already active")
+                    logger.info("[sync] bootstrap mail backfill waiting: mail sync already active")
                     publishStatus()
-                    return
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    continue
                 }
                 publishStatus()
 
                 let currentWindowCursorEnd = windowCursorEnd
                 let windowMessages = await mailWatcher.fetchMessagesBetween(windowStart, currentWindowCursorEnd, limit: bootstrapMailChunkLimit)
+                logger.info("[sync] bootstrap mail fetched messages=\(windowMessages.count) start=\(windowStart) end=\(currentWindowCursorEnd)")
                 await processMailMessages(windowMessages, mode: "backfill")
 
                 while completeMailSyncPass() {
