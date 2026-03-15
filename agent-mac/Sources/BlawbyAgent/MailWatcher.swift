@@ -236,12 +236,9 @@ final class MailWatcher: @unchecked Sendable {
 
         for account in accounts {
             let mailboxes = objectArray(from: account.value(forKey: "mailboxes"))
-            let inboxes = mailboxes.filter { mailbox in
-                let name = (mailbox.value(forKey: "name") as? String ?? "").lowercased()
-                return name == "inbox"
-            }
+            let candidateMailboxes = selectableBackfillMailboxes(from: mailboxes)
 
-            for mailbox in inboxes {
+            for mailbox in candidateMailboxes {
                 let mailboxName = mailbox.value(forKey: "name") as? String ?? "INBOX"
                 guard let messages = mailbox.value(forKey: "messages") as? NSArray else {
                     continue
