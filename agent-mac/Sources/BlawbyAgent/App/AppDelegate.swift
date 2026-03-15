@@ -193,7 +193,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
         queuePendingDisplay = snapshot.pendingPayloads
         bootstrapStatusDisplay = snapshot.bootstrapStatus
-        mailStatusDisplay = "processed=\(snapshot.lastMailProcessed), entities=\(snapshot.lastMailEntities), delivery=\(snapshot.lastMailDelivery)"
+        mailStatusDisplay =
+            "run p=\(snapshot.lastMailProcessed) e=\(snapshot.lastMailEntities) d=\(snapshot.lastMailDelivery) | " +
+            "total discovered=\(snapshot.mailDiscoveredTotal) processed=\(snapshot.mailProcessedTotal) sent=\(snapshot.mailSentTotal) queued=\(snapshot.mailQueuedTotal)"
         calendarStatusDisplay = "events=\(snapshot.lastCalendarEvents), delivery=\(snapshot.lastCalendarDelivery)"
         updateMenu()
     }

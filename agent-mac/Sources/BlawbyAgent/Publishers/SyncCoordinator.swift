@@ -9,6 +9,10 @@ struct SyncStatusSnapshot {
     let lastMailProcessed: Int
     let lastMailEntities: Int
     let lastMailDelivery: String
+    let mailDiscoveredTotal: Int
+    let mailProcessedTotal: Int
+    let mailSentTotal: Int
+    let mailQueuedTotal: Int
     let lastCalendarEvents: Int
     let lastCalendarDelivery: String
     let pendingPayloads: Int
@@ -48,6 +52,10 @@ final class SyncCoordinator: @unchecked Sendable {
     private var lastMailProcessed = 0
     private var lastMailEntities = 0
     private var lastMailDelivery = "n/a"
+    private var mailDiscoveredTotal = 0
+    private var mailProcessedTotal = 0
+    private var mailSentTotal = 0
+    private var mailQueuedTotal = 0
     private var lastCalendarEvents = 0
     private var lastCalendarDelivery = "n/a"
     private var lastSyncAt: Date?
@@ -396,6 +404,10 @@ final class SyncCoordinator: @unchecked Sendable {
             return
         }
 
+        stateQueue.sync {
+            mailDiscoveredTotal += newMessages.count
+        }
+
         do {
             let processed = try await mailProcessor.process(messages: newMessages, workspaceId: config.workspaceId)
             let entities = processed.entities
@@ -405,6 +417,8 @@ final class SyncCoordinator: @unchecked Sendable {
                     lastMailProcessed = newMessages.count
                     lastMailEntities = 0
                     lastMailDelivery = "sent"
+                    mailProcessedTotal += newMessages.count
+                    mailSentTotal += newMessages.count
                 }
                 publishStatus()
                 logger.info("[sync] mail \(mode): processed=\(newMessages.count) entities=0 sent=true")
@@ -450,20 +464,26 @@ final class SyncCoordinator: @unchecked Sendable {
                 for messageId in Set(entities.map({ $0.messageId })) {
                     localStore.markMessageSent(messageId)
                 }
+                let sentMessageCount = Set(entities.map({ $0.messageId })).count
                 stateQueue.sync {
                     lastMailProcessed = newMessages.count
                     lastMailEntities = entities.count
                     lastMailDelivery = "sent"
+                    mailProcessedTotal += newMessages.count
+                    mailSentTotal += sentMessageCount
                 }
                 publishStatus()
                 logger.info("[sync] mail \(mode): processed=\(newMessages.count) entities=\(entities.count) sent=true")
             } catch {
                 _ = localStore.enqueuePayload(type: "entities", json: json)
                 _ = localStore.enqueuePayload(type: "chunks", json: chunksJson)
+                let queuedMessageCount = Set(entities.map({ $0.messageId })).count
                 stateQueue.sync {
                     lastMailProcessed = newMessages.count
                     lastMailEntities = entities.count
                     lastMailDelivery = "queued"
+                    mailProcessedTotal += newMessages.count
+                    mailQueuedTotal += queuedMessageCount
                 }
                 publishStatus()
                 logger.info("[sync] mail \(mode): processed=\(newMessages.count) entities=\(entities.count) sent=queued")
@@ -498,6 +518,10 @@ final class SyncCoordinator: @unchecked Sendable {
                 lastMailProcessed: lastMailProcessed,
                 lastMailEntities: lastMailEntities,
                 lastMailDelivery: lastMailDelivery,
+                mailDiscoveredTotal: mailDiscoveredTotal,
+                mailProcessedTotal: mailProcessedTotal,
+                mailSentTotal: mailSentTotal,
+                mailQueuedTotal: mailQueuedTotal,
                 lastCalendarEvents: lastCalendarEvents,
                 lastCalendarDelivery: lastCalendarDelivery,
                 pendingPayloads: localStore.pendingPayloadCount(),
