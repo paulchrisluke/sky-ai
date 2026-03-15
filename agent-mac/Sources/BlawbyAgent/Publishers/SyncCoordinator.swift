@@ -192,23 +192,46 @@ final class SyncCoordinator: @unchecked Sendable {
             publishStatus()
             logger.info("[sync] bootstrap mail window start=\(windowStart) end=\(windowEnd)")
 
-            guard beginMailSync(mode: "backfill") else {
-                logger.info("[sync] bootstrap mail backfill paused: mail sync already active")
+            // Drain each 30-day window in paged slices before advancing the global cursor.
+            var windowCursorEnd = windowEnd
+            while windowCursorEnd > windowStart {
+                guard beginMailSync(mode: "backfill") else {
+                    logger.info("[sync] bootstrap mail backfill paused: mail sync already active")
+                    publishStatus()
+                    return
+                }
                 publishStatus()
-                return
-            }
-            publishStatus()
 
-            let windowMessages = mailWatcher.fetchMessagesBetween(windowStart, windowEnd, limit: bootstrapMailChunkLimit)
-            await processMailMessages(windowMessages, mode: "backfill")
+                let windowMessages = mailWatcher.fetchMessagesBetween(windowStart, windowCursorEnd, limit: bootstrapMailChunkLimit)
+                await processMailMessages(windowMessages, mode: "backfill")
 
-            while completeMailSyncPass() {
-                await runMailSyncPass()
+                while completeMailSyncPass() {
+                    await runMailSyncPass()
+                }
+                stateQueue.sync {
+                    lastSyncAt = Date()
+                }
+                publishStatus()
+
+                if windowMessages.isEmpty {
+                    break
+                }
+
+                if windowMessages.count < bootstrapMailChunkLimit {
+                    break
+                }
+
+                guard let oldestMessageDate = windowMessages.map(\.date).min() else {
+                    break
+                }
+                let nextCursorEnd = oldestMessageDate.addingTimeInterval(-1)
+                if nextCursorEnd >= windowCursorEnd {
+                    logger.error("[sync] bootstrap mail backfill failed: non-advancing window cursor")
+                    return
+                }
+                windowCursorEnd = max(windowStart, nextCursorEnd)
+                logger.info("[sync] bootstrap mail window saturated; continuing start=\(windowStart) end=\(windowCursorEnd)")
             }
-            stateQueue.sync {
-                lastSyncAt = Date()
-            }
-            publishStatus()
 
             localStore.setBootstrapCursorDate(accountId: config.accountId, key: "mail", date: windowStart)
             cursorEnd = windowStart

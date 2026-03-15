@@ -178,7 +178,7 @@ final class MailWatcher: @unchecked Sendable {
         let config = configStore.load()
         var rawMessages: [RawMessage] = []
         var inspected = 0
-        let maxInspect = max(limit * 50, 5000)
+        let maxInspect = Int.max
 
         let accounts = objectArray(from: appObject.value(forKey: "accounts"))
         logger.info("mail backfill started accounts=\(accounts.count) start=\(boundedStart) end=\(boundedEnd)")
