@@ -5,8 +5,16 @@ enum WebSocketPublisherError: Error {
     case invalidPayload
 }
 
+enum WebSocketConnectionState: Equatable {
+    case disconnected
+    case connecting
+    case connected
+    case reconnecting(delaySeconds: Int)
+}
+
 final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
     private var onConnected: (@Sendable () -> Void)?
+    private var onConnectionStateChanged: (@Sendable (WebSocketConnectionState) -> Void)?
 
     private let config: Config
     private let logger: Logger
@@ -28,6 +36,12 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
     func setOnConnected(_ handler: (@Sendable () -> Void)?) {
         queue.async {
             self.onConnected = handler
+        }
+    }
+
+    func setOnConnectionStateChanged(_ handler: (@Sendable (WebSocketConnectionState) -> Void)?) {
+        queue.async {
+            self.onConnectionStateChanged = handler
         }
     }
 
@@ -86,6 +100,7 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
         reconnectTask?.cancel()
         reconnectTask = nil
         disconnectHandled = false
+        publishConnectionState(.connecting)
 
         let endpoint = "\(config.workerUrl)/agents/blawby-agent/primary?token=\(config.apiKey)"
         guard let url = URL(string: endpoint) else {
@@ -196,6 +211,7 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
         reconnectAttempt += 1
         let delay = min(pow(2.0, Double(reconnectAttempt - 1)) * 5.0, 60.0)
         logger.info("websocket reconnect in \(Int(delay))s")
+        publishConnectionState(.reconnecting(delaySeconds: Int(delay)))
 
         let task = DispatchWorkItem { [weak self] in
             self?.startConnection()
@@ -209,6 +225,7 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
         disconnectHandled = true
 
         connected = false
+        publishConnectionState(.disconnected)
         stopPingTimer()
         logger.error(logMessage)
 
@@ -227,6 +244,7 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
             }
             self.disconnectHandled = false
             self.connected = true
+            self.publishConnectionState(.connected)
             self.reconnectAttempt = 0
             self.logger.info("websocket connected")
             self.startReceiveLoop(for: webSocketTask)
@@ -253,5 +271,9 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
             }
             self.handleDisconnect(logMessage: "websocket closed code=\(closeCode.rawValue) reason=\(reasonText)")
         }
+    }
+
+    private func publishConnectionState(_ state: WebSocketConnectionState) {
+        onConnectionStateChanged?(state)
     }
 }

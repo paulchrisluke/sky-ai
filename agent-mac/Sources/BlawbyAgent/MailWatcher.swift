@@ -149,6 +149,96 @@ final class MailWatcher: @unchecked Sendable {
         return rawMessages
     }
 
+    func fetchMessagesSince(_ since: Date, limit: Int) -> [RawMessage] {
+        guard let mailApp = SBApplication(bundleIdentifier: "com.apple.mail") else {
+            logger.error("mail backfill failed: could not create SBApplication for Mail")
+            return []
+        }
+
+        let appObject = mailApp as NSObject
+        let config = configStore.load()
+        var rawMessages: [RawMessage] = []
+        var inspected = 0
+        let maxInspect = max(limit * 5, 500)
+
+        let accounts = objectArray(from: appObject.value(forKey: "accounts"))
+        logger.info("mail backfill started accounts=\(accounts.count) since=\(since)")
+
+        for account in accounts {
+            let mailboxes = objectArray(from: account.value(forKey: "mailboxes"))
+            let inboxes = mailboxes.filter { mailbox in
+                let name = (mailbox.value(forKey: "name") as? String ?? "").lowercased()
+                return name == "inbox"
+            }
+
+            for mailbox in inboxes {
+                let mailboxName = mailbox.value(forKey: "name") as? String ?? "INBOX"
+                guard let messages = mailbox.value(forKey: "messages") as? NSArray else {
+                    continue
+                }
+                if messages.count == 0 {
+                    continue
+                }
+
+                var index = messages.count - 1
+                while index >= 0 {
+                    guard let message = messages[index] as? NSObject else {
+                        if index == 0 { break }
+                        index -= 1
+                        continue
+                    }
+                    if inspected >= maxInspect || rawMessages.count >= limit {
+                        break
+                    }
+                    inspected += 1
+
+                    autoreleasepool {
+                        guard let dateSent = message.value(forKey: "dateSent") as? Date else {
+                            return
+                        }
+                        if dateSent < since {
+                            return
+                        }
+                        guard let messageId = messageIdentifier(message) else {
+                            return
+                        }
+
+                        let subject = message.value(forKey: "subject") as? String ?? ""
+                        let sender = message.value(forKey: "sender") as? String ?? ""
+                        let toRecipients = recipientEmails(from: message.value(forKey: "toRecipients"))
+                        let content = message.value(forKey: "content") as? String ?? subject
+                        let bodyText = truncate(content, maxLength: 2000)
+
+                        rawMessages.append(
+                            RawMessage(
+                                messageId: messageId,
+                                accountId: config.accountId,
+                                subject: subject,
+                                from: sender,
+                                to: toRecipients,
+                                date: dateSent,
+                                bodyText: bodyText,
+                                mailbox: mailboxName
+                            )
+                        )
+                    }
+
+                    if index == 0 { break }
+                    index -= 1
+                }
+                if inspected >= maxInspect || rawMessages.count >= limit {
+                    break
+                }
+            }
+            if inspected >= maxInspect || rawMessages.count >= limit {
+                break
+            }
+        }
+
+        logger.info("mail backfill completed inspected=\(inspected) matched=\(rawMessages.count)")
+        return rawMessages
+    }
+
     private func objectArray(from value: Any?) -> [NSObject] {
         if let array = value as? [NSObject] {
             return array

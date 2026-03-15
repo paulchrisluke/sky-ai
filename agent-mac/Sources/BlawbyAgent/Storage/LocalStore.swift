@@ -288,6 +288,20 @@ final class LocalStore {
         }
     }
 
+    func pendingPayloadCount() -> Int {
+        do {
+            return try dbQueue.read { db in
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM outbound_queue"
+                ) ?? 0
+            }
+        } catch {
+            logError("pendingPayloadCount", error)
+            return 0
+        }
+    }
+
     func replaceContacts(_ contacts: [StoredContact]) {
         do {
             try dbQueue.write { db in

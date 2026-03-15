@@ -1,11 +1,25 @@
 import Foundation
 
+struct SyncStatusSnapshot {
+    let mailSyncRunning: Bool
+    let mailSyncQueued: Bool
+    let calendarSyncRunning: Bool
+    let lastMailProcessed: Int
+    let lastMailEntities: Int
+    let lastMailDelivery: String
+    let lastCalendarEvents: Int
+    let lastCalendarDelivery: String
+    let pendingPayloads: Int
+    let lastSyncAt: Date?
+}
+
 protocol WebSocketPublishing {
     func send(type: String, payload: String) async throws
 }
 
 protocol MailWatching {
     func fetchNewMessages() -> [RawMessage]
+    func fetchMessagesSince(_ since: Date, limit: Int) -> [RawMessage]
 }
 
 protocol MailProcessing {
@@ -22,6 +36,13 @@ final class SyncCoordinator {
     private var mailSyncRunning = false
     private var pendingMailSync = false
     private var calendarSyncRunning = false
+    private var lastMailProcessed = 0
+    private var lastMailEntities = 0
+    private var lastMailDelivery = "n/a"
+    private var lastCalendarEvents = 0
+    private var lastCalendarDelivery = "n/a"
+    private var lastSyncAt: Date?
+    private var onStatusChanged: (@Sendable (SyncStatusSnapshot) -> Void)?
 
     private let config: Config
     private let localStore: LocalStore
@@ -49,11 +70,20 @@ final class SyncCoordinator {
         self.logger = logger
     }
 
+    func setOnStatusChanged(_ handler: (@Sendable (SyncStatusSnapshot) -> Void)?) {
+        stateQueue.sync {
+            onStatusChanged = handler
+        }
+        publishStatus()
+    }
+
     func runMailSync() async {
         guard beginMailSync() else {
             logger.info("[sync] mail coalesced: run already in progress")
+            publishStatus()
             return
         }
+        publishStatus()
 
         while true {
             let startedAt = Date()
@@ -66,19 +96,57 @@ final class SyncCoordinator {
             }
             break
         }
+        stateQueue.sync {
+            lastSyncAt = Date()
+        }
+        publishStatus()
+    }
+
+    func runMailBackfill(days: Int, limit: Int = 1000) async {
+        guard beginMailSync() else {
+            logger.info("[sync] mail backfill coalesced: run already in progress")
+            publishStatus()
+            return
+        }
+        publishStatus()
+        defer {
+            _ = completeMailSyncPass()
+            stateQueue.sync {
+                lastSyncAt = Date()
+            }
+            publishStatus()
+        }
+
+        let seconds = max(1, days) * 24 * 60 * 60
+        let cutoff = Date(timeIntervalSinceNow: -Double(seconds))
+        let backfillMessages = mailWatcher.fetchMessagesSince(cutoff, limit: max(1, limit))
+        await processMailMessages(backfillMessages, mode: "backfill")
     }
 
     func runCalendarSync() async {
         guard beginCalendarSync() else {
             logger.warning("[sync] calendar skipped: previous run still in progress")
+            publishStatus()
             return
         }
-        defer { endCalendarSync() }
+        publishStatus()
+        defer {
+            endCalendarSync()
+            stateQueue.sync {
+                lastSyncAt = Date()
+            }
+            publishStatus()
+        }
 
         do {
             let payloads = try await calendarWatcher.fetchUnsentPayloads()
             if payloads.isEmpty {
                 logger.info("[sync] calendar: events=0 sent=true")
+                stateQueue.sync {
+                    lastCalendarEvents = 0
+                    lastCalendarDelivery = "sent"
+                }
+                publishStatus()
                 return
             }
 
@@ -100,8 +168,18 @@ final class SyncCoordinator {
                 }
             }
 
+            stateQueue.sync {
+                lastCalendarEvents = eventsCount
+                lastCalendarDelivery = queued ? "queued" : "sent"
+            }
+            publishStatus()
             logger.info("[sync] calendar: events=\(eventsCount) sent=\(queued ? "queued" : "true")")
         } catch {
+            stateQueue.sync {
+                lastCalendarEvents = 0
+                lastCalendarDelivery = "failed"
+            }
+            publishStatus()
             logger.error("[sync] calendar failed: \(error.localizedDescription)")
         }
     }
@@ -109,6 +187,7 @@ final class SyncCoordinator {
     func drainOutboundQueue() async {
         let pending = localStore.dequeuePendingPayloads(limit: 10)
         if pending.isEmpty {
+            publishStatus()
             return
         }
 
@@ -124,6 +203,7 @@ final class SyncCoordinator {
                 }
             }
         }
+        publishStatus()
     }
 
     func publishRawPayload(type: String, json: String) async {
@@ -132,6 +212,7 @@ final class SyncCoordinator {
         } catch {
             _ = localStore.enqueuePayload(type: type, json: json)
         }
+        publishStatus()
     }
 
     private func beginMailSync() -> Bool {
@@ -174,8 +255,18 @@ final class SyncCoordinator {
 
     private func runMailSyncPass() async {
         let newMessages = mailWatcher.fetchNewMessages()
+        await processMailMessages(newMessages, mode: "sync")
+    }
+
+    private func processMailMessages(_ newMessages: [RawMessage], mode: String) async {
         if newMessages.isEmpty {
-            logger.info("[sync] mail: processed=0 entities=0 sent=true")
+            stateQueue.sync {
+                lastMailProcessed = 0
+                lastMailEntities = 0
+                lastMailDelivery = "sent"
+            }
+            publishStatus()
+            logger.info("[sync] mail \(mode): processed=0 entities=0 sent=true")
             return
         }
 
@@ -184,7 +275,13 @@ final class SyncCoordinator {
             let entities = processed.entities
             let rawMessages = processed.rawMessages
             if entities.isEmpty {
-                logger.info("[sync] mail: processed=\(newMessages.count) entities=0 sent=true")
+                stateQueue.sync {
+                    lastMailProcessed = newMessages.count
+                    lastMailEntities = 0
+                    lastMailDelivery = "sent"
+                }
+                publishStatus()
+                logger.info("[sync] mail \(mode): processed=\(newMessages.count) entities=0 sent=true")
                 return
             }
 
@@ -227,14 +324,32 @@ final class SyncCoordinator {
                 for messageId in Set(entities.map({ $0.messageId })) {
                     localStore.markMessageSent(messageId)
                 }
-                logger.info("[sync] mail: processed=\(newMessages.count) entities=\(entities.count) sent=true")
+                stateQueue.sync {
+                    lastMailProcessed = newMessages.count
+                    lastMailEntities = entities.count
+                    lastMailDelivery = "sent"
+                }
+                publishStatus()
+                logger.info("[sync] mail \(mode): processed=\(newMessages.count) entities=\(entities.count) sent=true")
             } catch {
                 _ = localStore.enqueuePayload(type: "entities", json: json)
                 _ = localStore.enqueuePayload(type: "chunks", json: chunksJson)
-                logger.info("[sync] mail: processed=\(newMessages.count) entities=\(entities.count) sent=queued")
+                stateQueue.sync {
+                    lastMailProcessed = newMessages.count
+                    lastMailEntities = entities.count
+                    lastMailDelivery = "queued"
+                }
+                publishStatus()
+                logger.info("[sync] mail \(mode): processed=\(newMessages.count) entities=\(entities.count) sent=queued")
             }
         } catch {
-            logger.error("[sync] mail failed: \(error.localizedDescription)")
+            stateQueue.sync {
+                lastMailProcessed = newMessages.count
+                lastMailEntities = 0
+                lastMailDelivery = "failed"
+            }
+            publishStatus()
+            logger.error("[sync] mail \(mode) failed: \(error.localizedDescription)")
         }
     }
 
@@ -242,6 +357,27 @@ final class SyncCoordinator {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+
+    private func publishStatus() {
+        let payload = stateQueue.sync {
+            (
+                onStatusChanged,
+                SyncStatusSnapshot(
+                mailSyncRunning: mailSyncRunning,
+                mailSyncQueued: pendingMailSync,
+                calendarSyncRunning: calendarSyncRunning,
+                lastMailProcessed: lastMailProcessed,
+                lastMailEntities: lastMailEntities,
+                lastMailDelivery: lastMailDelivery,
+                lastCalendarEvents: lastCalendarEvents,
+                lastCalendarDelivery: lastCalendarDelivery,
+                pendingPayloads: localStore.pendingPayloadCount(),
+                lastSyncAt: lastSyncAt
+                )
+            )
+        }
+        payload.0?(payload.1)
     }
 }
 

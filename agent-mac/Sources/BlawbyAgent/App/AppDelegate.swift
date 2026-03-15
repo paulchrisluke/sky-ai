@@ -17,6 +17,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var mailProcessedToday = 0
     private var calendarSynced = 0
     private let iso = ISO8601DateFormatter()
+    private var lastSyncDisplay = "-"
+    private var connectionDisplay = "connecting"
+    private var syncDisplay = "idle"
+    private var queuePendingDisplay = 0
+    private var mailStatusDisplay = "n/a"
+    private var calendarStatusDisplay = "n/a"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -67,12 +73,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
             menuBar = MenuBarController(
                 syncNow: { [weak self] in self?.syncNow() },
+                backfill: { [weak self] in self?.backfillNow() },
                 preferences: { [weak self] in self?.openPreferences() }
             )
+
+            coordinator.setOnStatusChanged { [weak self] snapshot in
+                Task { @MainActor in
+                    self?.applySyncSnapshot(snapshot)
+                }
+            }
 
             webSocketPublisher.setOnConnected { [weak self] in
                 Task { @MainActor in
                     await self?.syncCoordinator?.drainOutboundQueue()
+                }
+            }
+            webSocketPublisher.setOnConnectionStateChanged { [weak self] state in
+                Task { @MainActor in
+                    self?.applyConnectionState(state)
                 }
             }
             webSocketPublisher.connect()
@@ -132,6 +150,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     }
 
     @MainActor
+    private func backfillNow() {
+        guard let syncCoordinator else { return }
+        Task {
+            await syncCoordinator.runMailBackfill(days: 90, limit: 1200)
+            await syncCoordinator.drainOutboundQueue()
+            updateMenu()
+        }
+    }
+
+    @MainActor
     private func openPreferences() {
         guard let config else { return }
         if preferencesWindow == nil {
@@ -144,8 +172,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     @MainActor
     private func updateMenu() {
-        let ts = iso.string(from: Date())
-        menuBar?.update(lastSync: ts, mailProcessed: mailProcessedToday, calendarSynced: calendarSynced)
+        menuBar?.update(
+            lastSync: lastSyncDisplay,
+            mailProcessed: mailProcessedToday,
+            calendarSynced: calendarSynced,
+            connection: connectionDisplay,
+            syncState: syncDisplay,
+            queuePending: queuePendingDisplay,
+            mailStatus: mailStatusDisplay,
+            calendarStatus: calendarStatusDisplay
+        )
+    }
+
+    @MainActor
+    private func applySyncSnapshot(_ snapshot: SyncStatusSnapshot) {
+        if let lastSync = snapshot.lastSyncAt {
+            lastSyncDisplay = iso.string(from: lastSync)
+        }
+
+        if snapshot.mailSyncRunning && snapshot.mailSyncQueued {
+            syncDisplay = "mail running (queued pass pending)"
+        } else if snapshot.mailSyncRunning {
+            syncDisplay = "mail running"
+        } else if snapshot.calendarSyncRunning {
+            syncDisplay = "calendar running"
+        } else {
+            syncDisplay = "idle"
+        }
+
+        queuePendingDisplay = snapshot.pendingPayloads
+        mailStatusDisplay = "processed=\(snapshot.lastMailProcessed), entities=\(snapshot.lastMailEntities), delivery=\(snapshot.lastMailDelivery)"
+        calendarStatusDisplay = "events=\(snapshot.lastCalendarEvents), delivery=\(snapshot.lastCalendarDelivery)"
+        updateMenu()
+    }
+
+    @MainActor
+    private func applyConnectionState(_ state: WebSocketConnectionState) {
+        switch state {
+        case .disconnected:
+            connectionDisplay = "disconnected"
+        case .connecting:
+            connectionDisplay = "connecting"
+        case .connected:
+            connectionDisplay = "connected"
+        case .reconnecting(let delaySeconds):
+            connectionDisplay = "reconnecting in \(delaySeconds)s"
+        }
+        updateMenu()
     }
 
     private func configureLoginItemRegistration(logger: Logger) {
