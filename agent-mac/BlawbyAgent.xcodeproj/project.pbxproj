@@ -12,6 +12,7 @@
 		2934EF299DD477179A67C5E5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = BB22FC45049BCFD0751A8C05 /* GRDB */; };
 		41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D04FFB67431F372BB5AF25 /* Preferences.swift */; };
 		4A85C2E7F1CF5C5BD288E20D /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */; };
+		73EF4F35647CB37D7EA34F2A /* blawby-logo-source.png in Resources */ = {isa = PBXBuildFile; fileRef = 06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */; };
 		865B4EFF997483C49A9D8997 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */; };
 		916A9CDE35FA7CD559EAD220 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C784BE09AF926E1EED926D3 /* AppDelegate.swift */; };
 		9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA25A68472D76D0C994520D /* CalendarWatcher.swift */; };
@@ -19,11 +20,14 @@
 		AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */; };
 		AE169531AE4BFA3F8237E346 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */; };
 		B195F2396EB9DA0B8459F1E2 /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 451B18EF815B4011EC7984E0 /* SyncCoordinator.swift */; };
+		BB15E6DFD68F10D2B575D763 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 2B16F395DEC869A73CE18AB5 /* Info.plist */; };
 		D125204F81C69D021288F9E1 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28B4C46851AA9CFB67EB06F /* main.swift */; };
 		DFFC1AC2AA62764E85066948 /* MessagesReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03F3929134BE941F4D84B17C /* MessagesReader.swift */; };
+		E05C5F898DC18439BCCA9DAB /* Mail.sdef in Resources */ = {isa = PBXBuildFile; fileRef = 2DBF363EB08A6121C368B7D3 /* Mail.sdef */; };
 		E28372C641824150C40949B0 /* EntityExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0A817E9BA538BAB3D28137 /* EntityExtractor.swift */; };
 		E4AA27EF6229A9F55A7CE3C9 /* WebSocketPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */; };
 		E767675D89D955EF433CB79D /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57F3234AC7A5DD02502FB8E4 /* Logger.swift */; };
+		ED0EFA21EFEE03F9779BD1C3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0FA6D9F37F3C7B9B5574DF43 /* Assets.xcassets */; };
 		F2B127D621F90D6157611987 /* MailWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49CF3713D972922FB05679E3 /* MailWatcher.swift */; };
 		F35B208CDC199CE894928EC4 /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7172F45B5B28D80C2994749B /* LocalStore.swift */; };
 		F8EB764AD635AF4AC529E989 /* MailProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AD1458AF0D14F688184AE90 /* MailProcessor.swift */; };
@@ -41,11 +45,15 @@
 
 /* Begin PBXFileReference section */
 		03F3929134BE941F4D84B17C /* MessagesReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesReader.swift; sourceTree = "<group>"; };
+		06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "blawby-logo-source.png"; sourceTree = "<group>"; };
+		0FA6D9F37F3C7B9B5574DF43 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		1E125D8D55798E8F07C4698C /* BlawbyAgentTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BlawbyAgentTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		206689B593945129B37BFCD0 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
 		22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvLoader.swift; sourceTree = "<group>"; };
 		29C61DC164DE3E5327702F99 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
+		2B16F395DEC869A73CE18AB5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		2DBF363EB08A6121C368B7D3 /* Mail.sdef */ = {isa = PBXFileReference; path = Mail.sdef; sourceTree = "<group>"; };
 		451B18EF815B4011EC7984E0 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
 		49CF3713D972922FB05679E3 /* MailWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailWatcher.swift; sourceTree = "<group>"; };
 		4A0A817E9BA538BAB3D28137 /* EntityExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityExtractor.swift; sourceTree = "<group>"; };
@@ -141,6 +149,14 @@
 			path = Tests/BlawbyAgentTests;
 			sourceTree = "<group>";
 		};
+		7181D6FB17C8C2779C52524D /* Branding */ = {
+			isa = PBXGroup;
+			children = (
+				06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */,
+			);
+			path = Branding;
+			sourceTree = "<group>";
+		};
 		83A9F14D60DEF70EA4D3EE6C /* Publishers */ = {
 			isa = PBXGroup;
 			children = (
@@ -167,6 +183,17 @@
 			path = Config;
 			sourceTree = "<group>";
 		};
+		D43BF19C4C6D4DDCFC8F073B /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				0FA6D9F37F3C7B9B5574DF43 /* Assets.xcassets */,
+				2B16F395DEC869A73CE18AB5 /* Info.plist */,
+				2DBF363EB08A6121C368B7D3 /* Mail.sdef */,
+				7181D6FB17C8C2779C52524D /* Branding */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		DCA9353FB58B551A4FE15EC1 /* Storage */ = {
 			isa = PBXGroup;
 			children = (
@@ -180,6 +207,7 @@
 			children = (
 				26D4C3366FD7BAB9AD4ADF25 /* BlawbyAgent */,
 				697AA728D7FBC844026CF633 /* BlawbyAgentTests */,
+				D43BF19C4C6D4DDCFC8F073B /* Resources */,
 				5DCCF81F84C458B80263CE30 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -192,6 +220,7 @@
 			buildConfigurationList = 74029C4043BC3D3F466E0A7B /* Build configuration list for PBXNativeTarget "BlawbyAgent" */;
 			buildPhases = (
 				2FC3B14FF6B6A0F2CED9A9C7 /* Sources */,
+				56A253E77663489FCEE765DE /* Resources */,
 				DC5E4E2E32EA241075158740 /* Frameworks */,
 			);
 			buildRules = (
@@ -264,6 +293,20 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		56A253E77663489FCEE765DE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ED0EFA21EFEE03F9779BD1C3 /* Assets.xcassets in Resources */,
+				BB15E6DFD68F10D2B575D763 /* Info.plist in Resources */,
+				E05C5F898DC18439BCCA9DAB /* Mail.sdef in Resources */,
+				73EF4F35647CB37D7EA34F2A /* blawby-logo-source.png in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		2B5E4E1D4B0B1F9E842B9DF4 /* Sources */ = {

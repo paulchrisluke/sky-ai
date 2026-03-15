@@ -34,6 +34,8 @@ final class MenuBarController: NSObject {
 
     private func setup() {
         if let button = statusItem.button {
+            button.title = " Blawby"
+            button.imagePosition = .imageLeading
             if let image = NSImage(systemSymbolName: "antenna.radiowaves.left.and.right", accessibilityDescription: "Blawby") {
                 image.isTemplate = true
                 button.image = image
@@ -125,7 +127,7 @@ final class MenuBarController: NSObject {
         if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Blawby") {
             image.isTemplate = true
             button.image = image
-            button.title = ""
+            button.title = " Blawby"
             return
         }
         button.title = "Blawby"

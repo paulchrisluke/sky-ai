@@ -24,8 +24,8 @@ targets:
     platform: macOS
     sources:
       - path: Sources/BlawbyAgent
-    resources:
       - path: Resources
+        buildPhase: resources
     info:
       path: BlawbyAgent/Info.plist
       properties:
