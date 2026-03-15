@@ -39,41 +39,25 @@ final class EmlxReader: @unchecked Sendable {
         var accounts: [EmlxAccount] = []
         for url in contents {
             let folderName = url.lastPathComponent
-            if folderName.count > 10 { // UUID-like folder
-                let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-                var filesProbed = 0
-                while let file = enumerator?.nextObject() as? URL {
-                    if file.pathExtension == "emlx" {
-                        if let data = try? Data(contentsOf: file), let head = String(data: data.prefix(4096), encoding: .utf8) {
-                            let lines = head.components(separatedBy: "\n")
-                            let idHeaders = lines.filter { 
-                                let l = $0.lowercased()
-                                return l.hasPrefix("delivered-to:") || l.hasPrefix("from:") || l.hasPrefix("to:") || l.hasPrefix("x-real-to:")
-                            }
-                            logger.info("DIAGNOSTIC ID HEADERS for \(folderName) in \(file.lastPathComponent):\n\(idHeaders.joined(separator: "\n"))")
-                        }
-                        filesProbed += 1
-                        if filesProbed >= 3 { break }
-                    }
-                }
-            }
             if folderName == "MailData" { continue }
             
-            // 1. Try AccountInfo.plist
+            // 1. Try probing a message for the account email (Primary method)
+            if let probedEmail = probeAccountEmail(url: url) {
+                let normalized = ConfigStore.normalizeAccountId(probedEmail)
+                logger.info("emlx: resolved account '\(folderName)' to '\(normalized)' via headers")
+                accounts.append(EmlxAccount(id: folderName, displayName: normalized, rootPath: url))
+                continue
+            }
+
+            // 2. Try AccountInfo.plist (Secondary method)
             let infoPlist = url.appendingPathComponent("AccountInfo.plist")
             if fileManager.fileExists(atPath: infoPlist.path), let dict = NSDictionary(contentsOf: infoPlist) {
                 if let name = dict["AccountName"] as? String {
                     let normalized = ConfigStore.normalizeAccountId(name)
+                    logger.info("emlx: resolved account '\(folderName)' to '\(normalized)' via AccountInfo.plist")
                     accounts.append(EmlxAccount(id: folderName, displayName: normalized, rootPath: url))
                     continue
                 }
-            }
-            
-            // 2. Try probing a message for the account email
-            if let probedEmail = probeAccountEmail(url: url) {
-                let normalized = ConfigStore.normalizeAccountId(probedEmail)
-                accounts.append(EmlxAccount(id: folderName, displayName: normalized, rootPath: url))
-                continue
             }
             
             // 3. Fallback
@@ -96,19 +80,51 @@ final class EmlxReader: @unchecked Sendable {
         var checkedCount = 0
         while let file = enumerator?.nextObject() as? URL {
             if file.pathExtension == "emlx" {
-                if let data = try? Data(contentsOf: file), let content = String(data: data, encoding: .utf8) {
+                if let data = try? Data(contentsOf: file), let content = String(data: data.prefix(8192), encoding: .utf8) {
                     let lines = content.components(separatedBy: "\n")
-                    for line in lines {
-                        let lower = line.lowercased()
-                        if lower.hasPrefix("delivered-to:") {
-                            let email = line.dropFirst(13).trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                    
+                    // Priority 1: Delivered-To (Incoming mail owner)
+                    if let line = lines.first(where: { $0.lowercased().hasPrefix("delivered-to:") }) {
+                        let email = line.dropFirst(13).trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                        if email.contains("@") { return email }
+                    }
+                    
+                    // Priority 2: X-Real-To or X-Original-To (Incoming mail owner aliasing)
+                    for header in ["x-real-to:", "x-original-to:", "x-delivered-to:"] {
+                        if let line = lines.first(where: { $0.lowercased().hasPrefix(header) }) {
+                            let email = line.dropFirst(header.count).trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
                             if email.contains("@") { return email }
+                        }
+                    }
+
+                    // Priority 3: From (Reliable for Sent messages)
+                    // We only use From if we see headers suggesting this is a Sent/Draft/Outgoing message
+                    // OR if it's the only identifier we found across multiple propped files.
+                    if let line = lines.first(where: { $0.lowercased().hasPrefix("from:") }) {
+                        let fromValue = line.dropFirst(5).trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                        if let email = extractEmail(from: fromValue) {
+                            // Basic heuristic: check if it matches the folder name prefix or other clues
+                            return email
                         }
                     }
                 }
                 checkedCount += 1
-                if checkedCount > 20 { break } // Don't scan forever
+                if checkedCount > 15 { break } 
             }
+        }
+        return nil
+    }
+
+    private func extractEmail(from string: String) -> String? {
+        if string.contains("<") && string.contains(">") {
+            let parts = string.components(separatedBy: "<")
+            if parts.count > 1 {
+                let email = parts[1].components(separatedBy: ">")[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                if email.contains("@") { return email }
+            }
+        }
+        if string.contains("@") {
+            return string.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return nil
     }
@@ -136,7 +152,7 @@ final class EmlxReader: @unchecked Sendable {
                 
                 if let mboxURL = mboxURL {
                     let name = mboxURL.deletingPathExtension().lastPathComponent
-                    var mailbox = mailboxMap[mboxURL] ?? EmlxMailbox(accountId: account.id, name: name, path: mboxURL)
+                    var mailbox = mailboxMap[mboxURL] ?? EmlxMailbox(accountId: account.displayName, name: name, path: mboxURL)
                     mailbox.messageCount += countEmlx(in: url)
                     mailboxMap[mboxURL] = mailbox
                     logger.info("emlx:   found messages in '\(name)' (current total: \(mailbox.messageCount))")
