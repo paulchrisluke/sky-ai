@@ -49,11 +49,33 @@ final class PreferencesWindowController: NSWindowController {
     }
 
     @objc private func save() {
-        UserDefaults.standard.set(workerField.stringValue, forKey: "workerUrl")
-        UserDefaults.standard.set(apiKeyField.stringValue, forKey: "apiKey")
-        UserDefaults.standard.set(workspaceField.stringValue, forKey: "workspaceId")
-        UserDefaults.standard.set(accountField.stringValue, forKey: "accountId")
-        UserDefaults.standard.set(openAIField.stringValue, forKey: "openaiApiKey")
-        close()
+        let defaults = UserDefaults.standard
+        defaults.set(workerField.stringValue, forKey: Preferences.Keys.workerUrl)
+        defaults.set(workspaceField.stringValue, forKey: Preferences.Keys.workspaceId)
+        defaults.set(accountField.stringValue, forKey: Preferences.Keys.accountId)
+
+        let keychain = KeychainStore()
+        do {
+            let apiKey = apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if apiKey.isEmpty {
+                try keychain.delete(Preferences.Keys.keychainAPIKey)
+            } else {
+                try keychain.write(apiKey, account: Preferences.Keys.keychainAPIKey)
+            }
+
+            let openAI = openAIField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if openAI.isEmpty {
+                try keychain.delete(Preferences.Keys.keychainOpenAI)
+            } else {
+                try keychain.write(openAI, account: Preferences.Keys.keychainOpenAI)
+            }
+            close()
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Failed to save secrets"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
     }
 }

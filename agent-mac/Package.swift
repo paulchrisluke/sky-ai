@@ -23,6 +23,7 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("Contacts"),
                 .linkedFramework("EventKit"),
+                .linkedFramework("Security"),
                 .linkedFramework("ServiceManagement"),
                 .linkedFramework("ScriptingBridge")
             ]

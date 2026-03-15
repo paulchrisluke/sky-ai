@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let localStore = try LocalStore(baseDirectory: baseDir)
             let configStore = try ConfigStore(baseDirectory: baseDir)
             let fileConfig = configStore.load()
-            let prefs = Preferences.load(config: fileConfig)
+            let prefs = try Preferences.load(config: fileConfig)
             let config = Config(
                 workerUrl: prefs.workerUrl ?? fileConfig.workerUrl,
                 apiKey: prefs.apiKey ?? fileConfig.apiKey,

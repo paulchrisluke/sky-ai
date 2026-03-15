@@ -5,6 +5,9 @@ func resolveBlawbyHome() -> URL {
     return home.appendingPathComponent(".blawby", isDirectory: true)
 }
 
+let currentDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+EnvLoader.load(from: currentDir.appendingPathComponent(".env"))
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
