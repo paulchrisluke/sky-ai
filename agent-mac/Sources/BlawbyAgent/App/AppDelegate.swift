@@ -114,11 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             Task { await coordinator.runCalendarSync() }
             updateMenu()
 
-            do {
-                try SMAppService.mainApp.register()
-            } catch {
-                logger.warning("SMAppService register failed: \(error.localizedDescription)")
-            }
+            configureLoginItemRegistration(logger: logger)
         } catch {
             fputs("BlawbyAgent startup failed: \(error.localizedDescription)\n", stderr)
         }
@@ -150,5 +146,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private func updateMenu() {
         let ts = iso.string(from: Date())
         menuBar?.update(lastSync: ts, mailProcessed: mailProcessedToday, calendarSynced: calendarSynced)
+    }
+
+    private func configureLoginItemRegistration(logger: Logger) {
+        let bundlePath = Bundle.main.bundleURL.path
+        let isApplicationsInstall = bundlePath.hasPrefix("/Applications/")
+
+        if isApplicationsInstall {
+            do {
+                try SMAppService.mainApp.register()
+                logger.info("login item registered via SMAppService")
+            } catch {
+                logger.warning("SMAppService register failed: \(error.localizedDescription)")
+            }
+            return
+        }
+
+        // Prevent debug/dev runs from accumulating duplicate Open at Login entries.
+        do {
+            try SMAppService.mainApp.unregister()
+            logger.info("login item unregistered for non-/Applications run")
+        } catch {
+            logger.warning("SMAppService unregister skipped: \(error.localizedDescription)")
+        }
+        logger.info("login item registration skipped (bundle path: \(bundlePath))")
     }
 }
