@@ -191,13 +191,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
 
         if snapshot.mailSyncRunning && snapshot.mailSyncQueued {
-            syncDisplay = "mail running (queued pass pending)"
+            let mode = snapshot.mailMode ?? "sync"
+            syncDisplay = "active (\(mode), queued)"
         } else if snapshot.mailSyncRunning {
-            syncDisplay = "mail running"
+            let mode = snapshot.mailMode ?? "sync"
+            syncDisplay = "active (\(mode))"
         } else if snapshot.calendarSyncRunning {
-            syncDisplay = "calendar running"
+            syncDisplay = "active (calendar)"
         } else {
-            syncDisplay = "idle"
+            syncDisplay = "inactive"
         }
 
         queuePendingDisplay = snapshot.pendingPayloads

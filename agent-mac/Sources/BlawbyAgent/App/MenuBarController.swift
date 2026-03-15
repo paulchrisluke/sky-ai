@@ -96,7 +96,7 @@ final class MenuBarController: NSObject {
 
         let symbolName: String
         if connection.hasPrefix("connected") {
-            if syncState.contains("running") {
+            if syncState.hasPrefix("active") {
                 symbolName = "arrow.triangle.2.circlepath.circle.fill"
             } else {
                 symbolName = "antenna.radiowaves.left.and.right"

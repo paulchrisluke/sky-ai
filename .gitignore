@@ -11,6 +11,7 @@ data/*.json
 *.log
 .DS_Store
 agent-mac/.build/
+agent-mac/build/
 agent-mac/.swiftpm/
 agent-mac/.DS_Store
 *.xcuserstate

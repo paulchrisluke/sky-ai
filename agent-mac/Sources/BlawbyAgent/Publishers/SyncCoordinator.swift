@@ -3,6 +3,7 @@ import Foundation
 struct SyncStatusSnapshot {
     let mailSyncRunning: Bool
     let mailSyncQueued: Bool
+    let mailMode: String?
     let calendarSyncRunning: Bool
     let lastMailProcessed: Int
     let lastMailEntities: Int
@@ -35,6 +36,7 @@ final class SyncCoordinator {
     private let stateQueue = DispatchQueue(label: "com.blawby.agent.sync.state")
     private var mailSyncRunning = false
     private var pendingMailSync = false
+    private var mailMode: String?
     private var calendarSyncRunning = false
     private var lastMailProcessed = 0
     private var lastMailEntities = 0
@@ -78,7 +80,7 @@ final class SyncCoordinator {
     }
 
     func runMailSync() async {
-        guard beginMailSync() else {
+        guard beginMailSync(mode: "sync") else {
             logger.info("[sync] mail coalesced: run already in progress")
             publishStatus()
             return
@@ -103,24 +105,25 @@ final class SyncCoordinator {
     }
 
     func runMailBackfill(days: Int, limit: Int = 1000) async {
-        guard beginMailSync() else {
+        guard beginMailSync(mode: "backfill") else {
             logger.info("[sync] mail backfill coalesced: run already in progress")
             publishStatus()
             return
         }
         publishStatus()
-        defer {
-            _ = completeMailSyncPass()
-            stateQueue.sync {
-                lastSyncAt = Date()
-            }
-            publishStatus()
-        }
 
         let seconds = max(1, days) * 24 * 60 * 60
         let cutoff = Date(timeIntervalSinceNow: -Double(seconds))
         let backfillMessages = mailWatcher.fetchMessagesSince(cutoff, limit: max(1, limit))
         await processMailMessages(backfillMessages, mode: "backfill")
+
+        while completeMailSyncPass() {
+            await runMailSyncPass()
+        }
+        stateQueue.sync {
+            lastSyncAt = Date()
+        }
+        publishStatus()
     }
 
     func runCalendarSync() async {
@@ -215,13 +218,14 @@ final class SyncCoordinator {
         publishStatus()
     }
 
-    private func beginMailSync() -> Bool {
+    private func beginMailSync(mode: String) -> Bool {
         stateQueue.sync {
             if mailSyncRunning {
                 pendingMailSync = true
                 return false
             }
             mailSyncRunning = true
+            mailMode = mode
             return true
         }
     }
@@ -230,9 +234,11 @@ final class SyncCoordinator {
         stateQueue.sync {
             if pendingMailSync {
                 pendingMailSync = false
+                mailMode = "sync"
                 return true
             }
             mailSyncRunning = false
+            mailMode = nil
             return false
         }
     }
@@ -366,6 +372,7 @@ final class SyncCoordinator {
                 SyncStatusSnapshot(
                 mailSyncRunning: mailSyncRunning,
                 mailSyncQueued: pendingMailSync,
+                mailMode: mailMode,
                 calendarSyncRunning: calendarSyncRunning,
                 lastMailProcessed: lastMailProcessed,
                 lastMailEntities: lastMailEntities,
