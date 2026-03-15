@@ -1,0 +1,448 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */; };
+		289661C0209D41B5319B0657 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C61DC164DE3E5327702F99 /* Config.swift */; };
+		2934EF299DD477179A67C5E5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = BB22FC45049BCFD0751A8C05 /* GRDB */; };
+		41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D04FFB67431F372BB5AF25 /* Preferences.swift */; };
+		4A85C2E7F1CF5C5BD288E20D /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */; };
+		916A9CDE35FA7CD559EAD220 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C784BE09AF926E1EED926D3 /* AppDelegate.swift */; };
+		9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA25A68472D76D0C994520D /* CalendarWatcher.swift */; };
+		A3D7E233E6113FDA009088F8 /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206689B593945129B37BFCD0 /* MenuBarController.swift */; };
+		AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */; };
+		AE169531AE4BFA3F8237E346 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */; };
+		B195F2396EB9DA0B8459F1E2 /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 451B18EF815B4011EC7984E0 /* SyncCoordinator.swift */; };
+		D125204F81C69D021288F9E1 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28B4C46851AA9CFB67EB06F /* main.swift */; };
+		DFFC1AC2AA62764E85066948 /* MessagesReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03F3929134BE941F4D84B17C /* MessagesReader.swift */; };
+		E28372C641824150C40949B0 /* EntityExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0A817E9BA538BAB3D28137 /* EntityExtractor.swift */; };
+		E4AA27EF6229A9F55A7CE3C9 /* WebSocketPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */; };
+		E767675D89D955EF433CB79D /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57F3234AC7A5DD02502FB8E4 /* Logger.swift */; };
+		F2B127D621F90D6157611987 /* MailWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49CF3713D972922FB05679E3 /* MailWatcher.swift */; };
+		F35B208CDC199CE894928EC4 /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7172F45B5B28D80C2994749B /* LocalStore.swift */; };
+		F8EB764AD635AF4AC529E989 /* MailProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AD1458AF0D14F688184AE90 /* MailProcessor.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		03F3929134BE941F4D84B17C /* MessagesReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesReader.swift; sourceTree = "<group>"; };
+		179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		206689B593945129B37BFCD0 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
+		22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvLoader.swift; sourceTree = "<group>"; };
+		29C61DC164DE3E5327702F99 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
+		451B18EF815B4011EC7984E0 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
+		49CF3713D972922FB05679E3 /* MailWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailWatcher.swift; sourceTree = "<group>"; };
+		4A0A817E9BA538BAB3D28137 /* EntityExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityExtractor.swift; sourceTree = "<group>"; };
+		57F3234AC7A5DD02502FB8E4 /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logger.swift; sourceTree = "<group>"; };
+		62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsReader.swift; sourceTree = "<group>"; };
+		6C784BE09AF926E1EED926D3 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
+		7172F45B5B28D80C2994749B /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
+		7AD1458AF0D14F688184AE90 /* MailProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailProcessor.swift; sourceTree = "<group>"; };
+		A8D04FFB67431F372BB5AF25 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
+		AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketPublisher.swift; sourceTree = "<group>"; };
+		C28B4C46851AA9CFB67EB06F /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		CAA25A68472D76D0C994520D /* CalendarWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarWatcher.swift; sourceTree = "<group>"; };
+		FE15D867F583668A8E9ED2AC /* BlawbyAgent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BlawbyAgent.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		DC5E4E2E32EA241075158740 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2934EF299DD477179A67C5E5 /* GRDB in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		26D4C3366FD7BAB9AD4ADF25 /* BlawbyAgent */ = {
+			isa = PBXGroup;
+			children = (
+				CAA25A68472D76D0C994520D /* CalendarWatcher.swift */,
+				29C61DC164DE3E5327702F99 /* Config.swift */,
+				57F3234AC7A5DD02502FB8E4 /* Logger.swift */,
+				49CF3713D972922FB05679E3 /* MailWatcher.swift */,
+				C28B4C46851AA9CFB67EB06F /* main.swift */,
+				454844A0E0F6606864D8C714 /* App */,
+				BB772045B29E715068B5624A /* Config */,
+				5B0F5C6558B9F7C0198D5597 /* Processors */,
+				83A9F14D60DEF70EA4D3EE6C /* Publishers */,
+				5972F29CD7D7522776653F8E /* Readers */,
+				DCA9353FB58B551A4FE15EC1 /* Storage */,
+				8AC9A08B232EA0D1798C35F5 /* Utilities */,
+			);
+			name = BlawbyAgent;
+			path = Sources/BlawbyAgent;
+			sourceTree = "<group>";
+		};
+		454844A0E0F6606864D8C714 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				6C784BE09AF926E1EED926D3 /* AppDelegate.swift */,
+				206689B593945129B37BFCD0 /* MenuBarController.swift */,
+				6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		5972F29CD7D7522776653F8E /* Readers */ = {
+			isa = PBXGroup;
+			children = (
+				62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */,
+				03F3929134BE941F4D84B17C /* MessagesReader.swift */,
+			);
+			path = Readers;
+			sourceTree = "<group>";
+		};
+		5B0F5C6558B9F7C0198D5597 /* Processors */ = {
+			isa = PBXGroup;
+			children = (
+				4A0A817E9BA538BAB3D28137 /* EntityExtractor.swift */,
+				7AD1458AF0D14F688184AE90 /* MailProcessor.swift */,
+			);
+			path = Processors;
+			sourceTree = "<group>";
+		};
+		5DCCF81F84C458B80263CE30 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				FE15D867F583668A8E9ED2AC /* BlawbyAgent.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		83A9F14D60DEF70EA4D3EE6C /* Publishers */ = {
+			isa = PBXGroup;
+			children = (
+				451B18EF815B4011EC7984E0 /* SyncCoordinator.swift */,
+				AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */,
+			);
+			path = Publishers;
+			sourceTree = "<group>";
+		};
+		8AC9A08B232EA0D1798C35F5 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */,
+				179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
+		BB772045B29E715068B5624A /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				A8D04FFB67431F372BB5AF25 /* Preferences.swift */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		DCA9353FB58B551A4FE15EC1 /* Storage */ = {
+			isa = PBXGroup;
+			children = (
+				7172F45B5B28D80C2994749B /* LocalStore.swift */,
+			);
+			path = Storage;
+			sourceTree = "<group>";
+		};
+		F09E452AF7DAA30509802810 = {
+			isa = PBXGroup;
+			children = (
+				26D4C3366FD7BAB9AD4ADF25 /* BlawbyAgent */,
+				5DCCF81F84C458B80263CE30 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		82ED3CBA1FADC94B14E23293 /* BlawbyAgent */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 74029C4043BC3D3F466E0A7B /* Build configuration list for PBXNativeTarget "BlawbyAgent" */;
+			buildPhases = (
+				2FC3B14FF6B6A0F2CED9A9C7 /* Sources */,
+				DC5E4E2E32EA241075158740 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BlawbyAgent;
+			packageProductDependencies = (
+				BB22FC45049BCFD0751A8C05 /* GRDB */,
+			);
+			productName = BlawbyAgent;
+			productReference = FE15D867F583668A8E9ED2AC /* BlawbyAgent.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C422B8B0B5CCDE1B98776636 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					82ED3CBA1FADC94B14E23293 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 11691679411A15CA18B81E88 /* Build configuration list for PBXProject "BlawbyAgent" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = F09E452AF7DAA30509802810;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				F2D60E4CE52D19DA5BA3705D /* XCRemoteSwiftPackageReference "GRDB.swift" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 5DCCF81F84C458B80263CE30 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				82ED3CBA1FADC94B14E23293 /* BlawbyAgent */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		2FC3B14FF6B6A0F2CED9A9C7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				916A9CDE35FA7CD559EAD220 /* AppDelegate.swift in Sources */,
+				9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */,
+				289661C0209D41B5319B0657 /* Config.swift in Sources */,
+				AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */,
+				E28372C641824150C40949B0 /* EntityExtractor.swift in Sources */,
+				07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */,
+				AE169531AE4BFA3F8237E346 /* KeychainStore.swift in Sources */,
+				F35B208CDC199CE894928EC4 /* LocalStore.swift in Sources */,
+				E767675D89D955EF433CB79D /* Logger.swift in Sources */,
+				F8EB764AD635AF4AC529E989 /* MailProcessor.swift in Sources */,
+				F2B127D621F90D6157611987 /* MailWatcher.swift in Sources */,
+				A3D7E233E6113FDA009088F8 /* MenuBarController.swift in Sources */,
+				DFFC1AC2AA62764E85066948 /* MessagesReader.swift in Sources */,
+				41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */,
+				4A85C2E7F1CF5C5BD288E20D /* PreferencesWindowController.swift in Sources */,
+				B195F2396EB9DA0B8459F1E2 /* SyncCoordinator.swift in Sources */,
+				E4AA27EF6229A9F55A7CE3C9 /* WebSocketPublisher.swift in Sources */,
+				D125204F81C69D021288F9E1 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		454DA359B2DE2CB61AFBAB6D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				INFOPLIST_FILE = BlawbyAgent/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		77DD065C9161C85C040301E5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				INFOPLIST_FILE = BlawbyAgent/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		7ED4A756DB04AB3DCDA42733 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = BlawbyAgent/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = "-framework EventKit -framework Contacts -framework ScriptingBridge";
+				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgent;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		DE92039CB0FD2AA46269880C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = BlawbyAgent/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = "-framework EventKit -framework Contacts -framework ScriptingBridge";
+				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgent;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		11691679411A15CA18B81E88 /* Build configuration list for PBXProject "BlawbyAgent" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				77DD065C9161C85C040301E5 /* Debug */,
+				454DA359B2DE2CB61AFBAB6D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		74029C4043BC3D3F466E0A7B /* Build configuration list for PBXNativeTarget "BlawbyAgent" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7ED4A756DB04AB3DCDA42733 /* Debug */,
+				DE92039CB0FD2AA46269880C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		F2D60E4CE52D19DA5BA3705D /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 6.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		BB22FC45049BCFD0751A8C05 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F2D60E4CE52D19DA5BA3705D /* XCRemoteSwiftPackageReference "GRDB.swift" */;
+			productName = GRDB;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = C422B8B0B5CCDE1B98776636 /* Project object */;
+}

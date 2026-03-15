@@ -1,0 +1,43 @@
+name: BlawbyAgent
+options:
+  bundleIdPrefix: com.blawby
+  deploymentTarget:
+    macOS: "13.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: 6.0
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    CODE_SIGN_STYLE: Automatic
+    INFOPLIST_FILE: BlawbyAgent/Info.plist
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift.git
+    from: 6.0.0
+
+targets:
+  BlawbyAgent:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/BlawbyAgent
+    resources:
+      - path: Resources
+    info:
+      path: BlawbyAgent/Info.plist
+      properties:
+        LSUIElement: true
+        NSContactsUsageDescription: "Blawby uses Contacts to enrich email data"
+        NSCalendarsFullAccessUsageDescription: "Blawby reads your calendar to keep your schedule current"
+        NSAppleEventsUsageDescription: "Blawby reads Mail to process your emails"
+        CFBundleIdentifier: com.blawby.BlawbyAgent
+        CFBundleName: BlawbyAgent
+    dependencies:
+      - package: GRDB
+        product: GRDB
+    settings:
+      base:
+        OTHER_LDFLAGS: "-framework EventKit -framework Contacts -framework ScriptingBridge"
