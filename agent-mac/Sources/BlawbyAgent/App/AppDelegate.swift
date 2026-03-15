@@ -25,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var bootstrapStatusDisplay = "waiting"
     private var mailStatusDisplay = "n/a"
     private var calendarStatusDisplay = "n/a"
+    private var messagesStatusDisplay = "n/a"
+    private var mailAccountNames: [String] = []
+    private var messagesTotal = 0
     private var syncActivated = false
     private var syncRuntimeStarted = false
     private var bootstrapTask: Task<Void, Never>?
@@ -145,6 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             bootstrapStatus: bootstrapStatusDisplay,
             mailStatus: mailStatusDisplay,
             calendarStatus: calendarStatusDisplay,
+            messagesStatus: messagesStatusDisplay,
             syncActivated: syncActivated
         )
     }
@@ -169,10 +173,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
         queuePendingDisplay = snapshot.pendingPayloads
         bootstrapStatusDisplay = snapshot.bootstrapStatus
+        let accountLabel = mailAccountNames.isEmpty ? "accounts: loading" : "accounts: \(mailAccountNames.joined(separator: ", "))"
+        let mailWindowLabel: String
+        if snapshot.mailBootstrapWindowTotal > 0 {
+            let pct = Int((Double(snapshot.mailBootstrapWindowDone) / Double(snapshot.mailBootstrapWindowTotal)) * 100.0)
+            mailWindowLabel = "window \(snapshot.mailBootstrapWindowDone)/\(snapshot.mailBootstrapWindowTotal) (\(max(0, min(100, pct)))%)"
+        } else {
+            mailWindowLabel = "window n/a"
+        }
         mailStatusDisplay =
-            "run p=\(snapshot.lastMailProcessed) e=\(snapshot.lastMailEntities) d=\(snapshot.lastMailDelivery) | " +
-            "total discovered=\(snapshot.mailDiscoveredTotal) processed=\(snapshot.mailProcessedTotal) sent=\(snapshot.mailSentTotal) queued=\(snapshot.mailQueuedTotal)"
-        calendarStatusDisplay = "events=\(snapshot.lastCalendarEvents), delivery=\(snapshot.lastCalendarDelivery)"
+            "\(accountLabel) | \(mailWindowLabel) | run p=\(snapshot.lastMailProcessed) e=\(snapshot.lastMailEntities) d=\(snapshot.lastMailDelivery) | total discovered=\(snapshot.mailDiscoveredTotal) processed=\(snapshot.mailProcessedTotal) sent=\(snapshot.mailSentTotal) queued=\(snapshot.mailQueuedTotal)"
+        calendarStatusDisplay =
+            "calendars \(snapshot.calendarCalendarsProcessed)/\(snapshot.calendarCalendarsTotal), run events=\(snapshot.lastCalendarEvents), delivery=\(snapshot.lastCalendarDelivery)"
+        mailProcessedToday = snapshot.mailProcessedTotal
+        calendarSynced = snapshot.calendarEventsTotal
         updateMenu()
     }
 
@@ -278,7 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             workspaceId: config.workspaceId
         )
         self.messagesReader = messagesReader
-        messagesReader.start { [weak self] payload in
+        messagesReader.start(onChange: { [weak self] payload in
             Task {
                 guard let self else { return }
                 guard self.syncActivated else { return }
@@ -286,6 +300,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 await MainActor.run {
                     self.updateMenu()
                 }
+            }
+        }, onProgress: { [weak self] progress in
+            Task { @MainActor in
+                guard let self else { return }
+                self.messagesTotal += progress.messages
+                self.messagesStatusDisplay =
+                    "trigger=\(progress.trigger) batches=\(progress.batches) delta=\(progress.messages) total=\(self.messagesTotal)"
+                self.updateMenu()
+            }
+        })
+
+        Task {
+            let names = await mailWatcher.accountNames()
+            await MainActor.run {
+                self.mailAccountNames = names
+                self.updateMenu()
             }
         }
 

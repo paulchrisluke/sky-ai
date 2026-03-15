@@ -13,8 +13,13 @@ struct SyncStatusSnapshot {
     let mailProcessedTotal: Int
     let mailSentTotal: Int
     let mailQueuedTotal: Int
+    let mailBootstrapWindowDone: Int
+    let mailBootstrapWindowTotal: Int
     let lastCalendarEvents: Int
     let lastCalendarDelivery: String
+    let calendarCalendarsProcessed: Int
+    let calendarCalendarsTotal: Int
+    let calendarEventsTotal: Int
     let pendingPayloads: Int
     let lastSyncAt: Date?
 }
@@ -56,8 +61,13 @@ final class SyncCoordinator: @unchecked Sendable {
     private var mailProcessedTotal = 0
     private var mailSentTotal = 0
     private var mailQueuedTotal = 0
+    private var mailBootstrapWindowDone = 0
+    private var mailBootstrapWindowTotal = 0
     private var lastCalendarEvents = 0
     private var lastCalendarDelivery = "n/a"
+    private var calendarCalendarsProcessed = 0
+    private var calendarCalendarsTotal = 0
+    private var calendarEventsTotal = 0
     private var lastSyncAt: Date?
     private var onStatusChanged: (@Sendable (SyncStatusSnapshot) -> Void)?
 
@@ -180,6 +190,11 @@ final class SyncCoordinator: @unchecked Sendable {
 
         var cursorEnd = localStore.bootstrapCursorDate(accountId: config.accountId, key: "mail") ?? now
         stateQueue.sync {
+            let remainingDays = max(1, Int(ceil(cursorEnd.timeIntervalSince(horizon) / 86_400)))
+            mailBootstrapWindowTotal = max(1, Int(ceil(Double(remainingDays) / Double(bootstrapMailChunkDays))))
+            mailBootstrapWindowDone = 0
+        }
+        stateQueue.sync {
             bootstrapStatus = "mail backfill active 0%"
         }
         publishStatus()
@@ -253,12 +268,16 @@ final class SyncCoordinator: @unchecked Sendable {
 
             localStore.setBootstrapCursorDate(accountId: config.accountId, key: "mail", date: windowStart)
             cursorEnd = windowStart
+            stateQueue.sync {
+                mailBootstrapWindowDone = min(mailBootstrapWindowTotal, mailBootstrapWindowDone + 1)
+            }
         }
 
         localStore.markBootstrapCompleted(accountId: config.accountId, key: "mail")
         localStore.clearBootstrapCursor(accountId: config.accountId, key: "mail")
         stateQueue.sync {
             bootstrapStatus = "mail backfill completed"
+            mailBootstrapWindowDone = mailBootstrapWindowTotal
         }
         publishStatus()
         logger.info("[sync] bootstrap mail backfill completed")
@@ -286,6 +305,8 @@ final class SyncCoordinator: @unchecked Sendable {
                 stateQueue.sync {
                     lastCalendarEvents = 0
                     lastCalendarDelivery = "sent"
+                    calendarCalendarsProcessed = 0
+                    calendarCalendarsTotal = 0
                 }
                 publishStatus()
                 return
@@ -293,6 +314,12 @@ final class SyncCoordinator: @unchecked Sendable {
 
             var eventsCount = 0
             var queued = false
+            var processedCalendars = 0
+            stateQueue.sync {
+                calendarCalendarsTotal = payloads.count
+                calendarCalendarsProcessed = 0
+            }
+            publishStatus()
             for payload in payloads {
                 eventsCount += payload.events.count
                 let payloadData = try JSONEncoder().encode(payload)
@@ -307,11 +334,17 @@ final class SyncCoordinator: @unchecked Sendable {
                     _ = localStore.enqueuePayload(type: "calendar", json: json)
                     queued = true
                 }
+                processedCalendars += 1
+                stateQueue.sync {
+                    calendarCalendarsProcessed = processedCalendars
+                }
+                publishStatus()
             }
 
             stateQueue.sync {
                 lastCalendarEvents = eventsCount
                 lastCalendarDelivery = queued ? "queued" : "sent"
+                calendarEventsTotal += eventsCount
             }
             publishStatus()
             logger.info("[sync] calendar \(backfill ? "backfill" : "sync"): events=\(eventsCount) sent=\(queued ? "queued" : "true")")
@@ -532,8 +565,13 @@ final class SyncCoordinator: @unchecked Sendable {
                 mailProcessedTotal: mailProcessedTotal,
                 mailSentTotal: mailSentTotal,
                 mailQueuedTotal: mailQueuedTotal,
+                mailBootstrapWindowDone: mailBootstrapWindowDone,
+                mailBootstrapWindowTotal: mailBootstrapWindowTotal,
                 lastCalendarEvents: lastCalendarEvents,
                 lastCalendarDelivery: lastCalendarDelivery,
+                calendarCalendarsProcessed: calendarCalendarsProcessed,
+                calendarCalendarsTotal: calendarCalendarsTotal,
+                calendarEventsTotal: calendarEventsTotal,
                 pendingPayloads: localStore.pendingPayloadCount(),
                 lastSyncAt: lastSyncAt
                 )

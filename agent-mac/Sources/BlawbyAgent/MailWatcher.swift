@@ -51,6 +51,23 @@ final class MailWatcher: @unchecked Sendable {
         logger.info("mail observer stopped")
     }
 
+    func accountNames() async -> [String] {
+        await withCheckedContinuation { continuation in
+            workQueue.async { [self] in
+                guard let mailApp = SBApplication(bundleIdentifier: "com.apple.mail") else {
+                    continuation.resume(returning: [])
+                    return
+                }
+                let appObject = mailApp as NSObject
+                let accounts = objectArray(from: appObject.value(forKey: "accounts"))
+                let names = accounts.compactMap { $0.value(forKey: "name") as? String }
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                continuation.resume(returning: names)
+            }
+        }
+    }
+
     func fetchNewMessages() async -> [RawMessage] {
         await withCheckedContinuation { continuation in
             workQueue.async { [self] in

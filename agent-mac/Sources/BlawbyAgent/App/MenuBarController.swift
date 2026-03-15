@@ -14,8 +14,9 @@ final class MenuBarController: NSObject {
     private let bootstrapItem = NSMenuItem(title: "Bootstrap: waiting", action: nil, keyEquivalent: "")
     private let mailStatusItem = NSMenuItem(title: "Mail status: n/a", action: nil, keyEquivalent: "")
     private let calendarStatusItem = NSMenuItem(title: "Calendar status: n/a", action: nil, keyEquivalent: "")
-    private let mailItem = NSMenuItem(title: "Mail: 0 processed today", action: nil, keyEquivalent: "")
-    private let calendarItem = NSMenuItem(title: "Calendar: 0 events synced", action: nil, keyEquivalent: "")
+    private let messagesStatusItem = NSMenuItem(title: "Messages status: n/a", action: nil, keyEquivalent: "")
+    private let mailItem = NSMenuItem(title: "Mail total: 0 processed", action: nil, keyEquivalent: "")
+    private let calendarItem = NSMenuItem(title: "Calendar total: 0 events synced", action: nil, keyEquivalent: "")
     private let toggleSyncItem = NSMenuItem(title: "Activate Sync", action: #selector(toggleSyncAction), keyEquivalent: "")
 
     init(toggleSync: @escaping () -> Void, preferences: @escaping () -> Void) {
@@ -45,6 +46,7 @@ final class MenuBarController: NSObject {
         menu.addItem(bootstrapItem)
         menu.addItem(mailStatusItem)
         menu.addItem(calendarStatusItem)
+        menu.addItem(messagesStatusItem)
         menu.addItem(.separator())
         menu.addItem(lastSyncItem)
         menu.addItem(mailItem)
@@ -76,17 +78,19 @@ final class MenuBarController: NSObject {
         bootstrapStatus: String,
         mailStatus: String,
         calendarStatus: String,
+        messagesStatus: String,
         syncActivated: Bool
     ) {
         lastSyncItem.title = "Last synced: \(lastSync)"
-        mailItem.title = "Mail: \(mailProcessed) processed today"
-        calendarItem.title = "Calendar: \(calendarSynced) events synced"
+        mailItem.title = "Mail total: \(mailProcessed) processed"
+        calendarItem.title = "Calendar total: \(calendarSynced) events synced"
         connectionItem.title = "Connection: \(connection)"
         syncStateItem.title = "Sync: \(syncState)"
         queueItem.title = "Queue: \(queuePending) pending"
         bootstrapItem.title = "Bootstrap: \(bootstrapStatus)"
         mailStatusItem.title = "Mail status: \(mailStatus)"
         calendarStatusItem.title = "Calendar status: \(calendarStatus)"
+        messagesStatusItem.title = "Messages status: \(messagesStatus)"
         toggleSyncItem.title = syncActivated ? "Pause Sync" : "Activate Sync"
         updateStatusIcon(connection: connection, syncState: syncState)
     }

@@ -16,6 +16,12 @@ struct MacMessagePayload: Codable {
     }
 }
 
+struct MessagesReaderProgress {
+    let trigger: String
+    let batches: Int
+    let messages: Int
+}
+
 final class MessagesReader: @unchecked Sendable {
     private struct MessageBatch {
         let json: String
@@ -45,7 +51,7 @@ final class MessagesReader: @unchecked Sendable {
         self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
 
-    func start(onChange: @escaping @Sendable (String) -> Void) {
+    func start(onChange: @escaping @Sendable (String) -> Void, onProgress: (@Sendable (MessagesReaderProgress) -> Void)? = nil) {
         guard FileManager.default.fileExists(atPath: dbPath) else {
             logger.warning("messages db missing at \(dbPath)")
             return
@@ -53,13 +59,13 @@ final class MessagesReader: @unchecked Sendable {
 
         // Startup drain ensures historical messages progress even if no new file writes occur.
         queue.async { [weak self] in
-            self?.drainPendingMessages(trigger: "startup", onChange: onChange)
+            self?.drainPendingMessages(trigger: "startup", onChange: onChange, onProgress: onProgress)
         }
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + pollIntervalSeconds, repeating: pollIntervalSeconds)
         timer.setEventHandler { [weak self] in
-            self?.drainPendingMessages(trigger: "poll", onChange: onChange)
+            self?.drainPendingMessages(trigger: "poll", onChange: onChange, onProgress: onProgress)
         }
         pollTimer = timer
         timer.resume()
@@ -82,7 +88,7 @@ final class MessagesReader: @unchecked Sendable {
         )
         src.setEventHandler { [weak self] in
             guard let self else { return }
-            self.drainPendingMessages(trigger: "fs-event", onChange: onChange)
+            self.drainPendingMessages(trigger: "fs-event", onChange: onChange, onProgress: onProgress)
         }
         src.setCancelHandler { [weak self] in
             guard let self else { return }
@@ -108,7 +114,11 @@ final class MessagesReader: @unchecked Sendable {
         logger.info("messages watcher stopped")
     }
 
-    private func drainPendingMessages(trigger: String, onChange: @escaping @Sendable (String) -> Void) {
+    private func drainPendingMessages(
+        trigger: String,
+        onChange: @escaping @Sendable (String) -> Void,
+        onProgress: (@Sendable (MessagesReaderProgress) -> Void)?
+    ) {
         var total = 0
         var batches = 0
         while batches < bootstrapMaxBatchesPerRun {
@@ -121,6 +131,7 @@ final class MessagesReader: @unchecked Sendable {
         if total > 0 {
             logger.info("messages drain trigger=\(trigger) batches=\(batches) messages=\(total)")
         }
+        onProgress?(MessagesReaderProgress(trigger: trigger, batches: batches, messages: total))
     }
 
     private func fetchLatestPayload(limit: Int) -> MessageBatch? {
