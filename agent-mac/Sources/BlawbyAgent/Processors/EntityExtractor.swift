@@ -86,6 +86,10 @@ private struct ExtractedEntityWire: Decodable {
     let confidence: Double?
 }
 
+private struct ExtractedEntityEnvelope: Decodable {
+    let entities: [ExtractedEntityWire]
+}
+
 enum EntityExtractorError: Error {
     case missingOpenAIKey
     case invalidOpenAIResponse
@@ -160,7 +164,7 @@ final class EntityExtractor {
         }
 
         do {
-            let wireEntities = try JSONDecoder().decode([ExtractedEntityWire].self, from: Data(stripJsonCodeFence(content).utf8))
+            let wireEntities = try decodeWireEntities(from: content)
             return mapEntities(wireEntities, workspaceId: workspaceId, messages: messages)
         } catch {
             logger.warning("entity extractor parse failed for batch size=\(messages.count): \(error.localizedDescription)")
@@ -175,8 +179,10 @@ final class EntityExtractor {
     ) -> [ExtractedEntity] {
         let messageById = Dictionary(uniqueKeysWithValues: messages.map { ($0.messageId, $0) })
 
-        return rows.compactMap { row in
-            guard let messageId = row.messageId ?? row.message_id, let source = messageById[messageId] else {
+        return rows.enumerated().compactMap { index, row in
+            let fallbackMessageId = index < messages.count ? messages[index].messageId : nil
+            guard let messageId = row.messageId ?? row.message_id ?? fallbackMessageId,
+                  let source = messageById[messageId] else {
                 return nil
             }
 
@@ -255,9 +261,11 @@ final class EntityExtractor {
         """
         You are a precise email entity extractor. Extract structured facts from this email for the account owner: \(accountOwner)
 
-        Respond with ONLY a JSON object. No explanation, no markdown, no code fences.
+        Respond with ONLY a JSON array. No explanation, no markdown, no code fences.
 
+        [
         {
+          "message_id": "exact MESSAGE_ID from input",
           "entity_type": "invoice|contract|payment|appointment|alert|request|correspondence",
           "direction": "ar|ap|inbound|outbound|unknown",
           "counterparty_name": "string or null",
@@ -272,8 +280,11 @@ final class EntityExtractor {
           "risk_level": "low|medium|high|critical",
           "confidence": 0.0_to_1.0
         }
+        ]
 
         Rules:
+        - Return exactly one object per input message.
+        - Copy each message_id exactly from input.
         - The account owner is \(accountOwner). Reason about ALL directions from THEIR perspective.
         - direction "ar" = someone owes the account owner money, or the account owner expects to be paid.
         - direction "ap" = the account owner owes someone else money, or needs to make a payment.
@@ -298,6 +309,22 @@ final class EntityExtractor {
         guard lines.count >= 3 else { return trimmed }
         let inner = lines.dropFirst().dropLast()
         return inner.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func decodeWireEntities(from rawContent: String) throws -> [ExtractedEntityWire] {
+        let decoder = JSONDecoder()
+        let payload = Data(stripJsonCodeFence(rawContent).utf8)
+
+        if let rows = try? decoder.decode([ExtractedEntityWire].self, from: payload) {
+            return rows
+        }
+        if let wrapped = try? decoder.decode(ExtractedEntityEnvelope.self, from: payload) {
+            return wrapped.entities
+        }
+        if let one = try? decoder.decode(ExtractedEntityWire.self, from: payload) {
+            return [one]
+        }
+        throw EntityExtractorError.invalidOpenAIResponse
     }
 
     private func normalizeStatus(_ value: String) -> String {

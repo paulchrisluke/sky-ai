@@ -97,7 +97,8 @@ final class MailWatcher: @unchecked Sendable {
 
                         let subject = message.value(forKey: "subject") as? String ?? ""
                         let sender = message.value(forKey: "sender") as? String ?? ""
-                        let bodyText = truncate(subject, maxLength: 2000)
+                        let content = message.value(forKey: "content") as? String ?? subject
+                        let bodyText = truncate(content, maxLength: 2000)
 
                         rawMessages.append(
                             RawMessage(
