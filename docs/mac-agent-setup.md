@@ -2,6 +2,13 @@
 
 This is the default Mac setup for Blawby. The app is native Swift/macOS and runs as a background agent.
 
+## Native UI principles
+
+- AppKit is the lifecycle owner (`NSApplication` + `NSApplicationDelegate`).
+- Menu bar popover is intentionally lightweight: status + quick actions only.
+- Persistent/detail workflows open in dedicated macOS windows (Dashboard, Preferences).
+- Heavy sync/detail UI should be implemented in windows, not expanded inside the transient popover.
+
 ## 1) Prerequisites
 
 ```bash

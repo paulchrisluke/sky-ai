@@ -19,6 +19,20 @@ Cloudflare backend + native macOS agent (`agent-mac`) for Sky AI.
 - Native Mac Agent (`agent-mac/`): event-driven Mail/Calendar/Messages ingestion + local processing + WebSocket publish
 - Local persistence: SQLite via GRDB (`~/.blawby/blawby.db`)
 
+## Native macOS UI Architecture (AppKit-first)
+
+- Entry point is native AppKit (`NSApplication`) with `NSApplicationDelegate` (`AppDelegate`), not a web shell.
+- Menu bar is a lightweight status + quick-action hub (`NSStatusItem` + `NSPopover`):
+  - overall sync progress
+  - connection/last-sync status
+  - pause/resume sync
+  - open dashboard
+- Deep workflows live in standard macOS windows:
+  - `DashboardWindowController` + `DashboardView` for active source detail and longer-lived interaction
+  - `PreferencesWindowController` for configuration
+- UI state is shared through controller/view-model style objects (MVC/MVVM blend), with AppKit owning lifecycle and SwiftUI used for view composition.
+- UI updates run on main actor/thread (`@MainActor`), with async/background sync work off the UI path.
+
 ## Structure (Living)
 
 - `workers/api`: request-time APIs, query execution, WebSocket coordination, Blawby memory injection
