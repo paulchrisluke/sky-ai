@@ -5,6 +5,7 @@ struct SyncStatusSnapshot {
     let mailSyncQueued: Bool
     let mailMode: String?
     let calendarSyncRunning: Bool
+    let bootstrapStatus: String
     let lastMailProcessed: Int
     let lastMailEntities: Int
     let lastMailDelivery: String
@@ -33,7 +34,7 @@ protocol CalendarWatching {
     func markPayloadEventsSent(_ payload: CalendarPayload)
 }
 
-final class SyncCoordinator {
+final class SyncCoordinator: @unchecked Sendable {
     private let bootstrapMailDays = 3650
     private let bootstrapMailChunkDays = 30
     private let bootstrapMailChunkLimit = 1500
@@ -43,6 +44,7 @@ final class SyncCoordinator {
     private var pendingMailSync = false
     private var mailMode: String?
     private var calendarSyncRunning = false
+    private var bootstrapStatus = "waiting"
     private var lastMailProcessed = 0
     private var lastMailEntities = 0
     private var lastMailDelivery = "n/a"
@@ -146,10 +148,18 @@ final class SyncCoordinator {
 
         if !localStore.isBootstrapCompleted(accountId: config.accountId, key: "calendar") {
             logger.info("[sync] bootstrap calendar backfill starting")
+            stateQueue.sync {
+                bootstrapStatus = "calendar backfill active"
+            }
+            publishStatus()
             await runCalendarBackfill()
             localStore.markBootstrapCompleted(accountId: config.accountId, key: "calendar")
             logger.info("[sync] bootstrap calendar backfill completed")
         }
+        stateQueue.sync {
+            bootstrapStatus = "completed"
+        }
+        publishStatus()
     }
 
     private func runBootstrapMailBackfill() async {
@@ -160,6 +170,10 @@ final class SyncCoordinator {
         }
 
         var cursorEnd = localStore.bootstrapCursorDate(accountId: config.accountId, key: "mail") ?? now
+        stateQueue.sync {
+            bootstrapStatus = "mail backfill active 0%"
+        }
+        publishStatus()
         logger.info("[sync] bootstrap mail backfill starting horizon=\(horizon) cursorEnd=\(cursorEnd)")
 
         while cursorEnd > horizon {
@@ -169,6 +183,13 @@ final class SyncCoordinator {
             }
             let windowStart = max(horizon, chunkStart)
             let windowEnd = cursorEnd
+            let total = now.timeIntervalSince(horizon)
+            let complete = now.timeIntervalSince(windowEnd)
+            let pct = total > 0 ? Int(max(0, min(100, (complete / total) * 100))) : 0
+            stateQueue.sync {
+                bootstrapStatus = "mail backfill active \(pct)%"
+            }
+            publishStatus()
             logger.info("[sync] bootstrap mail window start=\(windowStart) end=\(windowEnd)")
 
             guard beginMailSync(mode: "backfill") else {
@@ -195,6 +216,10 @@ final class SyncCoordinator {
 
         localStore.markBootstrapCompleted(accountId: config.accountId, key: "mail")
         localStore.clearBootstrapCursor(accountId: config.accountId, key: "mail")
+        stateQueue.sync {
+            bootstrapStatus = "mail backfill completed"
+        }
+        publishStatus()
         logger.info("[sync] bootstrap mail backfill completed")
     }
 
@@ -446,6 +471,7 @@ final class SyncCoordinator {
                 mailSyncQueued: pendingMailSync,
                 mailMode: mailMode,
                 calendarSyncRunning: calendarSyncRunning,
+                bootstrapStatus: bootstrapStatus,
                 lastMailProcessed: lastMailProcessed,
                 lastMailEntities: lastMailEntities,
                 lastMailDelivery: lastMailDelivery,

@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var preferencesWindow: PreferencesWindowController?
 
     private var logger: Logger?
+    private var localStore: LocalStore?
     private var syncCoordinator: SyncCoordinator?
     private var mailWatcher: MailWatcher?
     private var calendarWatcher: CalendarWatcher?
@@ -21,8 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var connectionDisplay = "connecting"
     private var syncDisplay = "idle"
     private var queuePendingDisplay = 0
+    private var bootstrapStatusDisplay = "waiting"
     private var mailStatusDisplay = "n/a"
     private var calendarStatusDisplay = "n/a"
+    private var syncActivated = false
+    private var syncRuntimeStarted = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -35,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             self.logger = logger
 
             let localStore = try LocalStore(baseDirectory: baseDir)
+            self.localStore = localStore
             let configStore = try ConfigStore(baseDirectory: baseDir)
             let fileConfig = configStore.load()
             let prefs = try Preferences.load(config: fileConfig)
@@ -46,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 openaiApiKey: prefs.openaiApiKey ?? fileConfig.openaiApiKey
             )
             self.config = config
+            syncActivated = UserDefaults.standard.bool(forKey: Preferences.Keys.syncActivated)
 
             let contactsReader = ContactsReader(localStore: localStore, logger: logger)
             self.contactsReader = contactsReader
@@ -72,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             self.webSocketPublisher = webSocketPublisher
 
             menuBar = MenuBarController(
+                activateSync: { [weak self] in self?.activateSync() },
                 syncNow: { [weak self] in self?.syncNow() },
                 backfill: { [weak self] in self?.backfillNow() },
                 preferences: { [weak self] in self?.openPreferences() }
@@ -93,45 +100,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                     self?.applyConnectionState(state)
                 }
             }
-            webSocketPublisher.connect()
-
-            mailWatcher.startObserving { [weak self] in
-                Task { @MainActor in
-                    guard let self else { return }
-                    await self.syncCoordinator?.runMailSync()
-                    self.mailProcessedToday += 1
-                    self.updateMenu()
-                }
-            }
-
-            calendarWatcher.startObserving { [weak self] in
-                Task { @MainActor in
-                    guard let self else { return }
-                    await self.syncCoordinator?.runCalendarSync()
-                    self.calendarSynced += 1
-                    self.updateMenu()
-                }
-            }
-
-            let messagesReader = MessagesReader(
-                localStore: localStore,
-                logger: logger,
-                accountId: config.accountId,
-                workspaceId: config.workspaceId
-            )
-            self.messagesReader = messagesReader
-            messagesReader.start { [weak self] payload in
-                Task { @MainActor in
-                    guard let self else { return }
-                    await self.syncCoordinator?.publishRawPayload(type: "message", json: payload)
-                    self.updateMenu()
-                }
-            }
-
-            Task {
-                await coordinator.runInitialBootstrapSyncIfNeeded()
-                await coordinator.runMailSync()
-                await coordinator.runCalendarSync()
+            if syncActivated {
+                startSyncRuntime(
+                    coordinator: coordinator,
+                    mailWatcher: mailWatcher,
+                    calendarWatcher: calendarWatcher,
+                    logger: logger,
+                    config: config,
+                    localStore: localStore,
+                    webSocketPublisher: webSocketPublisher
+                )
+            } else {
+                connectionDisplay = "paused"
+                syncDisplay = "inactive (not activated)"
+                bootstrapStatusDisplay = "waiting for activation"
             }
             updateMenu()
 
@@ -143,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     @MainActor
     private func syncNow() {
+        guard syncActivated else { return }
         guard let syncCoordinator else { return }
         Task {
             await syncCoordinator.runMailSync()
@@ -154,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     @MainActor
     private func backfillNow() {
+        guard syncActivated else { return }
         guard let syncCoordinator else { return }
         Task {
             await syncCoordinator.runMailBackfill(days: 90, limit: 1200)
@@ -182,8 +166,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             connection: connectionDisplay,
             syncState: syncDisplay,
             queuePending: queuePendingDisplay,
+            bootstrapStatus: bootstrapStatusDisplay,
             mailStatus: mailStatusDisplay,
-            calendarStatus: calendarStatusDisplay
+            calendarStatus: calendarStatusDisplay,
+            syncActivated: syncActivated
         )
     }
 
@@ -206,6 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
 
         queuePendingDisplay = snapshot.pendingPayloads
+        bootstrapStatusDisplay = snapshot.bootstrapStatus
         mailStatusDisplay = "processed=\(snapshot.lastMailProcessed), entities=\(snapshot.lastMailEntities), delivery=\(snapshot.lastMailDelivery)"
         calendarStatusDisplay = "events=\(snapshot.lastCalendarEvents), delivery=\(snapshot.lastCalendarDelivery)"
         updateMenu()
@@ -213,6 +200,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     @MainActor
     private func applyConnectionState(_ state: WebSocketConnectionState) {
+        if !syncActivated {
+            connectionDisplay = "paused"
+            updateMenu()
+            return
+        }
         switch state {
         case .disconnected:
             connectionDisplay = "disconnected"
@@ -224,6 +216,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             connectionDisplay = "reconnecting in \(delaySeconds)s"
         }
         updateMenu()
+    }
+
+    @MainActor
+    private func activateSync() {
+        guard !syncActivated else { return }
+        syncActivated = true
+        UserDefaults.standard.set(true, forKey: Preferences.Keys.syncActivated)
+        guard
+            let coordinator = syncCoordinator,
+            let mailWatcher = mailWatcher,
+            let calendarWatcher = calendarWatcher,
+            let localStore = localStore,
+            let logger = logger,
+            let config = config,
+            let webSocketPublisher = webSocketPublisher
+        else {
+            return
+        }
+        startSyncRuntime(
+            coordinator: coordinator,
+            mailWatcher: mailWatcher,
+            calendarWatcher: calendarWatcher,
+            logger: logger,
+            config: config,
+            localStore: localStore,
+            webSocketPublisher: webSocketPublisher
+        )
+        updateMenu()
+    }
+
+    private func startSyncRuntime(
+        coordinator: SyncCoordinator,
+        mailWatcher: MailWatcher,
+        calendarWatcher: CalendarWatcher,
+        logger: Logger,
+        config: Config,
+        localStore: LocalStore,
+        webSocketPublisher: WebSocketPublisher
+    ) {
+        guard !syncRuntimeStarted else { return }
+        syncRuntimeStarted = true
+
+        webSocketPublisher.connect()
+
+        mailWatcher.startObserving { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                await self.syncCoordinator?.runMailSync()
+                self.mailProcessedToday += 1
+                self.updateMenu()
+            }
+        }
+
+        calendarWatcher.startObserving { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                await self.syncCoordinator?.runCalendarSync()
+                self.calendarSynced += 1
+                self.updateMenu()
+            }
+        }
+
+        let messagesReader = MessagesReader(
+            localStore: localStore,
+            logger: logger,
+            accountId: config.accountId,
+            workspaceId: config.workspaceId
+        )
+        self.messagesReader = messagesReader
+        messagesReader.start { [weak self] payload in
+            Task { @MainActor in
+                guard let self else { return }
+                await self.syncCoordinator?.publishRawPayload(type: "message", json: payload)
+                self.updateMenu()
+            }
+        }
+
+        Task {
+            await coordinator.runInitialBootstrapSyncIfNeeded()
+            await coordinator.runMailSync()
+            await coordinator.runCalendarSync()
+        }
     }
 
     private func configureLoginItemRegistration(logger: Logger) {

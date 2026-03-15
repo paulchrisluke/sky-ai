@@ -5,6 +5,7 @@ struct Preferences {
         static let workerUrl = "workerUrl"
         static let workspaceId = "workspaceId"
         static let accountId = "accountId"
+        static let syncActivated = "syncActivated"
         static let legacyApiKey = "apiKey"
         static let legacyOpenAI = "openaiApiKey"
         static let keychainAPIKey = "workerApiKey"

@@ -4,6 +4,7 @@ import AppKit
 final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
+    private let activateSyncHandler: () -> Void
     private let syncNowHandler: () -> Void
     private let backfillHandler: () -> Void
     private let preferencesHandler: () -> Void
@@ -12,13 +13,18 @@ final class MenuBarController: NSObject {
     private let connectionItem = NSMenuItem(title: "Connection: connecting", action: nil, keyEquivalent: "")
     private let syncStateItem = NSMenuItem(title: "Sync: idle", action: nil, keyEquivalent: "")
     private let queueItem = NSMenuItem(title: "Queue: 0 pending", action: nil, keyEquivalent: "")
+    private let bootstrapItem = NSMenuItem(title: "Bootstrap: waiting", action: nil, keyEquivalent: "")
     private let mailStatusItem = NSMenuItem(title: "Mail status: n/a", action: nil, keyEquivalent: "")
     private let calendarStatusItem = NSMenuItem(title: "Calendar status: n/a", action: nil, keyEquivalent: "")
     private let mailItem = NSMenuItem(title: "Mail: 0 processed today", action: nil, keyEquivalent: "")
     private let calendarItem = NSMenuItem(title: "Calendar: 0 events synced", action: nil, keyEquivalent: "")
+    private let activateItem = NSMenuItem(title: "Activate Sync", action: #selector(activateSyncAction), keyEquivalent: "")
+    private let syncItem = NSMenuItem(title: "Sync Now", action: #selector(syncNowAction), keyEquivalent: "")
+    private let backfillItem = NSMenuItem(title: "Backfill Last 90 Days", action: #selector(backfillAction), keyEquivalent: "")
 
-    init(syncNow: @escaping () -> Void, backfill: @escaping () -> Void, preferences: @escaping () -> Void) {
+    init(activateSync: @escaping () -> Void, syncNow: @escaping () -> Void, backfill: @escaping () -> Void, preferences: @escaping () -> Void) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.activateSyncHandler = activateSync
         self.syncNowHandler = syncNow
         self.backfillHandler = backfill
         self.preferencesHandler = preferences
@@ -40,6 +46,7 @@ final class MenuBarController: NSObject {
         menu.addItem(connectionItem)
         menu.addItem(syncStateItem)
         menu.addItem(queueItem)
+        menu.addItem(bootstrapItem)
         menu.addItem(mailStatusItem)
         menu.addItem(calendarStatusItem)
         menu.addItem(.separator())
@@ -48,11 +55,12 @@ final class MenuBarController: NSObject {
         menu.addItem(calendarItem)
         menu.addItem(.separator())
 
-        let syncItem = NSMenuItem(title: "Sync Now", action: #selector(syncNowAction), keyEquivalent: "")
+        activateItem.target = self
+        menu.addItem(activateItem)
+
         syncItem.target = self
         menu.addItem(syncItem)
 
-        let backfillItem = NSMenuItem(title: "Backfill Last 90 Days", action: #selector(backfillAction), keyEquivalent: "")
         backfillItem.target = self
         menu.addItem(backfillItem)
 
@@ -75,8 +83,10 @@ final class MenuBarController: NSObject {
         connection: String,
         syncState: String,
         queuePending: Int,
+        bootstrapStatus: String,
         mailStatus: String,
-        calendarStatus: String
+        calendarStatus: String,
+        syncActivated: Bool
     ) {
         lastSyncItem.title = "Last synced: \(lastSync)"
         mailItem.title = "Mail: \(mailProcessed) processed today"
@@ -84,8 +94,13 @@ final class MenuBarController: NSObject {
         connectionItem.title = "Connection: \(connection)"
         syncStateItem.title = "Sync: \(syncState)"
         queueItem.title = "Queue: \(queuePending) pending"
+        bootstrapItem.title = "Bootstrap: \(bootstrapStatus)"
         mailStatusItem.title = "Mail status: \(mailStatus)"
         calendarStatusItem.title = "Calendar status: \(calendarStatus)"
+        activateItem.isEnabled = !syncActivated
+        activateItem.title = syncActivated ? "Sync Activated" : "Activate Sync"
+        syncItem.isEnabled = syncActivated
+        backfillItem.isEnabled = syncActivated
         updateStatusIcon(connection: connection, syncState: syncState)
     }
 
@@ -118,6 +133,10 @@ final class MenuBarController: NSObject {
 
     @objc private func syncNowAction() {
         syncNowHandler()
+    }
+
+    @objc private func activateSyncAction() {
+        activateSyncHandler()
     }
 
     @objc private func backfillAction() {
