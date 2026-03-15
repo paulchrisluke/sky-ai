@@ -131,7 +131,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             await syncCoordinator.runMailSync()
             await syncCoordinator.runCalendarSync()
             await syncCoordinator.drainOutboundQueue()
-            updateMenu()
+            await MainActor.run {
+                self.updateMenu()
+            }
         }
     }
 
@@ -142,7 +144,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         Task {
             await syncCoordinator.runMailBackfill(days: 90, limit: 1200)
             await syncCoordinator.drainOutboundQueue()
-            updateMenu()
+            await MainActor.run {
+                self.updateMenu()
+            }
         }
     }
 
@@ -263,20 +267,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         webSocketPublisher.connect()
 
         mailWatcher.startObserving { [weak self] in
-            Task { @MainActor in
+            Task {
                 guard let self else { return }
                 await self.syncCoordinator?.runMailSync()
-                self.mailProcessedToday += 1
-                self.updateMenu()
+                await MainActor.run {
+                    self.mailProcessedToday += 1
+                    self.updateMenu()
+                }
             }
         }
 
         calendarWatcher.startObserving { [weak self] in
-            Task { @MainActor in
+            Task {
                 guard let self else { return }
                 await self.syncCoordinator?.runCalendarSync()
-                self.calendarSynced += 1
-                self.updateMenu()
+                await MainActor.run {
+                    self.calendarSynced += 1
+                    self.updateMenu()
+                }
             }
         }
 
@@ -288,14 +296,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         )
         self.messagesReader = messagesReader
         messagesReader.start { [weak self] payload in
-            Task { @MainActor in
+            Task {
                 guard let self else { return }
                 await self.syncCoordinator?.publishRawPayload(type: "message", json: payload)
-                self.updateMenu()
+                await MainActor.run {
+                    self.updateMenu()
+                }
             }
         }
 
-        Task {
+        Task.detached {
             await coordinator.runInitialBootstrapSyncIfNeeded()
             await coordinator.runMailSync()
             await coordinator.runCalendarSync()
