@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct DashboardView: View {
@@ -224,27 +223,5 @@ private struct StatusBadge: View {
         case "error": return .red
         default: return .secondary
         }
-    }
-}
-
-final class DashboardWindowController: NSWindowController {
-    convenience init(sourceManager: SourceManager, state: MenuBarState) {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 920, height: 620),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        self.init(window: window)
-        setup(sourceManager: sourceManager, state: state)
-    }
-
-    private func setup(sourceManager: SourceManager, state: MenuBarState) {
-        window?.title = "Blawby Dashboard"
-        window?.minSize = NSSize(width: 760, height: 460)
-        window?.setFrameAutosaveName("BlawbyDashboardWindow")
-        window?.contentViewController = NSHostingController(
-            rootView: DashboardView(sourceManager: sourceManager, state: state)
-        )
     }
 }

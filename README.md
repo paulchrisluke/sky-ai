@@ -19,18 +19,18 @@ Cloudflare backend + native macOS agent (`agent-mac`) for Sky AI.
 - Native Mac Agent (`agent-mac/`): event-driven Mail/Calendar/Messages ingestion + local processing + WebSocket publish
 - Local persistence: SQLite via GRDB (`~/.blawby/blawby.db`)
 
-## Native macOS UI Architecture (AppKit-first)
+## Native macOS UI Architecture (Scene-driven SwiftUI)
 
-- Entry point is native AppKit (`NSApplication`) with `NSApplicationDelegate` (`AppDelegate`), not a web shell.
-- Menu bar is a lightweight status + quick-action hub (`NSStatusItem` + `NSPopover`):
+- Entry point is scene-driven SwiftUI (`@main App`), not a web shell.
+- Menu bar is a lightweight status + quick-action hub (`MenuBarExtra`):
   - overall sync progress
   - connection/last-sync status
   - pause/resume sync
   - open dashboard
-- Deep workflows live in standard macOS windows:
-  - `DashboardWindowController` + `DashboardView` for active source detail and longer-lived interaction
-  - `PreferencesWindowController` for configuration
-- UI state is shared through controller/view-model style objects (MVC/MVVM blend), with AppKit owning lifecycle and SwiftUI used for view composition.
+- Deep workflows live in standard macOS windows via `Window` scenes:
+  - `DashboardView` for active source detail and longer-lived interaction
+  - `PreferencesView` for configuration
+- UI state is shared through controller/view-model style objects (MVC/MVVM blend), with SwiftUI scenes owning lifecycle and AppKit used only for platform integration points.
 - UI updates run on main actor/thread (`@MainActor`), with async/background sync work off the UI path.
 
 ## Apple-Native Alignment Status (March 15, 2026)
@@ -43,13 +43,13 @@ Current alignment:
 - AppDelegate UI responsibilities were split into `AppUIController` to reduce lifecycle coupling.
 - Runtime/watcher lifecycle was split into `SyncRuntimeController` to reduce AppDelegate orchestration load.
 - Startup dependency composition was split into `AppStartupComposer`.
-- Native app commands/shortcuts are wired via `AppCommandController` (Dashboard, Preferences, Pause/Resume, Quit).
+- Native app commands/shortcuts are wired via SwiftUI `Commands` (Dashboard, Preferences, Pause/Resume, Quit).
 - Dashboard now uses a split-view desktop layout with selectable source detail.
-- Preferences layout now uses Auto Layout (`NSGridView`) instead of manual frame math.
+- Preferences now run as a SwiftUI scene (`PreferencesView`) with source + connection tabs.
 
 Not yet aligned (next targets):
 
-- The app is AppKit-first with SwiftUI-hosted views, but not fully scene-driven SwiftUI (`Window`/`MenuBarExtra`) yet.
+- `MenuBarPopoverView` still contains minor legacy close-control behavior from earlier popover flow that can be simplified for pure `MenuBarExtra`.
 - README-level architecture is now documented, but automated architecture checks (lint/test assertions around thread confinement and UI boundaries) are not in place yet.
 
 ## Structure (Living)
