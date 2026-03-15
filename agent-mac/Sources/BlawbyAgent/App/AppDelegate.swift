@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var calendarStatusDisplay = "n/a"
     private var syncActivated = false
     private var syncRuntimeStarted = false
+    private var bootstrapTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -78,9 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             self.webSocketPublisher = webSocketPublisher
 
             menuBar = MenuBarController(
-                activateSync: { [weak self] in self?.activateSync() },
-                syncNow: { [weak self] in self?.syncNow() },
-                backfill: { [weak self] in self?.backfillNow() },
+                toggleSync: { [weak self] in self?.toggleSync() },
                 preferences: { [weak self] in self?.openPreferences() }
             )
 
@@ -120,33 +119,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             configureLoginItemRegistration(logger: logger)
         } catch {
             fputs("BlawbyAgent startup failed: \(error.localizedDescription)\n", stderr)
-        }
-    }
-
-    @MainActor
-    private func syncNow() {
-        guard syncActivated else { return }
-        guard let syncCoordinator else { return }
-        Task {
-            await syncCoordinator.runMailSync()
-            await syncCoordinator.runCalendarSync()
-            await syncCoordinator.drainOutboundQueue()
-            await MainActor.run {
-                self.updateMenu()
-            }
-        }
-    }
-
-    @MainActor
-    private func backfillNow() {
-        guard syncActivated else { return }
-        guard let syncCoordinator else { return }
-        Task {
-            await syncCoordinator.runMailBackfill(days: 90, limit: 1200)
-            await syncCoordinator.drainOutboundQueue()
-            await MainActor.run {
-                self.updateMenu()
-            }
         }
     }
 
@@ -225,10 +197,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     }
 
     @MainActor
-    private func activateSync() {
-        guard !syncActivated else { return }
-        syncActivated = true
-        UserDefaults.standard.set(true, forKey: Preferences.Keys.syncActivated)
+    private func toggleSync() {
+        syncActivated.toggle()
+        UserDefaults.standard.set(syncActivated, forKey: Preferences.Keys.syncActivated)
+
+        if !syncActivated {
+            stopSyncRuntime()
+            connectionDisplay = "paused"
+            syncDisplay = "inactive (paused)"
+            bootstrapStatusDisplay = "paused"
+            updateMenu()
+            return
+        }
+
         guard
             let coordinator = syncCoordinator,
             let mailWatcher = mailWatcher,
@@ -269,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         mailWatcher.startObserving { [weak self] in
             Task {
                 guard let self else { return }
+                guard self.syncActivated else { return }
                 await self.syncCoordinator?.runMailSync()
                 await MainActor.run {
                     self.mailProcessedToday += 1
@@ -280,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         calendarWatcher.startObserving { [weak self] in
             Task {
                 guard let self else { return }
+                guard self.syncActivated else { return }
                 await self.syncCoordinator?.runCalendarSync()
                 await MainActor.run {
                     self.calendarSynced += 1
@@ -298,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         messagesReader.start { [weak self] payload in
             Task {
                 guard let self else { return }
+                guard self.syncActivated else { return }
                 await self.syncCoordinator?.publishRawPayload(type: "message", json: payload)
                 await MainActor.run {
                     self.updateMenu()
@@ -305,11 +289,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             }
         }
 
-        Task.detached {
+        bootstrapTask = Task.detached {
             await coordinator.runInitialBootstrapSyncIfNeeded()
             await coordinator.runMailSync()
             await coordinator.runCalendarSync()
         }
+    }
+
+    private func stopSyncRuntime() {
+        guard syncRuntimeStarted else { return }
+        syncRuntimeStarted = false
+
+        bootstrapTask?.cancel()
+        bootstrapTask = nil
+        mailWatcher?.stopObserving()
+        calendarWatcher?.stopObserving()
+        messagesReader?.stop()
+        webSocketPublisher?.disconnect()
     }
 
     private func configureLoginItemRegistration(logger: Logger) {

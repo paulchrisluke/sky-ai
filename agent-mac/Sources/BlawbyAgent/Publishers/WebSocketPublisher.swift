@@ -27,6 +27,7 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
     private var reconnectAttempt = 0
     private var reconnectTask: DispatchWorkItem?
     private var pingTimer: DispatchSourceTimer?
+    private var allowReconnect = true
 
     init(config: Config, logger: Logger) {
         self.config = config
@@ -47,7 +48,24 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
 
     func connect() {
         queue.async {
+            self.allowReconnect = true
             self.startConnection()
+        }
+    }
+
+    func disconnect() {
+        queue.async {
+            self.allowReconnect = false
+            self.reconnectTask?.cancel()
+            self.reconnectTask = nil
+            self.stopPingTimer()
+            self.connected = false
+            self.publishConnectionState(.disconnected)
+            self.socketTask?.cancel(with: .normalClosure, reason: nil)
+            self.socketTask = nil
+            self.session?.invalidateAndCancel()
+            self.session = nil
+            self.logger.info("websocket disconnected")
         }
     }
 
@@ -208,6 +226,7 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
     }
 
     private func scheduleReconnect() {
+        guard allowReconnect else { return }
         reconnectAttempt += 1
         let delay = min(pow(2.0, Double(reconnectAttempt - 1)) * 5.0, 60.0)
         logger.info("websocket reconnect in \(Int(delay))s")

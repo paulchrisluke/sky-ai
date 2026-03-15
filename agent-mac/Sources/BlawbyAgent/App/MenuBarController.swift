@@ -4,9 +4,7 @@ import AppKit
 final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
-    private let activateSyncHandler: () -> Void
-    private let syncNowHandler: () -> Void
-    private let backfillHandler: () -> Void
+    private let toggleSyncHandler: () -> Void
     private let preferencesHandler: () -> Void
 
     private let lastSyncItem = NSMenuItem(title: "Last synced: -", action: nil, keyEquivalent: "")
@@ -18,15 +16,11 @@ final class MenuBarController: NSObject {
     private let calendarStatusItem = NSMenuItem(title: "Calendar status: n/a", action: nil, keyEquivalent: "")
     private let mailItem = NSMenuItem(title: "Mail: 0 processed today", action: nil, keyEquivalent: "")
     private let calendarItem = NSMenuItem(title: "Calendar: 0 events synced", action: nil, keyEquivalent: "")
-    private let activateItem = NSMenuItem(title: "Activate Sync", action: #selector(activateSyncAction), keyEquivalent: "")
-    private let syncItem = NSMenuItem(title: "Sync Now", action: #selector(syncNowAction), keyEquivalent: "")
-    private let backfillItem = NSMenuItem(title: "Backfill Last 90 Days", action: #selector(backfillAction), keyEquivalent: "")
+    private let toggleSyncItem = NSMenuItem(title: "Activate Sync", action: #selector(toggleSyncAction), keyEquivalent: "")
 
-    init(activateSync: @escaping () -> Void, syncNow: @escaping () -> Void, backfill: @escaping () -> Void, preferences: @escaping () -> Void) {
+    init(toggleSync: @escaping () -> Void, preferences: @escaping () -> Void) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        self.activateSyncHandler = activateSync
-        self.syncNowHandler = syncNow
-        self.backfillHandler = backfill
+        self.toggleSyncHandler = toggleSync
         self.preferencesHandler = preferences
         super.init()
         setup()
@@ -57,14 +51,8 @@ final class MenuBarController: NSObject {
         menu.addItem(calendarItem)
         menu.addItem(.separator())
 
-        activateItem.target = self
-        menu.addItem(activateItem)
-
-        syncItem.target = self
-        menu.addItem(syncItem)
-
-        backfillItem.target = self
-        menu.addItem(backfillItem)
+        toggleSyncItem.target = self
+        menu.addItem(toggleSyncItem)
 
         let prefsItem = NSMenuItem(title: "Preferences...", action: #selector(preferencesAction), keyEquivalent: "")
         prefsItem.target = self
@@ -99,10 +87,7 @@ final class MenuBarController: NSObject {
         bootstrapItem.title = "Bootstrap: \(bootstrapStatus)"
         mailStatusItem.title = "Mail status: \(mailStatus)"
         calendarStatusItem.title = "Calendar status: \(calendarStatus)"
-        activateItem.isEnabled = !syncActivated
-        activateItem.title = syncActivated ? "Sync Activated" : "Activate Sync"
-        syncItem.isEnabled = syncActivated
-        backfillItem.isEnabled = syncActivated
+        toggleSyncItem.title = syncActivated ? "Pause Sync" : "Activate Sync"
         updateStatusIcon(connection: connection, syncState: syncState)
     }
 
@@ -133,16 +118,8 @@ final class MenuBarController: NSObject {
         button.title = "Blawby"
     }
 
-    @objc private func syncNowAction() {
-        syncNowHandler()
-    }
-
-    @objc private func activateSyncAction() {
-        activateSyncHandler()
-    }
-
-    @objc private func backfillAction() {
-        backfillHandler()
+    @objc private func toggleSyncAction() {
+        toggleSyncHandler()
     }
 
     @objc private func preferencesAction() {

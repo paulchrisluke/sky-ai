@@ -41,6 +41,16 @@ final class MailWatcher: @unchecked Sendable {
         logger.info("mail observer started (distributed notification + 15m safety)")
     }
 
+    func stopObserving() {
+        if let observer = distributedObserver {
+            DistributedNotificationCenter.default().removeObserver(observer)
+            distributedObserver = nil
+        }
+        safetyTimer?.cancel()
+        safetyTimer = nil
+        logger.info("mail observer stopped")
+    }
+
     func fetchNewMessages() async -> [RawMessage] {
         await withCheckedContinuation { continuation in
             workQueue.async { [self] in

@@ -70,6 +70,16 @@ final class CalendarWatcher: @unchecked Sendable {
         }
     }
 
+    func stopObserving() {
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+            self.observer = nil
+        }
+        safetyTimer?.cancel()
+        safetyTimer = nil
+        logger.info("calendar observer stopped")
+    }
+
     func fetchUnsentPayloads(backfill: Bool) async throws -> [CalendarPayload] {
         try await ensureAccess()
         return buildUnsentPayloads(backfill: backfill)

@@ -96,6 +96,18 @@ final class MessagesReader: @unchecked Sendable {
         logger.info("messages watcher started")
     }
 
+    func stop() {
+        source?.cancel()
+        source = nil
+        pollTimer?.cancel()
+        pollTimer = nil
+        if fileDescriptor >= 0 {
+            close(fileDescriptor)
+            fileDescriptor = -1
+        }
+        logger.info("messages watcher stopped")
+    }
+
     private func drainPendingMessages(trigger: String, onChange: @escaping @Sendable (String) -> Void) {
         var total = 0
         var batches = 0

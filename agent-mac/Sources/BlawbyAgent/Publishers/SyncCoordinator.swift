@@ -186,6 +186,10 @@ final class SyncCoordinator: @unchecked Sendable {
         logger.info("[sync] bootstrap mail backfill starting horizon=\(horizon) cursorEnd=\(cursorEnd)")
 
         while cursorEnd > horizon {
+            if Task.isCancelled {
+                logger.info("[sync] bootstrap mail backfill cancelled")
+                return
+            }
             guard let chunkStart = Calendar.current.date(byAdding: .day, value: -bootstrapMailChunkDays, to: cursorEnd) else {
                 logger.error("[sync] bootstrap mail backfill failed: invalid chunk date")
                 return
@@ -204,6 +208,10 @@ final class SyncCoordinator: @unchecked Sendable {
             // Drain each 30-day window in paged slices before advancing the global cursor.
             var windowCursorEnd = windowEnd
             while windowCursorEnd > windowStart {
+                if Task.isCancelled {
+                    logger.info("[sync] bootstrap mail backfill cancelled")
+                    return
+                }
                 guard beginMailSync(mode: "backfill") else {
                     logger.info("[sync] bootstrap mail backfill paused: mail sync already active")
                     publishStatus()
