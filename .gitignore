@@ -13,3 +13,4 @@ data/*.json
 agent-mac/.build/
 agent-mac/.swiftpm/
 agent-mac/.DS_Store
+*.xcuserstate
