@@ -1,5 +1,5 @@
 import { extractBearerToken, verifyAccessJwtClaims, type AccessAuthEnv } from '../workers/shared/auth';
-import { ingestCalendarEventsCore, ingestMailThreadCore } from '../workers/shared/ingestCore';
+import { ingestCalendarEventsCore } from '../workers/shared/ingestCore';
 import { routeAgentRequest } from 'agents';
 import { BlawbyAgent as BlawbyAgentBase } from '../workers/agents/blawby';
 
@@ -86,7 +86,11 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/ingest/mail-thread') {
       if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
-      return ingestMailThread(request, env);
+      return json({
+        ok: false,
+        error: 'deprecated_endpoint',
+        message: 'Raw mail-thread ingest is deprecated. Use /ingest/entities from the native Mac agent.'
+      }, 410);
     }
 
     if (request.method === 'POST' && url.pathname === '/mail/backfill') {

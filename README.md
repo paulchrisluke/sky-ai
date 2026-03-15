@@ -123,7 +123,7 @@ Use the auto-generated Worker domain by default:
 
 ## Embedding Recovery
 
-- `POST /ingest/mail-thread` never fails due to embedding quota; it stores mail and enqueues embedding work.
+- Native flow uses `POST /ingest/entities` for structured ingest from `agent-mac`.
 - Cron drains embedding retries every 15 minutes.
 - Cron evaluates local-time daily briefing every hour and enqueues exactly once per local day at 7am workspace-local time.
 - You can manually trigger processing:

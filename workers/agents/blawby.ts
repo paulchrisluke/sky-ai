@@ -1,5 +1,5 @@
 import { Agent } from 'agents';
-import { ingestCalendarEventsCore, ingestMailThreadCore, type JsonRecord } from '../shared/ingestCore';
+import { ingestCalendarEventsCore, type JsonRecord } from '../shared/ingestCore';
 
 type BlawbyEnv = Cloudflare.Env & {
   SKY_DB: D1Database;
@@ -61,11 +61,6 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
     }
 
     const type = typeof payload.type === 'string' ? payload.type : '';
-    if (type === 'email') {
-      await ingestMailThreadCore(this.env, payload);
-      await this.skillImmediateContext();
-      return;
-    }
     if (type === 'entities') {
       const workspaceId = typeof payload.workspaceId === 'string' && payload.workspaceId ? payload.workspaceId : 'default';
       const accountId = typeof payload.accountId === 'string' ? payload.accountId : '';
