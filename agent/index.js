@@ -180,10 +180,12 @@ async function runImapIdleLoop(account, state, ws, stopSignal) {
 
   const accountState = (state.accounts[account.id] ||= { mailboxes: {} });
   await client.connect();
+  console.log(`[email-sync] imap connected for ${account.email}`);
   try {
     while (!stopSignal.stopped && ws.readyState === WebSocket.OPEN) {
       await syncAllMailboxes(client, account, accountState, ws, state);
       await client.mailboxOpen('INBOX', { readOnly: true });
+      console.log(`[email-sync] entering idle for ${account.email}`);
       await Promise.race([
         client.idle(),
         stopSignal.closed
