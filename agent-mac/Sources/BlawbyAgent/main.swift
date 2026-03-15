@@ -13,29 +13,46 @@ do {
     let localStore = try LocalStore(baseDirectory: baseDir)
     let configStore = try ConfigStore(baseDirectory: baseDir)
     let config = configStore.load()
-    let entityExtractor = EntityExtractor(logger: logger)
+    let preferences = Preferences.load(config: config)
+    let entityExtractor = EntityExtractor(apiKey: preferences.openaiApiKey, logger: logger)
     let mailProcessor = MailProcessor(localStore: localStore, extractor: entityExtractor)
+    let mailWatcher = MailWatcher(configStore: configStore, localStore: localStore, logger: logger)
+    let calendarWatcher = CalendarWatcher(config: config, localStore: localStore, logger: logger)
 
     logger.info("starting BlawbyAgent")
 
-    let webSocket = AgentWebSocketClient(config: config, logger: logger)
-
-    let calendarWatcher = CalendarWatcher(config: config, localStore: localStore, logger: logger) { payload in
-        webSocket.enqueue(payload)
-    }
-
-    let mailWatcher = MailWatcher(
-        configStore: configStore,
+    let webSocketPublisher = WebSocketPublisher(config: config, logger: logger)
+    let syncCoordinator = SyncCoordinator(
+        config: config,
         localStore: localStore,
+        webSocketPublisher: webSocketPublisher,
+        mailWatcher: mailWatcher,
         mailProcessor: mailProcessor,
+        calendarWatcher: calendarWatcher,
         logger: logger
-    ) { payload in
-        webSocket.enqueue(payload)
-    }
+    )
 
-    webSocket.connect()
-    calendarWatcher.start()
-    mailWatcher.start()
+    webSocketPublisher.onConnected = {
+        Task { await syncCoordinator.drainOutboundQueue() }
+    }
+    webSocketPublisher.connect()
+
+    Task { await syncCoordinator.runMailSync() }
+    Task { await syncCoordinator.runCalendarSync() }
+
+    let mailTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+    mailTimer.schedule(deadline: .now() + 120, repeating: 120)
+    mailTimer.setEventHandler {
+        Task { await syncCoordinator.runMailSync() }
+    }
+    mailTimer.resume()
+
+    let calendarTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+    calendarTimer.schedule(deadline: .now() + 900, repeating: 900)
+    calendarTimer.setEventHandler {
+        Task { await syncCoordinator.runCalendarSync() }
+    }
+    calendarTimer.resume()
 
     RunLoop.main.run()
 } catch {

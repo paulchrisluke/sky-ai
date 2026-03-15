@@ -248,4 +248,18 @@ final class LocalStore {
             fatalError("LocalStore.incrementPayloadAttempts failed: \(error)")
         }
     }
+
+    func payloadAttempts(_ id: String) -> Int {
+        do {
+            return try dbQueue.read { db in
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT attempts FROM outbound_queue WHERE id = ?",
+                    arguments: [id]
+                ) ?? 0
+            }
+        } catch {
+            fatalError("LocalStore.payloadAttempts failed: \(error)")
+        }
+    }
 }

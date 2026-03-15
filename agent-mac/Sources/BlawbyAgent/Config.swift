@@ -5,6 +5,7 @@ struct Config: Codable {
     let apiKey: String
     let workspaceId: String
     let accountId: String
+    let openaiApiKey: String?
 }
 
 enum ConfigError: Error, LocalizedError {

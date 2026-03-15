@@ -115,6 +115,11 @@ export default {
       return ingestCalendarEvents(request, env);
     }
 
+    if (request.method === 'POST' && url.pathname === '/ingest/entities') {
+      if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
+      return ingestEntities(request, env);
+    }
+
     if (request.method === 'POST' && url.pathname === '/mail/send') {
       if (!(await authorizeHttpRequest(request, env)).ok) return unauthorized();
       return queueOutboundMail(request, env);
@@ -560,6 +565,96 @@ async function ingestCalendarEvents(request: Request, env: Env): Promise<Respons
     const payload = (await request.json()) as JsonRecord;
     const result = await ingestCalendarEventsCore(env, payload);
     return json({ ok: true, upserted: result.upserted, skipped: result.skipped });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return json({ ok: false, error: message }, 400);
+  }
+}
+
+async function ingestEntities(request: Request, env: Env): Promise<Response> {
+  try {
+    const payload = (await request.json()) as JsonRecord;
+    const workspaceId = stringOr(payload.workspaceId) || 'default';
+    const accountId = stringOr(payload.accountId);
+    const entities = Array.isArray(payload.entities) ? payload.entities as JsonRecord[] : [];
+
+    if (!accountId) return json({ ok: false, error: 'accountId is required' }, 400);
+    if (entities.length === 0) return json({ ok: true, upserted: 0, skipped: 0 });
+
+    await env.SKY_DB
+      .prepare(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_email_entities_upsert_key
+         ON email_entities(workspace_id, account_id, message_id, entity_type)`
+      )
+      .run();
+
+    let upserted = 0;
+    let skipped = 0;
+
+    for (const item of entities) {
+      const messageId = stringOr(item.messageId) || stringOr(item.message_id);
+      const entityType = stringOr(item.entityType) || stringOr(item.entity_type);
+      const direction = stringOr(item.direction) || 'unknown';
+      const status = stringOr(item.status) || 'unknown';
+      const riskLevel = stringOr(item.riskLevel) || stringOr(item.risk_level) || 'low';
+      const confidence = Number(item.confidence ?? 0.5);
+
+      if (!messageId || !entityType) {
+        skipped += 1;
+        continue;
+      }
+
+      await env.SKY_DB
+        .prepare(
+          `INSERT INTO email_entities
+           (id, workspace_id, account_id, message_id, thread_id, entity_type, direction,
+            counterparty_name, counterparty_email, amount_cents, currency, due_date,
+            reference_number, status, action_required, action_description, risk_level,
+            confidence, raw_json, extracted_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           ON CONFLICT(workspace_id, account_id, message_id, entity_type)
+           DO UPDATE SET
+             direction = excluded.direction,
+             counterparty_name = excluded.counterparty_name,
+             counterparty_email = excluded.counterparty_email,
+             amount_cents = excluded.amount_cents,
+             currency = excluded.currency,
+             due_date = excluded.due_date,
+             reference_number = excluded.reference_number,
+             status = excluded.status,
+             action_required = excluded.action_required,
+             action_description = excluded.action_description,
+             risk_level = excluded.risk_level,
+             confidence = excluded.confidence,
+             raw_json = excluded.raw_json,
+             extracted_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP`
+        )
+        .bind(
+          stringOr(item.id) || crypto.randomUUID(),
+          workspaceId,
+          accountId,
+          messageId,
+          entityType,
+          direction,
+          stringOr(item.counterpartyName) || stringOr(item.counterparty_name),
+          stringOr(item.counterpartyEmail) || stringOr(item.counterparty_email),
+          numberOr(item.amountCents ?? item.amount_cents),
+          stringOr(item.currency),
+          stringOr(item.dueDate) || stringOr(item.due_date),
+          stringOr(item.referenceNumber) || stringOr(item.reference_number),
+          status,
+          item.actionRequired === true || item.action_required === true ? 1 : 0,
+          stringOr(item.actionDescription) || stringOr(item.action_description),
+          riskLevel,
+          Number.isFinite(confidence) ? confidence : 0.5,
+          JSON.stringify(item)
+        )
+        .run();
+      upserted += 1;
+    }
+
+    return json({ ok: true, upserted, skipped });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return json({ ok: false, error: message }, 400);

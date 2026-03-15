@@ -31,72 +31,72 @@ final class CalendarWatcher {
     private let config: Config
     private let localStore: LocalStore
     private let logger: Logger
-    private let onPayload: (String) -> Void
     private let eventStore = EKEventStore()
     private let iso = ISO8601DateFormatter()
-    private var storeObserver: NSObjectProtocol?
+    private var hasAccess = false
 
-    init(config: Config, localStore: LocalStore, logger: Logger, onPayload: @escaping (String) -> Void) {
+    init(config: Config, localStore: LocalStore, logger: Logger) {
         self.config = config
         self.localStore = localStore
         self.logger = logger
-        self.onPayload = onPayload
         self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
 
-    func start() {
-        requestAccess()
+    func fetchUnsentPayloads() async throws -> [CalendarPayload] {
+        try await ensureAccess()
+        return buildUnsentPayloads()
     }
 
-    private func requestAccess() {
+    func markPayloadEventsSent(_ payload: CalendarPayload) {
+        for event in payload.events {
+            localStore.markEventSent(uid: event.uid, calendarId: payload.calendarId)
+        }
+    }
+
+    private func ensureAccess() async throws {
+        if hasAccess {
+            return
+        }
         if #available(macOS 14.0, *) {
-            eventStore.requestFullAccessToEvents { [weak self] granted, error in
-                guard let self else { return }
-                if let error {
-                    self.logger.error("calendar access error: \(error.localizedDescription)")
-                    return
+            let granted: Bool = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
+                eventStore.requestFullAccessToEvents { granted, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    continuation.resume(returning: granted)
                 }
-                guard granted else {
-                    self.logger.error("calendar access denied")
-                    return
-                }
-                self.startObserving()
-                self.refetchAndEmitChanges()
             }
+            if !granted {
+                throw NSError(
+                    domain: "CalendarWatcher",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "calendar access denied"]
+                )
+            }
+            hasAccess = true
         } else {
-            logger.error("requestFullAccessToEvents requires macOS 14+")
-            exit(1)
+            throw NSError(
+                domain: "CalendarWatcher",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "requestFullAccessToEvents requires macOS 14+"]
+            )
         }
     }
 
-    private func startObserving() {
-        storeObserver = NotificationCenter.default.addObserver(
-            forName: .EKEventStoreChanged,
-            object: eventStore,
-            queue: nil
-        ) { [weak self] _ in
-            self?.handleStoreChanged()
-        }
-        logger.info("calendar observer registered")
-    }
-
-    private func handleStoreChanged() {
-        logger.info("calendar store changed")
-        refetchAndEmitChanges()
-    }
-
-    private func refetchAndEmitChanges() {
+    private func buildUnsentPayloads() -> [CalendarPayload] {
         let now = Date()
         guard let start = Calendar.current.date(byAdding: .day, value: -7, to: now),
               let end = Calendar.current.date(byAdding: .day, value: 30, to: now) else {
             logger.error("calendar date range generation failed")
-            return
+            return []
         }
 
         let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
         let events = eventStore.events(matching: predicate)
 
         let grouped = Dictionary(grouping: events, by: { $0.calendar.calendarIdentifier })
+        var out: [CalendarPayload] = []
 
         for calendar in eventStore.calendars(for: .event) {
             let calendarEvents = grouped[calendar.calendarIdentifier] ?? []
@@ -107,7 +107,8 @@ final class CalendarWatcher {
                 continue
             }
 
-            let payload = CalendarPayload(
+            out.append(
+                CalendarPayload(
                 type: "calendar",
                 workspaceId: config.workspaceId,
                 accountId: config.accountId,
@@ -138,22 +139,9 @@ final class CalendarWatcher {
                         rawIcal: nil
                     )
                 }
-            )
-
-            do {
-                let data = try JSONEncoder().encode(payload)
-                guard let json = String(data: data, encoding: .utf8) else { continue }
-                logger.info(
-                    "calendar payload sent calendar=\(calendar.title) calendarId=\(calendar.calendarIdentifier) eventCount=\(unsentEvents.count)"
-                )
-                onPayload(json)
-                for event in unsentEvents {
-                    localStore.markEventSent(uid: event.calendarItemIdentifier, calendarId: calendar.calendarIdentifier)
-                }
-            } catch {
-                logger.error("calendar encode error for \(calendar.title): \(error.localizedDescription)")
-            }
+            ))
         }
+        return out
     }
 
     private func participantStatusString(_ status: EKParticipantStatus) -> String {

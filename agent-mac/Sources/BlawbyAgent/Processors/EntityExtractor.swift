@@ -92,10 +92,12 @@ enum EntityExtractorError: Error {
 }
 
 final class EntityExtractor {
+    private let apiKey: String?
     private let logger: Logger
     private let iso: ISO8601DateFormatter
 
-    init(logger: Logger) {
+    init(apiKey: String?, logger: Logger) {
+        self.apiKey = apiKey
         self.logger = logger
         self.iso = ISO8601DateFormatter()
         self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -106,7 +108,7 @@ final class EntityExtractor {
             return []
         }
 
-        guard let apiKey = Preferences.openAIAPIKey else {
+        guard let apiKey else {
             throw EntityExtractorError.missingOpenAIKey
         }
 

@@ -1,13 +1,18 @@
 import Foundation
 
-enum Preferences {
-    static var openAIAPIKey: String? {
-        if let stored = UserDefaults.standard.string(forKey: "OPENAI_API_KEY"), !stored.isEmpty {
-            return stored
+struct Preferences {
+    let openaiApiKey: String?
+
+    static func load(config: Config) -> Preferences {
+        if let stored = UserDefaults.standard.string(forKey: "openaiApiKey"), !stored.isEmpty {
+            return Preferences(openaiApiKey: stored)
+        }
+        if let fromConfig = config.openaiApiKey, !fromConfig.isEmpty {
+            return Preferences(openaiApiKey: fromConfig)
         }
         if let envValue = ProcessInfo.processInfo.environment["OPENAI_API_KEY"], !envValue.isEmpty {
-            return envValue
+            return Preferences(openaiApiKey: envValue)
         }
-        return nil
+        return Preferences(openaiApiKey: nil)
     }
 }

@@ -66,6 +66,78 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
       await this.skillImmediateContext();
       return;
     }
+    if (type === 'entities') {
+      const workspaceId = typeof payload.workspaceId === 'string' && payload.workspaceId ? payload.workspaceId : 'default';
+      const accountId = typeof payload.accountId === 'string' ? payload.accountId : '';
+      const entities = Array.isArray(payload.entities) ? payload.entities as JsonRecord[] : [];
+      if (!accountId || entities.length === 0) {
+        return;
+      }
+
+      await this.env.SKY_DB
+        .prepare(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_email_entities_upsert_key
+           ON email_entities(workspace_id, account_id, message_id, entity_type)`
+        )
+        .run();
+
+      for (const entity of entities) {
+        const messageId = typeof entity.messageId === 'string' ? entity.messageId : (typeof entity.message_id === 'string' ? entity.message_id : '');
+        const entityType = typeof entity.entityType === 'string' ? entity.entityType : (typeof entity.entity_type === 'string' ? entity.entity_type : '');
+        if (!messageId || !entityType) continue;
+
+        await this.env.SKY_DB
+          .prepare(
+            `INSERT INTO email_entities
+             (id, workspace_id, account_id, message_id, thread_id, entity_type, direction,
+              counterparty_name, counterparty_email, amount_cents, currency, due_date,
+              reference_number, status, action_required, action_description, risk_level,
+              confidence, raw_json, extracted_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             ON CONFLICT(workspace_id, account_id, message_id, entity_type)
+             DO UPDATE SET
+               direction = excluded.direction,
+               counterparty_name = excluded.counterparty_name,
+               counterparty_email = excluded.counterparty_email,
+               amount_cents = excluded.amount_cents,
+               currency = excluded.currency,
+               due_date = excluded.due_date,
+               reference_number = excluded.reference_number,
+               status = excluded.status,
+               action_required = excluded.action_required,
+               action_description = excluded.action_description,
+               risk_level = excluded.risk_level,
+               confidence = excluded.confidence,
+               raw_json = excluded.raw_json,
+               extracted_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP`
+          )
+          .bind(
+            typeof entity.id === 'string' && entity.id ? entity.id : crypto.randomUUID(),
+            workspaceId,
+            accountId,
+            messageId,
+            entityType,
+            typeof entity.direction === 'string' ? entity.direction : 'unknown',
+            typeof entity.counterpartyName === 'string' ? entity.counterpartyName : (typeof entity.counterparty_name === 'string' ? entity.counterparty_name : null),
+            typeof entity.counterpartyEmail === 'string' ? entity.counterpartyEmail : (typeof entity.counterparty_email === 'string' ? entity.counterparty_email : null),
+            typeof entity.amountCents === 'number' ? entity.amountCents : (typeof entity.amount_cents === 'number' ? entity.amount_cents : null),
+            typeof entity.currency === 'string' ? entity.currency : null,
+            typeof entity.dueDate === 'string' ? entity.dueDate : (typeof entity.due_date === 'string' ? entity.due_date : null),
+            typeof entity.referenceNumber === 'string' ? entity.referenceNumber : (typeof entity.reference_number === 'string' ? entity.reference_number : null),
+            typeof entity.status === 'string' ? entity.status : 'unknown',
+            entity.actionRequired === true || entity.action_required === true ? 1 : 0,
+            typeof entity.actionDescription === 'string' ? entity.actionDescription : (typeof entity.action_description === 'string' ? entity.action_description : null),
+            typeof entity.riskLevel === 'string' ? entity.riskLevel : (typeof entity.risk_level === 'string' ? entity.risk_level : 'low'),
+            typeof entity.confidence === 'number' ? entity.confidence : 0.5,
+            JSON.stringify(entity)
+          )
+          .run();
+      }
+
+      await this.skillImmediateContext();
+      return;
+    }
     if (type === 'calendar') {
       await ingestCalendarEventsCore(this.env, payload);
       await this.skillImmediateContext();

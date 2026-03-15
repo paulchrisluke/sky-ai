@@ -1,6 +1,13 @@
 import Foundation
 
-final class AgentWebSocketClient: NSObject, URLSessionWebSocketDelegate {
+enum WebSocketPublisherError: Error {
+    case disconnected
+    case invalidPayload
+}
+
+final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate {
+    var onConnected: (() -> Void)?
+
     private let config: Config
     private let logger: Logger
     private let queue = DispatchQueue(label: "com.blawby.agent.websocket")
@@ -12,7 +19,6 @@ final class AgentWebSocketClient: NSObject, URLSessionWebSocketDelegate {
     private var reconnectAttempt = 0
     private var reconnectTask: DispatchWorkItem?
     private var pingTimer: DispatchSourceTimer?
-    private var outboundQueue: [String] = []
 
     init(config: Config, logger: Logger) {
         self.config = config
@@ -25,11 +31,49 @@ final class AgentWebSocketClient: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
-    func enqueue(_ message: String) {
-        queue.async {
-            self.outboundQueue.append(message)
-            self.flushQueueIfConnected()
+    func isConnected() -> Bool {
+        queue.sync { connected }
+    }
+
+    func send(type: String, payload: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                guard self.connected, let task = self.socketTask else {
+                    continuation.resume(throwing: WebSocketPublisherError.disconnected)
+                    return
+                }
+
+                guard let message = self.normalizedMessage(type: type, payload: payload) else {
+                    continuation.resume(throwing: WebSocketPublisherError.invalidPayload)
+                    return
+                }
+
+                task.send(.string(message)) { error in
+                    if let error {
+                        self.queue.async {
+                            self.handleDisconnect(logMessage: "websocket send error \(error.localizedDescription)")
+                        }
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    continuation.resume(returning: ())
+                }
+            }
         }
+    }
+
+    private func normalizedMessage(type: String, payload: String) -> String? {
+        guard let data = payload.data(using: .utf8) else {
+            return nil
+        }
+        guard var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        object["type"] = type
+        guard let normalized = try? JSONSerialization.data(withJSONObject: object) else {
+            return nil
+        }
+        return String(data: normalized, encoding: .utf8)
     }
 
     private func startConnection() {
@@ -99,21 +143,6 @@ final class AgentWebSocketClient: NSObject, URLSessionWebSocketDelegate {
         }
     }
 
-    private func flushQueueIfConnected() {
-        guard connected, let task = socketTask else { return }
-        while !outboundQueue.isEmpty {
-            let message = outboundQueue.removeFirst()
-            task.send(.string(message)) { [weak self] error in
-                guard let self else { return }
-                if let error {
-                    self.queue.async {
-                        self.handleDisconnect(logMessage: "websocket send error \(error.localizedDescription)")
-                    }
-                }
-            }
-        }
-    }
-
     private func startPingTimer() {
         pingTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -131,14 +160,18 @@ final class AgentWebSocketClient: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func sendPing() {
-        guard connected else { return }
-        let payload = ["type": "ping"]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+        guard connected, let task = socketTask else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: ["type": "ping"]),
               let json = String(data: data, encoding: .utf8) else {
             return
         }
-        logger.info("websocket ping")
-        enqueue(json)
+        task.send(.string(json)) { [weak self] error in
+            if let error {
+                self?.queue.async {
+                    self?.handleDisconnect(logMessage: "websocket ping error \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     private func scheduleReconnect() {
@@ -176,7 +209,7 @@ final class AgentWebSocketClient: NSObject, URLSessionWebSocketDelegate {
             self.reconnectAttempt = 0
             self.logger.info("websocket connected")
             self.startPingTimer()
-            self.flushQueueIfConnected()
+            self.onConnected?()
         }
     }
 

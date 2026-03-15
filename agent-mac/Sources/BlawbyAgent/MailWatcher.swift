@@ -1,55 +1,25 @@
 import Foundation
 import ScriptingBridge
 
-struct EntitiesPayload: Codable {
-    let type: String
-    let entities: [ExtractedEntity]
-}
-
 final class MailWatcher {
     private let configStore: ConfigStore
     private let localStore: LocalStore
-    private let mailProcessor: MailProcessor
     private let logger: Logger
-    private let onPayload: (String) -> Void
-    private let queue = DispatchQueue(label: "com.blawby.agent.mail")
-    private var timer: DispatchSourceTimer?
 
     init(
         configStore: ConfigStore,
         localStore: LocalStore,
-        mailProcessor: MailProcessor,
-        logger: Logger,
-        onPayload: @escaping (String) -> Void
+        logger: Logger
     ) {
         self.configStore = configStore
         self.localStore = localStore
-        self.mailProcessor = mailProcessor
         self.logger = logger
-        self.onPayload = onPayload
     }
 
-    func start() {
-        queue.async {
-            self.poll()
-            self.startTimer()
-        }
-    }
-
-    private func startTimer() {
-        let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + 120, repeating: 120)
-        t.setEventHandler { [weak self] in
-            self?.poll()
-        }
-        timer = t
-        t.resume()
-    }
-
-    private func poll() {
+    func fetchNewMessages() -> [RawMessage] {
         guard let mailApp = SBApplication(bundleIdentifier: "com.apple.mail") else {
             logger.error("mail watcher failed: could not create SBApplication for Mail")
-            return
+            return []
         }
 
         let appObject = mailApp as NSObject
@@ -116,26 +86,9 @@ final class MailWatcher {
         }
 
         if rawMessages.isEmpty {
-            return
+            return []
         }
-
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let entities = try await mailProcessor.process(messages: rawMessages, workspaceId: config.workspaceId)
-                if entities.isEmpty {
-                    return
-                }
-                let payload = EntitiesPayload(type: "entities", entities: entities)
-                let data = try JSONEncoder().encode(payload)
-                guard let json = String(data: data, encoding: .utf8) else {
-                    return
-                }
-                onPayload(json)
-            } catch {
-                logger.error("mail processing failed: \(error.localizedDescription)")
-            }
-        }
+        return rawMessages
     }
 
     private func objectArray(from value: Any?) -> [NSObject] {
@@ -179,9 +132,6 @@ final class MailWatcher {
             return normalizeWhitespace(rich.string)
         }
         if let object = value as? NSObject {
-            if let text = object.value(forKey: "string") as? String {
-                return normalizeWhitespace(text)
-            }
             return normalizeWhitespace(object.description)
         }
         return ""
