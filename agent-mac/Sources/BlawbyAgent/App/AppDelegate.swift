@@ -63,7 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 openaiApiKey: prefs.openaiApiKey ?? fileConfig.openaiApiKey
             )
             self.config = config
-            syncActivated = UserDefaults.standard.bool(forKey: Preferences.Keys.syncActivated)
+            let defaults = UserDefaults.standard
+            if defaults.object(forKey: Preferences.Keys.syncActivated) == nil {
+                defaults.set(true, forKey: Preferences.Keys.syncActivated)
+            }
+            syncActivated = defaults.bool(forKey: Preferences.Keys.syncActivated)
+            logger.info("sync activated preference loaded: \(syncActivated)")
 
             let contactsReader = ContactsReader(localStore: localStore, logger: logger)
             self.contactsReader = contactsReader
@@ -167,6 +172,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     @MainActor
     private func applySyncSnapshot(_ snapshot: SyncStatusSnapshot) {
+        if !syncActivated {
+            syncDisplay = "Off"
+            syncProgressDisplay = nil
+            updateMenu()
+            return
+        }
+
         if let lastSync = snapshot.lastSyncAt {
             lastSyncDisplay = iso.string(from: lastSync)
         }
@@ -174,8 +186,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         queuePendingDisplay = snapshot.pendingPayloads
         let connectedAccounts = mailAccountNames.count
         let availableAccounts = max(knownMailAccountNames.count, connectedAccounts)
+        let bootstrapActive = snapshot.bootstrapStatus.contains("mail backfill active")
+        let bootstrapPercent = max(0, min(100, snapshot.mailBootstrapPercent))
         let mailSyncState: String
-        if snapshot.mailBootstrapWindowTotal > 0 {
+        if bootstrapActive {
+            syncProgressDisplay = bootstrapPercent
+            mailSyncState = bootstrapPercent >= 100 ? "Synced" : "Syncing"
+        } else if snapshot.mailBootstrapWindowTotal > 0 {
             let pct = Int((Double(snapshot.mailBootstrapWindowDone) / Double(snapshot.mailBootstrapWindowTotal)) * 100.0)
             let bounded = max(0, min(100, pct))
             syncProgressDisplay = bounded
@@ -231,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
         syncActivated = enabled
         UserDefaults.standard.set(syncActivated, forKey: Preferences.Keys.syncActivated)
+        logger?.info("sync activated preference updated: \(syncActivated)")
 
         if !syncActivated {
             stopSyncRuntime()

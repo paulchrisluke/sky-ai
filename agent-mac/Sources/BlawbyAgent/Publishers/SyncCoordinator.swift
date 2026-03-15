@@ -15,6 +15,7 @@ struct SyncStatusSnapshot {
     let mailQueuedTotal: Int
     let mailBootstrapWindowDone: Int
     let mailBootstrapWindowTotal: Int
+    let mailBootstrapPercent: Int
     let lastCalendarEvents: Int
     let lastCalendarDelivery: String
     let calendarCalendarsProcessed: Int
@@ -63,6 +64,7 @@ final class SyncCoordinator: @unchecked Sendable {
     private var mailQueuedTotal = 0
     private var mailBootstrapWindowDone = 0
     private var mailBootstrapWindowTotal = 0
+    private var mailBootstrapPercent = 0
     private var lastCalendarEvents = 0
     private var lastCalendarDelivery = "n/a"
     private var calendarCalendarsProcessed = 0
@@ -167,6 +169,7 @@ final class SyncCoordinator: @unchecked Sendable {
             stateQueue.sync {
                 bootstrapStatus = "completed"
                 bootstrapInProgress = false
+                mailBootstrapPercent = 100
             }
             publishStatus()
             return
@@ -210,13 +213,13 @@ final class SyncCoordinator: @unchecked Sendable {
         }
 
         var cursorEnd = localStore.bootstrapCursorDate(accountId: config.accountId, key: "mail") ?? now
+        let initialPct = bootstrapPercent(now: now, horizon: horizon, cursorEnd: cursorEnd)
         stateQueue.sync {
             let remainingDays = max(1, Int(ceil(cursorEnd.timeIntervalSince(horizon) / 86_400)))
             mailBootstrapWindowTotal = max(1, Int(ceil(Double(remainingDays) / Double(bootstrapMailChunkDays))))
             mailBootstrapWindowDone = 0
-        }
-        stateQueue.sync {
-            bootstrapStatus = "mail backfill active 0%"
+            mailBootstrapPercent = initialPct
+            bootstrapStatus = "mail backfill active \(initialPct)%"
         }
         publishStatus()
         logger.info("[sync] bootstrap mail backfill starting horizon=\(horizon) cursorEnd=\(cursorEnd)")
@@ -232,10 +235,9 @@ final class SyncCoordinator: @unchecked Sendable {
             }
             let windowStart = max(horizon, chunkStart)
             let windowEnd = cursorEnd
-            let total = now.timeIntervalSince(horizon)
-            let complete = now.timeIntervalSince(windowEnd)
-            let pct = total > 0 ? Int(max(0, min(100, (complete / total) * 100))) : 0
+            let pct = bootstrapPercent(now: now, horizon: horizon, cursorEnd: windowEnd)
             stateQueue.sync {
+                mailBootstrapPercent = pct
                 bootstrapStatus = "mail backfill active \(pct)%"
             }
             publishStatus()
@@ -299,9 +301,17 @@ final class SyncCoordinator: @unchecked Sendable {
         stateQueue.sync {
             bootstrapStatus = "mail backfill completed"
             mailBootstrapWindowDone = mailBootstrapWindowTotal
+            mailBootstrapPercent = 100
         }
         publishStatus()
         logger.info("[sync] bootstrap mail backfill completed")
+    }
+
+    private func bootstrapPercent(now: Date, horizon: Date, cursorEnd: Date) -> Int {
+        let total = now.timeIntervalSince(horizon)
+        let complete = now.timeIntervalSince(cursorEnd)
+        let pct = total > 0 ? Int((complete / total) * 100.0) : 0
+        return max(0, min(100, pct))
     }
 
     private func runCalendarSync(backfill: Bool) async {
@@ -595,6 +605,7 @@ final class SyncCoordinator: @unchecked Sendable {
                 mailQueuedTotal: mailQueuedTotal,
                 mailBootstrapWindowDone: mailBootstrapWindowDone,
                 mailBootstrapWindowTotal: mailBootstrapWindowTotal,
+                mailBootstrapPercent: mailBootstrapPercent,
                 lastCalendarEvents: lastCalendarEvents,
                 lastCalendarDelivery: lastCalendarDelivery,
                 calendarCalendarsProcessed: calendarCalendarsProcessed,
