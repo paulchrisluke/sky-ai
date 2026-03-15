@@ -126,6 +126,7 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
             return
         }
 
+        logger.info("websocket connecting to \(endpoint)")
         session?.invalidateAndCancel()
         session = nil
 

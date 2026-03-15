@@ -176,13 +176,15 @@ final class EntityExtractor: EntityExtracting {
             return []
         }
     }
-
     private func mapEntities(
         _ rows: [ExtractedEntityWire],
         workspaceId: String,
         messages: [RawMessage]
     ) -> [ExtractedEntity] {
-        let messageById = Dictionary(uniqueKeysWithValues: messages.map { ($0.messageId, $0) })
+        var messageById: [String: RawMessage] = [:]
+        for message in messages {
+            messageById[message.messageId] = message
+        }
 
         return rows.enumerated().compactMap { index, row in
             let fallbackMessageId = index < messages.count ? messages[index].messageId : nil
