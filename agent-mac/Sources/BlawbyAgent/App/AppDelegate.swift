@@ -114,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 }
 
             menuBar = MenuBarController(
+                sourceManager: sourceManager,
                 setSyncEnabled: { [weak self] enabled in self?.setSyncEnabled(enabled) },
                 preferences: { [weak self] in self?.openPreferences() }
             )

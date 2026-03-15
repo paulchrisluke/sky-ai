@@ -11,6 +11,8 @@ struct MailSourceDescriptor: Sendable {
 final class MailWatcher: @unchecked Sendable {
     private let maxMessagesToInspectPerPoll = 300
     private let maxNewMessagesPerPoll = 20
+    private let perSourceBatchSize = 25
+    private let interSourceDelayNanoseconds: UInt64 = 500_000_000
 
     private let configStore: ConfigStore
     private let logger: Logger
@@ -42,6 +44,31 @@ final class MailWatcher: @unchecked Sendable {
         }
         safetyTimer = timer
         timer.resume()
+
+        // Mail Store Investigation
+        let mailPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mail")
+        var foundVersions: [String] = []
+        for v in 2...15 {
+            let path = mailPath.appendingPathComponent("V\(v)")
+            if FileManager.default.fileExists(atPath: path.path) {
+                foundVersions.append("V\(v)")
+            }
+        }
+        logger.info("Mail Store Investigation - Root: \(mailPath.path) Found versions: \(foundVersions.joined(separator: ", "))")
+        
+        if let firstV = foundVersions.last {
+            let vPath = mailPath.appendingPathComponent(firstV)
+            let enumerator = FileManager.default.enumerator(at: vPath, includingPropertiesForKeys: nil)
+            var emlxCount = 0
+            while let file = enumerator?.nextObject() as? URL {
+                if file.pathExtension == "emlx" {
+                    emlxCount += 1
+                    if emlxCount >= 10 { break }
+                }
+            }
+            logger.info("Mail Store Investigation - Sample count in \(firstV): \(emlxCount)+")
+        }
+        
         logger.info("mail observer started (distributed notification + 15m safety)")
     }
 
@@ -124,7 +151,7 @@ final class MailWatcher: @unchecked Sendable {
                 accountId: source.accountId,
                 mailbox: source.mailbox,
                 since: recentCutoff,
-                limit: maxNewMessagesPerPoll
+                limit: perSourceBatchSize
             )
             out.append(contentsOf: messages)
             if out.count >= maxNewMessagesPerPoll {
@@ -181,19 +208,24 @@ final class MailWatcher: @unchecked Sendable {
         if messages.count == 0 {
             return nil
         }
-        var oldest: Date?
-        for item in messages {
-            guard let message = item as? NSObject else { continue }
-            guard let sent = message.value(forKey: "dateSent") as? Date else { continue }
-            if let current = oldest {
-                if sent < current {
-                    oldest = sent
-                }
-            } else {
-                oldest = sent
-            }
+        
+        // Optimization: For large mailboxes, don't iterate 27k+ messages.
+        // Usually index 0 or index (count-1) is the oldest.
+        // We'll check both and take the minimum.
+        var candidates: [Date] = []
+        
+        if let first = messages[0] as? NSObject,
+           let d1 = first.value(forKey: "dateSent") as? Date {
+            candidates.append(d1)
         }
-        return oldest
+        
+        if messages.count > 1,
+           let last = messages[messages.count - 1] as? NSObject,
+           let d2 = last.value(forKey: "dateSent") as? Date {
+            candidates.append(d2)
+        }
+
+        return candidates.min()
     }
 
     private func messageCountSync(accountId: String, mailbox: String) -> Int {
@@ -207,50 +239,122 @@ final class MailWatcher: @unchecked Sendable {
     }
 
     private func fetchMessagesSync(accountId: String, mailbox: String, since: Date, limit: Int) -> [RawMessage] {
+        logger.info("fetchMessagesSync: account=\(accountId) mailbox=\(mailbox) since=\(since) limit=\(limit)")
         guard let targetMailbox = findMailbox(accountId: accountId, mailbox: mailbox) else {
             return []
         }
-        guard let messages = targetMailbox.value(forKey: "messages") as? NSArray else {
+        guard let messages = targetMailbox.value(forKey: "messages") as? SBElementArray else {
             return []
         }
-        if messages.count == 0 || limit <= 0 {
+        
+        let count = messages.count
+        logger.info("mailbox \(mailbox) has \(count) messages materialized")
+        if count == 0 || limit <= 0 {
             return []
         }
 
-        var out: [RawMessage] = []
-        for index in 0..<messages.count {
-            guard let message = messages[index] as? NSObject else {
-                continue
+        // Optimization: Step 1 - Determine chronological order using edges.
+        var isAscending = true // index 0 is oldest
+        let d0 = (count > 0) ? (messages[0] as? NSObject)?.value(forKey: "dateSent") as? Date : nil
+        let dN = (count > 1) ? (messages[count - 1] as? NSObject)?.value(forKey: "dateSent") as? Date : nil
+        
+        if let d0, let dN {
+            isAscending = d0 < dN
+        }
+
+        // Optimization: Step 2 - Chunky scan to find indices >= since.
+        var targetIndices: [Int] = []
+        let chunkSize = 2000
+        
+        // Epoch-Jump Optimization: If we are backfilling from the start of time,
+        // we already know we want the oldest items. No need to scan 27k messages.
+        let isEpoch = since.timeIntervalSince1970 < 1000
+        if isEpoch {
+            if isAscending {
+                // Oldest at 0.
+                for i in 0..<min(limit, count) { targetIndices.append(i) }
+            } else {
+                // Oldest at count-1.
+                for i in (max(0, count-limit)..<count).reversed() { targetIndices.append(i) }
             }
-            guard let sent = message.value(forKey: "dateSent") as? Date else {
-                continue
-            }
-            if sent < since {
-                continue
-            }
-            guard let messageId = messageIdentifier(message) else {
-                continue
-            }
-            let subject = message.value(forKey: "subject") as? String ?? ""
-            let sender = message.value(forKey: "sender") as? String ?? ""
-            let body = truncate(subject, maxLength: 500)
-            let toRecipients = recipientEmails(from: message.value(forKey: "toRecipients"))
-            out.append(
-                RawMessage(
-                    messageId: messageId,
-                    accountId: accountId,
-                    subject: subject,
-                    from: sender,
-                    to: toRecipients,
-                    date: sent,
-                    bodyText: body,
-                    mailbox: mailbox
-                )
-            )
-            if out.count >= limit {
-                break
+        } else {
+            // Normal chunky scan for mid-mailbox cursor
+            if isAscending {
+                // Search forward from 0
+                for start in stride(from: 0, to: count, by: chunkSize) {
+                    let end = min(start + chunkSize, count)
+                    autoreleasepool {
+                        let chunkProxies = messages.objects(at: IndexSet(integersIn: start..<end))
+                        let chunkDates = (chunkProxies as NSArray).value(forKey: "dateSent") as? [Date] ?? []
+                        for (i, date) in chunkDates.enumerated() {
+                            if date >= since {
+                                targetIndices.append(start + i)
+                                if targetIndices.count >= limit { break }
+                            }
+                        }
+                    }
+                    if !targetIndices.isEmpty { break }
+                }
+            } else {
+                // Search backward from newest (at index 0) towards oldest (at count-1).
+                for end in stride(from: count, to: 0, by: -chunkSize) {
+                    let start = max(0, end - chunkSize)
+                    autoreleasepool {
+                        let chunkProxies = messages.objects(at: IndexSet(integersIn: start..<end))
+                        let chunkDates = (chunkProxies as NSArray).value(forKey: "dateSent") as? [Date] ?? []
+                        for i in (0..<chunkDates.count).reversed() {
+                            if chunkDates[i] >= since {
+                                targetIndices.append(start + i)
+                                if targetIndices.count >= limit { break }
+                            }
+                        }
+                    }
+                    if !targetIndices.isEmpty { break }
+                }
             }
         }
+        
+        if targetIndices.isEmpty { return [] }
+
+        // Optimization: Step 3 - Fetch properties.
+        // On very large mailboxes, objects(at:) can hang. Individual access with the Epoch-Jump
+        // is actually more reliable.
+        var out: [RawMessage] = []
+        logger.info("extracting properties from \(targetIndices.count) indices...")
+        
+        for (i, idx) in targetIndices.enumerated() {
+            autoreleasepool {
+                guard let msg = messages[idx] as? NSObject else { return }
+                
+                // Fetch basic metadata - these are generally fast
+                let sentDate = (msg.value(forKey: "dateSent") as? Date) ?? Date()
+                if sentDate >= since {
+                    let subject = (msg.value(forKey: "subject") as? String) ?? ""
+                    let sender = (msg.value(forKey: "sender") as? String) ?? ""
+                    let msgId = (msg.value(forKey: "messageId") as? String) ?? "\(idx)"
+                    
+                    // Body/Content is the O(n) or Network-Sync bottleneck.
+                    // For backfill, we use the subject as the body placeholder to keep speed high.
+                    // This allows us to index 27k messages in minutes rather than days.
+                    let body = truncate(subject, maxLength: 500)
+                    let toRecipients: [String] = [] // Skip expensive recipients during backfill
+                    
+                    out.append(RawMessage(
+                        messageId: msgId,
+                        accountId: accountId,
+                        subject: subject,
+                        from: sender,
+                        to: toRecipients,
+                        date: sentDate,
+                        bodyText: body,
+                        mailbox: mailbox
+                    ))
+                }
+                if i % 10 == 0 { logger.info("  backfill progress: \(i+1)/\(targetIndices.count)") }
+            }
+        }
+
+        logger.info("fetchMessagesSync completed: account=\(accountId) mailbox=\(mailbox) count=\(out.count)")
         return out
     }
 
@@ -302,34 +406,34 @@ final class MailWatcher: @unchecked Sendable {
 
                 var index = messages.count - 1
                 while index >= 0 {
-                    guard let message = messages[index] as? NSObject else {
-                        if index == 0 { break }
-                        index -= 1
-                        continue
-                    }
-                    if inspected >= maxInspect || rawMessages.count >= limit {
-                        break
-                    }
-                    inspected += 1
-                    if inspected % 1000 == 0 {
-                        logger.info("mail backfill progress inspected=\(inspected) matched=\(rawMessages.count) mailbox=\(mailboxName)")
-                    }
-
-                    guard let dateSent = message.value(forKey: "dateSent") as? Date else {
-                        if index == 0 { break }
-                        index -= 1
-                        continue
-                    }
-                    if dateSent < boundedStart {
-                        break
-                    }
-                    if dateSent >= boundedEnd {
-                        if index == 0 { break }
-                        index -= 1
-                        continue
-                    }
-
                     autoreleasepool {
+                        guard let message = messages[index] as? NSObject else {
+                            if index == 0 { return }
+                            index -= 1
+                            return
+                        }
+                        if inspected >= maxInspect || rawMessages.count >= limit {
+                            return
+                        }
+                        inspected += 1
+                        if inspected % 1000 == 0 {
+                            logger.info("mail backfill progress inspected=\(inspected) matched=\(rawMessages.count) mailbox=\(mailboxName)")
+                        }
+
+                        guard let dateSent = message.value(forKey: "dateSent") as? Date else {
+                            if index == 0 { return }
+                            index -= 1
+                            return
+                        }
+                        if dateSent < boundedStart {
+                            return
+                        }
+                        if dateSent >= boundedEnd {
+                            if index == 0 { return }
+                            index -= 1
+                            return
+                        }
+
                         guard let messageId = messageIdentifier(message) else {
                             return
                         }
@@ -380,11 +484,13 @@ final class MailWatcher: @unchecked Sendable {
     }
 
     private func messageIdentifier(_ message: NSObject) -> String? {
+        // Fast path: try messageId directly
         if let messageId = message.value(forKey: "messageId") as? String, !messageId.isEmpty {
             return messageId
         }
-        if let messageId = message.value(forKey: "id") as? Int {
-            return String(messageId)
+        // Fallback to internal id
+        if let internalId = message.value(forKey: "id") as? Int {
+            return String(internalId)
         }
         return nil
     }
@@ -396,14 +502,21 @@ final class MailWatcher: @unchecked Sendable {
     private func recipientEmails(from value: Any?) -> [String] {
         let recipients = objectArray(from: value)
         return recipients.compactMap { recipient in
-            let addressKeys = ["address", "emailAddress", "email"]
+            // Try 'address' first as it's the most common in Mail.app SB for recipients
+            if let email = recipient.value(forKey: "address") as? String,
+               !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return email.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            
+            // fallback
+            let addressKeys = ["emailAddress", "email"]
             for key in addressKeys {
                 if let email = recipient.value(forKey: key) as? String,
                    !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     return email.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
             }
-
+            
             if let raw = recipient.value(forKey: "name") as? String,
                let extracted = extractEmailAddress(from: raw) {
                 return extracted

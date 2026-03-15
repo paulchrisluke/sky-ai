@@ -26,8 +26,9 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
     private var loopTask: Task<Void, Never>?
     private var running = false
     private var dirtySourceIds: Set<String> = []
+    private var syncingIds: Set<String> = []
 
-    private let perSourceBatchSize = 50
+    private let perSourceBatchSize = 25
     private let interSourceDelayNanoseconds: UInt64 = 500_000_000
 
     init(
@@ -102,6 +103,22 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
     }
 
     func syncSource(_ id: String) async {
+        let shouldSync = await MainActor.run {
+            if syncingIds.contains(id) {
+                return false
+            }
+            syncingIds.insert(id)
+            return true
+        }
+        
+        guard shouldSync else { return }
+
+        defer {
+            Task { @MainActor in
+                syncingIds.remove(id)
+            }
+        }
+
         guard let source = localStore.connectedSource(id: id) else {
             return
         }
@@ -167,17 +184,46 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             return ids
         }
         return localStore.connectedSources()
-            .filter { $0.enabled }
+            .filter { source in
+                guard source.enabled else { return false }
+                
+                if source.status == "syncing" || source.status == "pending" {
+                    return true
+                }
+                
+                // Allow anything that is idle, not just if estimated > 0.
+                if source.status == "idle" {
+                    return true
+                }
+                
+                return false
+            }
             .map { $0.id }
+    }
+
+    private func isVirtualMailbox(_ name: String) -> Bool {
+        let virtuals = ["[Gmail]/All Mail", "[Gmail]/Important", "[Gmail]/Starred", "[Gmail]/Spam", "[Gmail]/Trash"]
+        return virtuals.contains(name) || name == "All Mail"
     }
 
     private func discoverMailSources() async {
         let discovered = await mailWatcher.discoverSources()
         for source in discovered {
+            if isVirtualMailbox(source.mailbox) {
+                continue
+            }
+            
             let existing = localStore.connectedSource(id: source.id)
             
             // Get message count to populate total_estimated
             let messageCount = await mailWatcher.messageCount(accountId: source.accountId, mailbox: source.mailbox)
+            
+            let updatedEstimated: Int
+            if let existing = existing, existing.totalSynced > 0, existing.totalEstimated > 0 {
+                updatedEstimated = existing.totalEstimated
+            } else {
+                updatedEstimated = messageCount
+            }
             
             localStore.upsertConnectedSource(
                 id: source.id,
@@ -186,9 +232,9 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                 sourceName: source.sourceName,
                 enabled: existing?.enabled ?? true,
                 syncCursor: existing?.syncCursor,
-                totalEstimated: existing?.totalEstimated ?? messageCount,
+                totalEstimated: updatedEstimated,
                 totalSynced: existing?.totalSynced ?? 0,
-                status: existing?.status ?? "idle",
+                status: existing?.status ?? "pending",
                 lastError: existing?.lastError
             )
         }
@@ -205,6 +251,13 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                 let oneYearAgo = Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date()
                 let events = try await calendarWatcher.fetchEvents(calendarId: source.id, since: oneYearAgo, until: Date())
                 
+                let updatedEstimated: Int
+                if let existing = existing, existing.totalSynced > 0, existing.totalEstimated > 0 {
+                    updatedEstimated = existing.totalEstimated
+                } else {
+                    updatedEstimated = events.count
+                }
+                
                 localStore.upsertConnectedSource(
                     id: id,
                     sourceType: "calendar",
@@ -212,9 +265,9 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                     sourceName: source.sourceName,
                     enabled: existing?.enabled ?? true,
                     syncCursor: existing?.syncCursor,
-                    totalEstimated: existing?.totalEstimated ?? events.count,
+                    totalEstimated: updatedEstimated,
                     totalSynced: existing?.totalSynced ?? 0,
-                    status: existing?.status ?? "idle",
+                    status: existing?.status ?? "pending",
                     lastError: existing?.lastError
                 )
             }
@@ -239,7 +292,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             syncCursor: existing?.syncCursor,
             totalEstimated: existing?.totalEstimated ?? 0,
             totalSynced: existing?.totalSynced ?? 0,
-            status: existing?.status ?? "idle",
+            status: existing?.status ?? "pending",
             lastError: existing?.lastError
         )
     }
@@ -247,22 +300,6 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
     private func syncMailSource(_ source: ConnectedSource) async throws {
         guard let parsed = parseMailSourceId(source.id) else {
             throw NSError(domain: "SourceManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "invalid mail source id: \(source.id)"])
-        }
-
-        var cursor = source.syncCursor
-        if cursor == nil {
-            guard let oldest = await mailWatcher.oldestMessageDate(accountId: parsed.accountId, mailbox: parsed.mailbox) else {
-                localStore.updateConnectedSourceSync(
-                    id: source.id,
-                    syncCursor: nil,
-                    totalEstimated: 0,
-                    totalSynced: source.totalSynced,
-                    status: "current",
-                    lastError: nil
-                )
-                return
-            }
-            cursor = oldest
         }
 
         let estimated: Int
@@ -274,16 +311,20 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
 
         localStore.updateConnectedSourceSync(
             id: source.id,
-            syncCursor: cursor,
+            syncCursor: source.syncCursor,
             totalEstimated: estimated,
             totalSynced: source.totalSynced,
             status: "syncing",
             lastError: nil
         )
+        logger.info("syncing mail source: \(source.sourceName) (estimated \(estimated))")
 
-        guard let activeCursor = cursor else {
-            return
+        var cursor = source.syncCursor
+        if cursor == nil {
+            cursor = Date(timeIntervalSince1970: 0)
         }
+        
+        let activeCursor = cursor!
 
         let batch = await mailWatcher.fetchMessages(
             accountId: parsed.accountId,
@@ -291,21 +332,31 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             since: activeCursor,
             limit: perSourceBatchSize
         )
+        logger.info("fetched \(batch.count) messages for \(source.sourceName) since \(activeCursor)")
 
         if batch.isEmpty {
+            let finalStatus = (source.totalSynced >= estimated && estimated > 0) ? "current" : "pending"
+            logger.info("batch empty for \(source.sourceName), final status: \(finalStatus)")
             localStore.updateConnectedSourceSync(
                 id: source.id,
                 syncCursor: activeCursor,
                 totalEstimated: estimated,
                 totalSynced: source.totalSynced,
-                status: "current",
+                status: finalStatus,
                 lastError: nil
             )
             return
         }
 
-        let processing = try await mailProcessor.process(messages: batch, workspaceId: config.workspaceId)
+        logger.info("processing batch of \(batch.count) messages for \(source.sourceName)")
+        let isBackfill = source.totalSynced < estimated
+        let processing = try await mailProcessor.process(messages: batch, workspaceId: config.workspaceId, skipExtraction: isBackfill)
+        if isBackfill {
+            logger.info("[sync] backfill mode: skipping local extraction for \(source.sourceName)")
+        }
+        logger.info("extraction complete for \(processing.rawMessages.count) messages, \(processing.entities.count) entities for \(source.sourceName)")
         try await publishMailPayloads(result: processing, accountId: parsed.accountId)
+        logger.info("published payloads for \(processing.rawMessages.count) messages for \(source.sourceName)")
 
         let newestDate = batch.map(\.date).max() ?? activeCursor
         let newSyncedTotal = source.totalSynced + processing.rawMessages.count
@@ -337,12 +388,13 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
         let end = Date()
         let events = try await calendarWatcher.fetchEvents(calendarId: calendarId, since: start, until: end)
         if events.isEmpty {
+            let finalStatus = (source.totalSynced >= source.totalEstimated && source.totalEstimated > 0) ? "current" : "pending"
             localStore.updateConnectedSourceSync(
                 id: source.id,
                 syncCursor: source.syncCursor,
                 totalEstimated: source.totalEstimated,
                 totalSynced: source.totalSynced,
-                status: "current",
+                status: finalStatus,
                 lastError: nil
             )
             return

@@ -20,6 +20,7 @@
 		A3D7E233E6113FDA009088F8 /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206689B593945129B37BFCD0 /* MenuBarController.swift */; };
 		AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */; };
 		AE169531AE4BFA3F8237E346 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */; };
+		B025B4C8F54811B0EF59D17D /* MenuBarPopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */; };
 		B195F2396EB9DA0B8459F1E2 /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 451B18EF815B4011EC7984E0 /* SyncCoordinator.swift */; };
 		BB15E6DFD68F10D2B575D763 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 2B16F395DEC869A73CE18AB5 /* Info.plist */; };
 		D125204F81C69D021288F9E1 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28B4C46851AA9CFB67EB06F /* main.swift */; };
@@ -65,6 +66,7 @@
 		6C784BE09AF926E1EED926D3 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
 		7172F45B5B28D80C2994749B /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
+		7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPopoverView.swift; sourceTree = "<group>"; };
 		7AD1458AF0D14F688184AE90 /* MailProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailProcessor.swift; sourceTree = "<group>"; };
 		A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinatorTests.swift; sourceTree = "<group>"; };
 		A8D04FFB67431F372BB5AF25 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
@@ -113,6 +115,7 @@
 			children = (
 				6C784BE09AF926E1EED926D3 /* AppDelegate.swift */,
 				206689B593945129B37BFCD0 /* MenuBarController.swift */,
+				7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */,
 				6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */,
 				268D5A0DF63E60EC68837921 /* SourcesView.swift */,
 			);
@@ -339,6 +342,7 @@
 				F8EB764AD635AF4AC529E989 /* MailProcessor.swift in Sources */,
 				F2B127D621F90D6157611987 /* MailWatcher.swift in Sources */,
 				A3D7E233E6113FDA009088F8 /* MenuBarController.swift in Sources */,
+				B025B4C8F54811B0EF59D17D /* MenuBarPopoverView.swift in Sources */,
 				DFFC1AC2AA62764E85066948 /* MessagesReader.swift in Sources */,
 				41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */,
 				4A85C2E7F1CF5C5BD288E20D /* PreferencesWindowController.swift in Sources */,

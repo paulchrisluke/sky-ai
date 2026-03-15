@@ -1,24 +1,25 @@
 import AppKit
+import SwiftUI
 
 @MainActor
 final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
-    private let menu = NSMenu()
+    private let popover: NSPopover
+    private let state: MenuBarState
+
+    private let sourceManager: SourceManager
     private let setSyncEnabledHandler: @MainActor (Bool) -> Void
     private let preferencesHandler: () -> Void
 
-    private let syncToggleMenuItem = NSMenuItem(title: "Sync: Off", action: #selector(syncToggleAction), keyEquivalent: "")
-    private let connectionItem = NSMenuItem(title: "Connection: Connecting", action: nil, keyEquivalent: "")
-    private let topStatusItem = NSMenuItem(title: "✓ All current", action: nil, keyEquivalent: "")
-    private let lastSyncItem = NSMenuItem(title: "Last sync: -", action: nil, keyEquivalent: "")
-
-    private let sourcesSectionMarker = NSMenuItem.separator()
-    private let footerSeparator = NSMenuItem.separator()
-
-    private var sourceItems: [NSMenuItem] = []
-
-    init(setSyncEnabled: @escaping @MainActor (Bool) -> Void, preferences: @escaping () -> Void) {
+    init(
+        sourceManager: SourceManager,
+        setSyncEnabled: @escaping @MainActor (Bool) -> Void,
+        preferences: @escaping () -> Void
+    ) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.popover = NSPopover()
+        self.state = MenuBarState()
+        self.sourceManager = sourceManager
         self.setSyncEnabledHandler = setSyncEnabled
         self.preferencesHandler = preferences
         super.init()
@@ -26,8 +27,6 @@ final class MenuBarController: NSObject {
     }
 
     private func setup() {
-        menu.autoenablesItems = false
-
         if let button = statusItem.button {
             button.title = " Blawby"
             button.imagePosition = .imageLeading
@@ -35,35 +34,24 @@ final class MenuBarController: NSObject {
                 image.isTemplate = true
                 button.image = image
             }
+            button.action = #selector(togglePopover(_:))
+            button.target = self
         }
 
-        syncToggleMenuItem.target = self
-        menu.addItem(syncToggleMenuItem)
+        let popoverView = MenuBarPopoverView(
+            sourceManager: sourceManager,
+            state: state,
+            onClose: { [weak self] in
+                self?.popover.performClose(nil)
+            },
+            onOpenPreferences: { [weak self] in
+                self?.popover.performClose(nil)
+                self?.preferencesHandler()
+            }
+        )
 
-        connectionItem.isEnabled = false
-        menu.addItem(connectionItem)
-
-        topStatusItem.isEnabled = false
-        menu.addItem(topStatusItem)
-
-        menu.addItem(.separator())
-        menu.addItem(sourcesSectionMarker)
-
-        menu.addItem(footerSeparator)
-        lastSyncItem.isEnabled = false
-        menu.addItem(lastSyncItem)
-
-        menu.addItem(.separator())
-        let prefsItem = NSMenuItem(title: "Preferences...", action: #selector(preferencesAction), keyEquivalent: "")
-        prefsItem.target = self
-        menu.addItem(prefsItem)
-
-        menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(quitAction), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-
-        statusItem.menu = menu
+        popover.contentViewController = NSHostingController(rootView: popoverView)
+        popover.behavior = .transient
     }
 
     func update(
@@ -72,40 +60,11 @@ final class MenuBarController: NSObject {
         syncActivated: Bool,
         sources: [ConnectedSource]
     ) {
-        connectionItem.title = "Connection: \(connection)"
-        syncToggleMenuItem.title = syncActivated ? "Sync: On" : "Sync: Off"
-        syncToggleMenuItem.state = syncActivated ? .on : .off
-        lastSyncItem.title = "Last sync: \(lastSync)"
+        state.connection = connection
+        state.lastSync = lastSync
 
-        rebuildSourceRows(sources)
-        topStatusItem.title = topStatusTitle(for: sources)
-
-        updateStatusIcon(connection: connection, topStatus: topStatusItem.title)
-    }
-
-    private func rebuildSourceRows(_ sources: [ConnectedSource]) {
-        for item in sourceItems {
-            menu.removeItem(item)
-        }
-        sourceItems.removeAll()
-
-        // Show a summary instead of detailed source list in menu bar
-        let enabled = sources.filter(\.enabled)
-        let total = sources.count
-        
-        let summaryItem = NSMenuItem(
-            title: "\(enabled.count) of \(total) sources enabled", 
-            action: nil, 
-            keyEquivalent: ""
-        )
-        summaryItem.isEnabled = false
-        insertSourceItem(summaryItem)
-    }
-
-    private func insertSourceItem(_ item: NSMenuItem) {
-        let index = menu.index(of: footerSeparator)
-        menu.insertItem(item, at: index)
-        sourceItems.append(item)
+        let topStatus = topStatusTitle(for: sources)
+        updateStatusIcon(connection: connection, topStatus: topStatus)
     }
 
     private func topStatusTitle(for sources: [ConnectedSource]) -> String {
@@ -138,33 +97,6 @@ final class MenuBarController: NSObject {
         return "Syncing…"
     }
 
-    private func progressText(for source: ConnectedSource) -> String {
-        if !source.enabled {
-            return "Paused"
-        }
-        if source.status == "error" {
-            if let err = source.lastError, !err.isEmpty {
-                return "⚠ \(err)"
-            }
-            return "⚠ Error"
-        }
-        if source.status == "current" {
-            return "✓"
-        }
-        let synced = formatNumber(max(0, source.totalSynced))
-        let estimated = formatNumber(max(0, source.totalEstimated))
-        return "\(synced) / \(estimated)"
-    }
-
-    private func iconForSourceType(_ sourceType: String) -> String {
-        switch sourceType {
-        case "mail": return "📧"
-        case "calendar": return "📅"
-        case "messages": return "💬"
-        default: return "•"
-        }
-    }
-
     private func formatNumber(_ value: Int) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
@@ -194,16 +126,15 @@ final class MenuBarController: NSObject {
         }
     }
 
-    @objc private func syncToggleAction() {
-        let enable = syncToggleMenuItem.state != .on
-        setSyncEnabledHandler(enable)
-    }
-
-    @objc private func preferencesAction() {
-        preferencesHandler()
-    }
-
-    @objc private func quitAction() {
-        NSApplication.shared.terminate(nil)
+    @objc private func togglePopover(_ sender: AnyObject?) {
+        if popover.isShown {
+            popover.performClose(sender)
+        } else {
+            if let button = statusItem.button {
+                NSApp.activate(ignoringOtherApps: true)
+                popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            }
+        }
     }
 }
+

@@ -6,7 +6,7 @@ struct MailProcessingResult {
 }
 
 protocol MailProcessing {
-    func process(messages: [RawMessage], workspaceId: String) async throws -> MailProcessingResult
+    func process(messages: [RawMessage], workspaceId: String, skipExtraction: Bool) async throws -> MailProcessingResult
 }
 
 final class MailProcessor {
@@ -18,7 +18,7 @@ final class MailProcessor {
         self.extractor = extractor
     }
 
-    func process(messages: [RawMessage], workspaceId: String) async throws -> MailProcessingResult {
+    func process(messages: [RawMessage], workspaceId: String, skipExtraction: Bool = false) async throws -> MailProcessingResult {
         if messages.isEmpty {
             return MailProcessingResult(entities: [], rawMessages: [])
         }
@@ -28,7 +28,12 @@ final class MailProcessor {
             return MailProcessingResult(entities: [], rawMessages: [])
         }
 
-        let extracted = try await extractor.extract(messages: newMessages, workspaceId: workspaceId)
+        let extracted: [ExtractedEntity]
+        if skipExtraction {
+            extracted = []
+        } else {
+            extracted = try await extractor.extract(messages: newMessages, workspaceId: workspaceId)
+        }
         var countsByMessageId: [String: Int] = [:]
         for entity in extracted {
             countsByMessageId[entity.messageId, default: 0] += 1
