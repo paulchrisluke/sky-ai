@@ -315,6 +315,28 @@ final class LocalStore {
         )
     }
 
+    func bootstrapCursorDate(accountId: String, key: String) -> Date? {
+        getCursor(accountId: accountId, source: "bootstrap:\(key):cursor").lastSeenAt
+    }
+
+    func setBootstrapCursorDate(accountId: String, key: String, date: Date) {
+        setCursor(
+            accountId: accountId,
+            source: "bootstrap:\(key):cursor",
+            lastSeenAt: date,
+            lastSeenUid: nil
+        )
+    }
+
+    func clearBootstrapCursor(accountId: String, key: String) {
+        setCursor(
+            accountId: accountId,
+            source: "bootstrap:\(key):cursor",
+            lastSeenAt: nil,
+            lastSeenUid: nil
+        )
+    }
+
     func replaceContacts(_ contacts: [StoredContact]) {
         do {
             try dbQueue.write { db in

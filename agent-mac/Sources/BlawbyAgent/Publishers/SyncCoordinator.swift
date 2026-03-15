@@ -21,6 +21,7 @@ protocol WebSocketPublishing {
 protocol MailWatching {
     func fetchNewMessages() -> [RawMessage]
     func fetchMessagesSince(_ since: Date, limit: Int) -> [RawMessage]
+    func fetchMessagesBetween(_ start: Date, _ end: Date, limit: Int) -> [RawMessage]
 }
 
 protocol MailProcessing {
@@ -33,6 +34,10 @@ protocol CalendarWatching {
 }
 
 final class SyncCoordinator {
+    private let bootstrapMailDays = 3650
+    private let bootstrapMailChunkDays = 30
+    private let bootstrapMailChunkLimit = 1500
+
     private let stateQueue = DispatchQueue(label: "com.blawby.agent.sync.state")
     private var mailSyncRunning = false
     private var pendingMailSync = false
@@ -136,10 +141,7 @@ final class SyncCoordinator {
 
     func runInitialBootstrapSyncIfNeeded() async {
         if !localStore.isBootstrapCompleted(accountId: config.accountId, key: "mail") {
-            logger.info("[sync] bootstrap mail backfill starting")
-            await runMailBackfill(days: 3650, limit: 20000)
-            localStore.markBootstrapCompleted(accountId: config.accountId, key: "mail")
-            logger.info("[sync] bootstrap mail backfill completed")
+            await runBootstrapMailBackfill()
         }
 
         if !localStore.isBootstrapCompleted(accountId: config.accountId, key: "calendar") {
@@ -148,6 +150,52 @@ final class SyncCoordinator {
             localStore.markBootstrapCompleted(accountId: config.accountId, key: "calendar")
             logger.info("[sync] bootstrap calendar backfill completed")
         }
+    }
+
+    private func runBootstrapMailBackfill() async {
+        let now = Date()
+        guard let horizon = Calendar.current.date(byAdding: .day, value: -bootstrapMailDays, to: now) else {
+            logger.error("[sync] bootstrap mail backfill failed: invalid horizon date")
+            return
+        }
+
+        var cursorEnd = localStore.bootstrapCursorDate(accountId: config.accountId, key: "mail") ?? now
+        logger.info("[sync] bootstrap mail backfill starting horizon=\(horizon) cursorEnd=\(cursorEnd)")
+
+        while cursorEnd > horizon {
+            guard let chunkStart = Calendar.current.date(byAdding: .day, value: -bootstrapMailChunkDays, to: cursorEnd) else {
+                logger.error("[sync] bootstrap mail backfill failed: invalid chunk date")
+                return
+            }
+            let windowStart = max(horizon, chunkStart)
+            let windowEnd = cursorEnd
+            logger.info("[sync] bootstrap mail window start=\(windowStart) end=\(windowEnd)")
+
+            guard beginMailSync(mode: "backfill") else {
+                logger.info("[sync] bootstrap mail backfill paused: mail sync already active")
+                publishStatus()
+                return
+            }
+            publishStatus()
+
+            let windowMessages = mailWatcher.fetchMessagesBetween(windowStart, windowEnd, limit: bootstrapMailChunkLimit)
+            await processMailMessages(windowMessages, mode: "backfill")
+
+            while completeMailSyncPass() {
+                await runMailSyncPass()
+            }
+            stateQueue.sync {
+                lastSyncAt = Date()
+            }
+            publishStatus()
+
+            localStore.setBootstrapCursorDate(accountId: config.accountId, key: "mail", date: windowStart)
+            cursorEnd = windowStart
+        }
+
+        localStore.markBootstrapCompleted(accountId: config.accountId, key: "mail")
+        localStore.clearBootstrapCursor(accountId: config.accountId, key: "mail")
+        logger.info("[sync] bootstrap mail backfill completed")
     }
 
     private func runCalendarSync(backfill: Bool) async {

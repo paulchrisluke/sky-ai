@@ -163,6 +163,12 @@ final class MailWatcher: @unchecked Sendable {
     }
 
     func fetchMessagesSince(_ since: Date, limit: Int) -> [RawMessage] {
+        fetchMessagesBetween(since, Date.distantFuture, limit: limit)
+    }
+
+    func fetchMessagesBetween(_ start: Date, _ end: Date, limit: Int) -> [RawMessage] {
+        let boundedStart = min(start, end)
+        let boundedEnd = max(start, end)
         guard let mailApp = SBApplication(bundleIdentifier: "com.apple.mail") else {
             logger.error("mail backfill failed: could not create SBApplication for Mail")
             return []
@@ -175,7 +181,7 @@ final class MailWatcher: @unchecked Sendable {
         let maxInspect = max(limit * 50, 5000)
 
         let accounts = objectArray(from: appObject.value(forKey: "accounts"))
-        logger.info("mail backfill started accounts=\(accounts.count) since=\(since)")
+        logger.info("mail backfill started accounts=\(accounts.count) start=\(boundedStart) end=\(boundedEnd)")
 
         for account in accounts {
             let mailboxes = objectArray(from: account.value(forKey: "mailboxes"))
@@ -209,7 +215,7 @@ final class MailWatcher: @unchecked Sendable {
                         guard let dateSent = message.value(forKey: "dateSent") as? Date else {
                             return
                         }
-                        if dateSent < since {
+                        if dateSent < boundedStart || dateSent >= boundedEnd {
                             return
                         }
                         guard let messageId = messageIdentifier(message) else {
@@ -251,7 +257,7 @@ final class MailWatcher: @unchecked Sendable {
             }
         }
 
-        logger.info("mail backfill completed inspected=\(inspected) matched=\(rawMessages.count)")
+        logger.info("mail backfill completed inspected=\(inspected) matched=\(rawMessages.count) start=\(boundedStart) end=\(boundedEnd)")
         return rawMessages
     }
 
