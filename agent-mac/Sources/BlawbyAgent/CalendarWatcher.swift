@@ -34,12 +34,40 @@ final class CalendarWatcher {
     private let eventStore = EKEventStore()
     private let iso = ISO8601DateFormatter()
     private var hasAccess = false
+    private var observer: NSObjectProtocol?
+    private var safetyTimer: DispatchSourceTimer?
 
     init(config: Config, localStore: LocalStore, logger: Logger) {
         self.config = config
         self.localStore = localStore
         self.logger = logger
         self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    }
+
+    func startObserving(onChange: @escaping () -> Void) {
+        Task {
+            do {
+                try await ensureAccess()
+                observer = NotificationCenter.default.addObserver(
+                    forName: .EKEventStoreChanged,
+                    object: eventStore,
+                    queue: nil
+                ) { _ in
+                    onChange()
+                }
+
+                let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+                timer.schedule(deadline: .now() + 900, repeating: 900)
+                timer.setEventHandler {
+                    onChange()
+                }
+                safetyTimer = timer
+                timer.resume()
+                logger.info("calendar observer started (EKEventStoreChanged + 15m safety)")
+            } catch {
+                logger.error("calendar observer start failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     func fetchUnsentPayloads() async throws -> [CalendarPayload] {

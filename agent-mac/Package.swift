@@ -20,7 +20,10 @@ let package = Package(
             ],
             path: "Sources/BlawbyAgent",
             linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("Contacts"),
                 .linkedFramework("EventKit"),
+                .linkedFramework("ServiceManagement"),
                 .linkedFramework("ScriptingBridge")
             ]
         )

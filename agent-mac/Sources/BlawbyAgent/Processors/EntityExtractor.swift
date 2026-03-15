@@ -93,11 +93,13 @@ enum EntityExtractorError: Error {
 
 final class EntityExtractor {
     private let apiKey: String?
+    private let contactsReader: ContactsReader?
     private let logger: Logger
     private let iso: ISO8601DateFormatter
 
-    init(apiKey: String?, logger: Logger) {
+    init(apiKey: String?, contactsReader: ContactsReader?, logger: Logger) {
         self.apiKey = apiKey
+        self.contactsReader = contactsReader
         self.logger = logger
         self.iso = ISO8601DateFormatter()
         self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -217,11 +219,36 @@ final class EntityExtractor {
             lines.append("To: \(message.to.joined(separator: ", "))")
             lines.append("Date: \(iso.string(from: message.date))")
             lines.append("Direction: inbound")
+            lines.append("Contact Context: \(contactContext(for: message))")
             lines.append("Body: \(message.bodyText)")
             lines.append("")
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    private func contactContext(for message: RawMessage) -> String {
+        guard let contactsReader else { return "none" }
+        var contexts: [String] = []
+        let emails = ([extractEmail(from: message.from)] + message.to.map(extractEmail(from:))).compactMap { $0 }
+        for email in Set(emails) {
+            if let contact = contactsReader.lookupContact(email: email) {
+                let fullName = "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespaces)
+                contexts.append("\(email): name=\(fullName.isEmpty ? "unknown" : fullName), org=\(contact.organizationName)")
+            }
+        }
+        return contexts.isEmpty ? "none" : contexts.joined(separator: "; ")
+    }
+
+    private func extractEmail(from input: String) -> String? {
+        if input.contains("@"), !input.contains("<") {
+            return input.lowercased()
+        }
+        guard let start = input.firstIndex(of: "<"), let end = input.firstIndex(of: ">"), start < end else {
+            return nil
+        }
+        let email = input[input.index(after: start)..<end].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return email.contains("@") ? email : nil
     }
 
     private func entityExtractionSystemPrompt(accountOwner: String) -> String {

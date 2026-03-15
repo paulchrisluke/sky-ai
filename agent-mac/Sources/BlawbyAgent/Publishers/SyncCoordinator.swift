@@ -135,6 +135,14 @@ final class SyncCoordinator {
         }
     }
 
+    func publishRawPayload(type: String, json: String) async {
+        do {
+            try await webSocketPublisher.send(type: type, payload: json)
+        } catch {
+            _ = localStore.enqueuePayload(type: type, json: json)
+        }
+    }
+
     private func beginMailSync() -> Bool {
         stateQueue.sync {
             if mailSyncRunning {

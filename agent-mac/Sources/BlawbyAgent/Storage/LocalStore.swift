@@ -1,6 +1,14 @@
 import Foundation
 import GRDB
 
+struct StoredContact {
+    let email: String
+    let givenName: String
+    let familyName: String
+    let organizationName: String
+    let phoneNumbers: [String]
+}
+
 final class LocalStore {
     private let dbQueue: DatabaseQueue
     private let iso: ISO8601DateFormatter
@@ -43,6 +51,17 @@ final class LocalStore {
                 t.column("payload_json", .text).notNull()
                 t.column("created_at", .text).notNull()
                 t.column("attempts", .integer).notNull().defaults(to: 0)
+            }
+        }
+
+        migrator.registerMigration("v2_contacts") { db in
+            try db.create(table: "contacts") { t in
+                t.column("email", .text).primaryKey()
+                t.column("given_name", .text).notNull().defaults(to: "")
+                t.column("family_name", .text).notNull().defaults(to: "")
+                t.column("organization_name", .text).notNull().defaults(to: "")
+                t.column("phone_numbers_json", .text).notNull().defaults(to: "[]")
+                t.column("updated_at", .text).notNull()
             }
         }
 
@@ -96,7 +115,7 @@ final class LocalStore {
                 )
             }
         } catch {
-            fatalError("LocalStore.setCursor failed: \(error)")
+            logError("setCursor", error)
         }
     }
 
@@ -110,7 +129,8 @@ final class LocalStore {
                 ) ?? false
             }
         } catch {
-            fatalError("LocalStore.isMessageProcessed failed: \(error)")
+            logError("isMessageProcessed", error)
+            return false
         }
     }
 
@@ -127,7 +147,7 @@ final class LocalStore {
                 )
             }
         } catch {
-            fatalError("LocalStore.markMessageProcessed failed: \(error)")
+            logError("markMessageProcessed", error)
         }
     }
 
@@ -140,7 +160,7 @@ final class LocalStore {
                 )
             }
         } catch {
-            fatalError("LocalStore.markMessageSent failed: \(error)")
+            logError("markMessageSent", error)
         }
     }
 
@@ -159,7 +179,8 @@ final class LocalStore {
                 ) ?? false
             }
         } catch {
-            fatalError("LocalStore.isEventSent failed: \(error)")
+            logError("isEventSent", error)
+            return false
         }
     }
 
@@ -175,7 +196,7 @@ final class LocalStore {
                 )
             }
         } catch {
-            fatalError("LocalStore.markEventSent failed: \(error)")
+            logError("markEventSent", error)
         }
     }
 
@@ -193,7 +214,8 @@ final class LocalStore {
             }
             return id
         } catch {
-            fatalError("LocalStore.enqueuePayload failed: \(error)")
+            logError("enqueuePayload", error)
+            return id
         }
     }
 
@@ -220,7 +242,8 @@ final class LocalStore {
                 }
             }
         } catch {
-            fatalError("LocalStore.dequeuePendingPayloads failed: \(error)")
+            logError("dequeuePendingPayloads", error)
+            return []
         }
     }
 
@@ -233,7 +256,7 @@ final class LocalStore {
                 )
             }
         } catch {
-            fatalError("LocalStore.markPayloadSent failed: \(error)")
+            logError("markPayloadSent", error)
         }
     }
 
@@ -246,7 +269,7 @@ final class LocalStore {
                 )
             }
         } catch {
-            fatalError("LocalStore.incrementPayloadAttempts failed: \(error)")
+            logError("incrementPayloadAttempts", error)
         }
     }
 
@@ -260,7 +283,69 @@ final class LocalStore {
                 ) ?? 0
             }
         } catch {
-            fatalError("LocalStore.payloadAttempts failed: \(error)")
+            logError("payloadAttempts", error)
+            return 0
         }
+    }
+
+    func replaceContacts(_ contacts: [StoredContact]) {
+        do {
+            try dbQueue.write { db in
+                try db.execute(sql: "DELETE FROM contacts")
+                for contact in contacts {
+                    try db.execute(
+                        sql: """
+                        INSERT INTO contacts (email, given_name, family_name, organization_name, phone_numbers_json, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        arguments: [
+                            contact.email.lowercased(),
+                            contact.givenName,
+                            contact.familyName,
+                            contact.organizationName,
+                            String(data: try JSONEncoder().encode(contact.phoneNumbers), encoding: .utf8) ?? "[]",
+                            iso.string(from: Date())
+                        ]
+                    )
+                }
+            }
+        } catch {
+            logError("replaceContacts", error)
+        }
+    }
+
+    func lookupContact(email: String) -> StoredContact? {
+        do {
+            return try dbQueue.read { db in
+                guard let row = try Row.fetchOne(
+                    db,
+                    sql: """
+                    SELECT email, given_name, family_name, organization_name, phone_numbers_json
+                    FROM contacts
+                    WHERE email = ?
+                    LIMIT 1
+                    """,
+                    arguments: [email.lowercased()]
+                ) else {
+                    return nil
+                }
+                let phoneJson: String = row["phone_numbers_json"]
+                let phones = (try? JSONDecoder().decode([String].self, from: Data(phoneJson.utf8))) ?? []
+                return StoredContact(
+                    email: row["email"],
+                    givenName: row["given_name"],
+                    familyName: row["family_name"],
+                    organizationName: row["organization_name"],
+                    phoneNumbers: phones
+                )
+            }
+        } catch {
+            logError("lookupContact", error)
+            return nil
+        }
+    }
+
+    private func logError(_ operation: String, _ error: Error) {
+        fputs("LocalStore.\(operation) failed: \(error)\n", stderr)
     }
 }

@@ -8,6 +8,8 @@ final class MailWatcher {
     private let configStore: ConfigStore
     private let localStore: LocalStore
     private let logger: Logger
+    private var distributedObserver: NSObjectProtocol?
+    private var safetyTimer: DispatchSourceTimer?
 
     init(
         configStore: ConfigStore,
@@ -17,6 +19,25 @@ final class MailWatcher {
         self.configStore = configStore
         self.localStore = localStore
         self.logger = logger
+    }
+
+    func startObserving(onChange: @escaping () -> Void) {
+        distributedObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.mail.MessageReceived"),
+            object: nil,
+            queue: nil
+        ) { _ in
+            onChange()
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + 900, repeating: 900)
+        timer.setEventHandler {
+            onChange()
+        }
+        safetyTimer = timer
+        timer.resume()
+        logger.info("mail observer started (distributed notification + 15m safety)")
     }
 
     func fetchNewMessages() -> [RawMessage] {

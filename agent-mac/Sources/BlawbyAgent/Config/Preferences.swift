@@ -1,18 +1,27 @@
 import Foundation
 
 struct Preferences {
+    let workerUrl: String?
+    let apiKey: String?
+    let workspaceId: String?
+    let accountId: String?
     let openaiApiKey: String?
 
     static func load(config: Config) -> Preferences {
-        if let stored = UserDefaults.standard.string(forKey: "openaiApiKey"), !stored.isEmpty {
-            return Preferences(openaiApiKey: stored)
-        }
-        if let fromConfig = config.openaiApiKey, !fromConfig.isEmpty {
-            return Preferences(openaiApiKey: fromConfig)
-        }
-        if let envValue = ProcessInfo.processInfo.environment["OPENAI_API_KEY"], !envValue.isEmpty {
-            return Preferences(openaiApiKey: envValue)
-        }
-        return Preferences(openaiApiKey: nil)
+        let defaults = UserDefaults.standard
+        let workerUrl = defaults.string(forKey: "workerUrl")
+        let apiKey = defaults.string(forKey: "apiKey")
+        let workspaceId = defaults.string(forKey: "workspaceId")
+        let accountId = defaults.string(forKey: "accountId")
+        let openaiApiKey = defaults.string(forKey: "openaiApiKey")
+            ?? config.openaiApiKey
+            ?? ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
+        return Preferences(
+            workerUrl: workerUrl,
+            apiKey: apiKey,
+            workspaceId: workspaceId,
+            accountId: accountId,
+            openaiApiKey: openaiApiKey
+        )
     }
 }
