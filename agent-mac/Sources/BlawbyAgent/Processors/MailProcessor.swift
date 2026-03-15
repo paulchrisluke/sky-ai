@@ -5,6 +5,10 @@ struct MailProcessingResult {
     let rawMessages: [RawMessage]
 }
 
+protocol MailProcessing {
+    func process(messages: [RawMessage], workspaceId: String) async throws -> MailProcessingResult
+}
+
 final class MailProcessor {
     private let localStore: LocalStore
     private let extractor: any EntityExtracting
@@ -25,25 +29,21 @@ final class MailProcessor {
         }
 
         let extracted = try await extractor.extract(messages: newMessages, workspaceId: workspaceId)
-        if extracted.isEmpty {
-            return MailProcessingResult(entities: [], rawMessages: newMessages)
-        }
-
         var countsByMessageId: [String: Int] = [:]
         for entity in extracted {
             countsByMessageId[entity.messageId, default: 0] += 1
         }
-        let accountByMessageId = Dictionary(uniqueKeysWithValues: newMessages.map { ($0.messageId, $0.accountId) })
 
-        for entity in extracted {
-            guard let accountId = accountByMessageId[entity.messageId] else { continue }
+        for message in newMessages {
             localStore.markMessageProcessed(
-                entity.messageId,
-                accountId: accountId,
-                entityCount: countsByMessageId[entity.messageId] ?? 1
+                message.messageId,
+                accountId: message.accountId,
+                entityCount: countsByMessageId[message.messageId] ?? 0
             )
         }
 
         return MailProcessingResult(entities: extracted, rawMessages: newMessages)
     }
 }
+
+extension MailProcessor: MailProcessing {}

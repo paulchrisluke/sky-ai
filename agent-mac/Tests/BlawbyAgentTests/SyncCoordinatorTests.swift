@@ -2,40 +2,14 @@ import XCTest
 @testable import BlawbyAgent
 
 final class SyncCoordinatorTests: XCTestCase {
-    func testSyncSendsBothPayloads() async throws {
+    func testRunMailSyncDelegatesToSourceManager() async throws {
         let baseDir = try makeTempDirectory()
         let logger = try Logger(baseDirectory: baseDir)
         let localStore = try LocalStore(baseDirectory: baseDir)
         let publisher = MockWebSocketPublisher()
-        let message = RawMessage(
-            messageId: "msg-1",
-            accountId: "acct-1",
-            subject: "Subject",
-            from: "sender@example.com",
-            to: ["to@example.com"],
-            date: Date(timeIntervalSince1970: 1_700_000_000),
-            bodyText: "Body text",
-            mailbox: "INBOX"
-        )
-        let entity = ExtractedEntity(
-            id: UUID().uuidString,
-            workspaceId: "default",
-            accountId: "acct-1",
-            messageId: "msg-1",
-            entityType: "correspondence",
-            direction: "inbound",
-            counterpartyName: "Sender",
-            counterpartyEmail: "sender@example.com",
-            amountCents: nil,
-            currency: nil,
-            dueDate: nil,
-            referenceNumber: nil,
-            status: "unknown",
-            actionRequired: false,
-            actionDescription: nil,
-            riskLevel: "low",
-            confidence: 0.9
-        )
+        let sourceManager = await MainActor.run {
+            MockSourceManager(mailIds: ["mail:acct-1:INBOX", "mail:acct-1:Archive"])
+        }
 
         let coordinator = SyncCoordinator(
             config: Config(
@@ -47,33 +21,17 @@ final class SyncCoordinatorTests: XCTestCase {
             ),
             localStore: localStore,
             webSocketPublisher: publisher,
-            mailWatcher: MockMailWatcher(messages: [message]),
-            mailProcessor: MockMailProcessor(result: MailProcessingResult(entities: [entity], rawMessages: [message])),
-            calendarWatcher: MockCalendarWatcher(),
+            sourceManager: sourceManager,
             logger: logger
         )
 
         await coordinator.runMailSync()
 
-        XCTAssertEqual(publisher.sent.count, 2)
-        XCTAssertEqual(publisher.sent[0].type, "entities")
-        XCTAssertEqual(publisher.sent[1].type, "chunks")
-
-        let entitiesEnvelope = try decodePayload(EntitiesPayloadEnvelope.self, from: publisher.sent[0].payload)
-        XCTAssertEqual(entitiesEnvelope.type, "entities")
-        XCTAssertEqual(entitiesEnvelope.workspaceId, "default")
-        XCTAssertEqual(entitiesEnvelope.accountId, "acct-1")
-        XCTAssertEqual(entitiesEnvelope.entities.count, 1)
-        XCTAssertEqual(entitiesEnvelope.entities[0].messageId, "msg-1")
-
-        let chunksEnvelope = try decodePayload(ChunksPayloadEnvelope.self, from: publisher.sent[1].payload)
-        XCTAssertEqual(chunksEnvelope.type, "chunks")
-        XCTAssertEqual(chunksEnvelope.workspaceId, "default")
-        XCTAssertEqual(chunksEnvelope.accountId, "acct-1")
-        XCTAssertEqual(chunksEnvelope.messages.count, 1)
-        XCTAssertEqual(chunksEnvelope.messages[0].messageId, "msg-1")
-        XCTAssertEqual(chunksEnvelope.messages[0].mailbox, "INBOX")
-        XCTAssertEqual(chunksEnvelope.messages[0].toEmails, ["to@example.com"])
+        let markedTypes = await MainActor.run { sourceManager.markedSourceTypes }
+        let synced = await MainActor.run { sourceManager.syncedIds }
+        XCTAssertEqual(markedTypes, ["mail"])
+        XCTAssertEqual(synced, ["mail:acct-1:INBOX", "mail:acct-1:Archive"])
+        XCTAssertTrue(publisher.sent.isEmpty)
     }
 
     func testMailProcessorReturnsBothTypes() async throws {
@@ -128,34 +86,6 @@ final class SyncCoordinatorTests: XCTestCase {
         return root
     }
 
-    private func decodePayload<T: Decodable>(_ type: T.Type, from json: String) throws -> T {
-        let data = try XCTUnwrap(json.data(using: .utf8))
-        return try JSONDecoder().decode(type, from: data)
-    }
-}
-
-private struct EntitiesPayloadEnvelope: Decodable {
-    struct Entity: Decodable {
-        let messageId: String
-    }
-
-    let type: String
-    let workspaceId: String
-    let accountId: String
-    let entities: [Entity]
-}
-
-private struct ChunksPayloadEnvelope: Decodable {
-    struct Message: Decodable {
-        let messageId: String
-        let mailbox: String
-        let toEmails: [String]
-    }
-
-    let type: String
-    let workspaceId: String
-    let accountId: String
-    let messages: [Message]
 }
 
 private final class MockWebSocketPublisher: WebSocketPublishing {
@@ -171,25 +101,30 @@ private final class MockWebSocketPublisher: WebSocketPublishing {
     }
 }
 
-private struct MockMailWatcher: MailWatching {
-    let messages: [RawMessage]
+@MainActor
+private final class MockSourceManager: SourceManaging {
+    private let mailIds: [String]
+    private(set) var syncedIds: [String] = []
+    private(set) var markedSourceTypes: [String] = []
 
-    func fetchNewMessages() -> [RawMessage] {
-        messages
+    init(mailIds: [String]) {
+        self.mailIds = mailIds
     }
-}
 
-private struct MockMailProcessor: MailProcessing {
-    let result: MailProcessingResult
-
-    func process(messages: [RawMessage], workspaceId: String) async throws -> MailProcessingResult {
-        result
+    func start() {}
+    func stop() {}
+    func refreshSources() async {}
+    func enabledSourceIds(sourceType: String) -> [String] {
+        sourceType == "mail" ? mailIds : []
     }
-}
-
-private struct MockCalendarWatcher: CalendarWatching {
-    func fetchUnsentPayloads() async throws -> [CalendarPayload] { [] }
-    func markPayloadEventsSent(_ payload: CalendarPayload) {}
+    func setEnabled(_ id: String, enabled: Bool) async {}
+    func markSourceChanged(_ id: String) {}
+    func markSourcesChanged(sourceType: String) {
+        markedSourceTypes.append(sourceType)
+    }
+    func syncSource(_ id: String) async {
+        syncedIds.append(id)
+    }
 }
 
 private struct MockEntityExtractor: EntityExtracting {

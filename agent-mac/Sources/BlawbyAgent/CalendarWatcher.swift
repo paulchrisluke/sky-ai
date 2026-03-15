@@ -1,6 +1,17 @@
 import Foundation
 import EventKit
 
+struct CalendarSourceDescriptor: Sendable {
+    let id: String
+    let sourceName: String
+}
+
+struct RawEvent: Sendable {
+    let calendarId: String
+    let calendarName: String
+    let payload: CalendarEventPayload
+}
+
 struct CalendarEventPayload: Codable {
     let uid: String
     let title: String
@@ -29,7 +40,6 @@ struct CalendarPayload: Codable {
 
 final class CalendarWatcher: @unchecked Sendable {
     private let config: Config
-    private let localStore: LocalStore
     private let logger: Logger
     private let eventStore = EKEventStore()
     private let iso = ISO8601DateFormatter()
@@ -37,9 +47,8 @@ final class CalendarWatcher: @unchecked Sendable {
     private var observer: NSObjectProtocol?
     private var safetyTimer: DispatchSourceTimer?
 
-    init(config: Config, localStore: LocalStore, logger: Logger) {
+    init(config: Config, logger: Logger) {
         self.config = config
-        self.localStore = localStore
         self.logger = logger
         self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
@@ -82,7 +91,7 @@ final class CalendarWatcher: @unchecked Sendable {
 
     func fetchUnsentPayloads(backfill: Bool) async throws -> [CalendarPayload] {
         try await ensureAccess()
-        return buildUnsentPayloads(backfill: backfill)
+        return buildPayloads(backfill: backfill)
     }
 
     func calendarSourceNames() async throws -> [String] {
@@ -100,9 +109,49 @@ final class CalendarWatcher: @unchecked Sendable {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
-    func markPayloadEventsSent(_ payload: CalendarPayload) {
-        for event in payload.events {
-            localStore.markEventSent(uid: event.uid, calendarId: payload.calendarId)
+    func discoverSources() async throws -> [CalendarSourceDescriptor] {
+        try await ensureAccess()
+        return eventStore.calendars(for: .event)
+            .map { CalendarSourceDescriptor(id: $0.calendarIdentifier, sourceName: $0.title) }
+            .sorted { $0.sourceName.localizedCaseInsensitiveCompare($1.sourceName) == .orderedAscending }
+    }
+
+    func fetchEvents(calendarId: String, since: Date, until: Date) async throws -> [RawEvent] {
+        try await ensureAccess()
+        guard let calendar = eventStore.calendars(for: .event).first(where: { $0.calendarIdentifier == calendarId }) else {
+            return []
+        }
+        let start = min(since, until)
+        let end = max(since, until)
+        let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: [calendar])
+        let events = eventStore.events(matching: predicate)
+        return events.map { event in
+            let attendees: [[String: String?]] = (event.attendees ?? []).map { attendee in
+                [
+                    "email": attendee.url.absoluteString,
+                    "name": attendee.name,
+                    "status": participantStatusString(attendee.participantStatus)
+                ]
+            }
+            return RawEvent(
+                calendarId: calendar.calendarIdentifier,
+                calendarName: calendar.title,
+                payload: CalendarEventPayload(
+                    uid: event.calendarItemIdentifier,
+                    title: event.title ?? "",
+                    description: event.notes,
+                    location: event.location,
+                    startAt: iso.string(from: event.startDate),
+                    endAt: iso.string(from: event.endDate),
+                    allDay: event.isAllDay,
+                    recurrenceRule: event.recurrenceRules?.first?.description,
+                    status: "confirmed",
+                    organizerEmail: event.organizer?.url.absoluteString,
+                    organizerName: event.organizer?.name,
+                    attendees: attendees,
+                    rawIcal: nil
+                )
+            )
         }
     }
 
@@ -137,7 +186,7 @@ final class CalendarWatcher: @unchecked Sendable {
         }
     }
 
-    private func buildUnsentPayloads(backfill: Bool) -> [CalendarPayload] {
+    private func buildPayloads(backfill: Bool) -> [CalendarPayload] {
         let now = Date()
         let backDays = backfill ? -3650 : -7
         let forwardDays = backfill ? 365 : 30
@@ -155,10 +204,7 @@ final class CalendarWatcher: @unchecked Sendable {
 
         for calendar in eventStore.calendars(for: .event) {
             let calendarEvents = grouped[calendar.calendarIdentifier] ?? []
-            let unsentEvents = calendarEvents.filter { event in
-                !localStore.isEventSent(uid: event.calendarItemIdentifier, calendarId: calendar.calendarIdentifier)
-            }
-            if unsentEvents.isEmpty {
+            if calendarEvents.isEmpty {
                 continue
             }
 
@@ -170,7 +216,7 @@ final class CalendarWatcher: @unchecked Sendable {
                 calendarId: calendar.calendarIdentifier,
                 calendarName: calendar.title,
                 sourceProvider: "calendar_mac",
-                events: unsentEvents.map { event in
+                events: calendarEvents.map { event in
                     let attendees: [[String: String?]] = (event.attendees ?? []).map { attendee in
                         [
                             "email": attendee.url.absoluteString,

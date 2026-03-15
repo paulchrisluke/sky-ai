@@ -1,12 +1,18 @@
 import Foundation
 import ScriptingBridge
 
+struct MailSourceDescriptor: Sendable {
+    let id: String
+    let accountId: String
+    let mailbox: String
+    let sourceName: String
+}
+
 final class MailWatcher: @unchecked Sendable {
     private let maxMessagesToInspectPerPoll = 300
     private let maxNewMessagesPerPoll = 20
 
     private let configStore: ConfigStore
-    private let localStore: LocalStore
     private let logger: Logger
     private let workQueue = DispatchQueue(label: "com.blawby.agent.mailwatcher", qos: .utility)
     private var distributedObserver: NSObjectProtocol?
@@ -14,11 +20,9 @@ final class MailWatcher: @unchecked Sendable {
 
     init(
         configStore: ConfigStore,
-        localStore: LocalStore,
         logger: Logger
     ) {
         self.configStore = configStore
-        self.localStore = localStore
         self.logger = logger
     }
 
@@ -76,128 +80,178 @@ final class MailWatcher: @unchecked Sendable {
         }
     }
 
-    private func fetchNewMessagesSync() -> [RawMessage] {
-        guard let mailApp = SBApplication(bundleIdentifier: "com.apple.mail") else {
-            logger.error("mail watcher failed: could not create SBApplication for Mail")
-            return []
-        }
-
-        let appObject = mailApp as NSObject
-
-        let config = configStore.load()
-        let cursor = localStore.getCursor(accountId: config.accountId, source: "mail_live")
-        guard let lastSeen = cursor.lastSeenAt else {
-            localStore.setCursor(
-                accountId: config.accountId,
-                source: "mail_live",
-                lastSeenAt: Date(),
-                lastSeenUid: nil
-            )
-            logger.info("mail live cursor initialized")
-            return []
-        }
-        var newestSeen = lastSeen
-        var rawMessages: [RawMessage] = []
-        var inspected = 0
-
-        let accounts = objectArray(from: appObject.value(forKey: "accounts"))
-        logger.info("mail poll started accounts=\(accounts.count)")
-
-        for account in accounts {
-            let mailboxes = objectArray(from: account.value(forKey: "mailboxes"))
-            let backfillMailboxes = selectableBackfillMailboxes(from: mailboxes)
-
-            for mailbox in backfillMailboxes {
-                let mailboxName = mailbox.value(forKey: "name") as? String ?? "INBOX"
-                guard let messages = mailbox.value(forKey: "messages") as? NSArray else {
-                    continue
-                }
-                if messages.count == 0 {
-                    continue
-                }
-
-                var index = messages.count - 1
-                while index >= 0 {
-                    guard let message = messages[index] as? NSObject else {
-                        if index == 0 { break }
-                        index -= 1
-                        continue
-                    }
-                    if inspected >= maxMessagesToInspectPerPoll || rawMessages.count >= maxNewMessagesPerPoll {
-                        break
-                    }
-                    inspected += 1
-                    if inspected % 500 == 0 {
-                        logger.info("mail backfill progress inspected=\(inspected) matched=\(rawMessages.count) mailbox=\(mailboxName)")
-                    }
-
-                    guard let dateSent = message.value(forKey: "dateSent") as? Date else {
-                        if index == 0 { break }
-                        index -= 1
-                        continue
-                    }
-                    if dateSent <= lastSeen {
-                        break
-                    }
-
-                    autoreleasepool {
-                        guard let messageId = messageIdentifier(message) else {
-                            return
-                        }
-                        if localStore.isMessageProcessed(messageId) {
-                            return
-                        }
-
-                        let subject = message.value(forKey: "subject") as? String ?? ""
-                        let sender = message.value(forKey: "sender") as? String ?? ""
-                        let toRecipients: [String] = []
-                        let bodyText = truncate(subject, maxLength: 500)
-
-                        rawMessages.append(
-                            RawMessage(
-                                messageId: messageId,
-                                accountId: config.accountId,
-                                subject: subject,
-                                from: sender,
-                                to: toRecipients,
-                                date: dateSent,
-                                bodyText: bodyText,
-                                mailbox: mailboxName
-                            )
-                        )
-
-                        if dateSent > newestSeen {
-                            newestSeen = dateSent
-                        }
-                    }
-
-                    if index == 0 { break }
-                    index -= 1
-                }
-                if inspected >= maxMessagesToInspectPerPoll || rawMessages.count >= maxNewMessagesPerPoll {
-                    break
-                }
+    func discoverSources() async -> [MailSourceDescriptor] {
+        await withCheckedContinuation { continuation in
+            workQueue.async { [self] in
+                continuation.resume(returning: discoverSourcesSync())
             }
-            if inspected >= maxMessagesToInspectPerPoll || rawMessages.count >= maxNewMessagesPerPoll {
+        }
+    }
+
+    func oldestMessageDate(accountId: String, mailbox: String) async -> Date? {
+        await withCheckedContinuation { continuation in
+            workQueue.async { [self] in
+                continuation.resume(returning: oldestMessageDateSync(accountId: accountId, mailbox: mailbox))
+            }
+        }
+    }
+
+    func messageCount(accountId: String, mailbox: String) async -> Int {
+        await withCheckedContinuation { continuation in
+            workQueue.async { [self] in
+                continuation.resume(returning: messageCountSync(accountId: accountId, mailbox: mailbox))
+            }
+        }
+    }
+
+    func fetchMessages(accountId: String, mailbox: String, since: Date, limit: Int) async -> [RawMessage] {
+        await withCheckedContinuation { continuation in
+            workQueue.async { [self] in
+                continuation.resume(
+                    returning: fetchMessagesSync(accountId: accountId, mailbox: mailbox, since: since, limit: limit)
+                )
+            }
+        }
+    }
+
+    private func fetchNewMessagesSync() -> [RawMessage] {
+        let config = configStore.load()
+        let recentCutoff = Date(timeIntervalSinceNow: -300)
+        let sources = discoverSourcesSync().filter { $0.accountId.caseInsensitiveCompare(config.accountId) == .orderedSame }
+        var out: [RawMessage] = []
+        for source in sources {
+            let messages = fetchMessagesSync(
+                accountId: source.accountId,
+                mailbox: source.mailbox,
+                since: recentCutoff,
+                limit: maxNewMessagesPerPoll
+            )
+            out.append(contentsOf: messages)
+            if out.count >= maxNewMessagesPerPoll {
                 break
             }
         }
+        return Array(out.prefix(maxNewMessagesPerPoll))
+    }
 
-        if newestSeen > lastSeen {
-            localStore.setCursor(
-                accountId: config.accountId,
-                source: "mail_live",
-                lastSeenAt: newestSeen,
-                lastSeenUid: nil
-            )
-        }
-
-        if rawMessages.isEmpty {
-            logger.info("mail poll completed inspected=\(inspected) new=0")
+    private func discoverSourcesSync() -> [MailSourceDescriptor] {
+        guard let mailApp = SBApplication(bundleIdentifier: "com.apple.mail") else {
+            logger.error("mail source discovery failed: could not create SBApplication for Mail")
             return []
         }
-        logger.info("mail poll completed inspected=\(inspected) new=\(rawMessages.count)")
-        return rawMessages
+        let appObject = mailApp as NSObject
+        let accounts = objectArray(from: appObject.value(forKey: "accounts"))
+        var out: [MailSourceDescriptor] = []
+        for account in accounts {
+            let accountName = (account.value(forKey: "name") as? String ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if accountName.isEmpty {
+                continue
+            }
+            let mailboxes = objectArray(from: account.value(forKey: "mailboxes"))
+            let selected = selectableBackfillMailboxes(from: mailboxes)
+            for mailbox in selected {
+                let mailboxName = (mailbox.value(forKey: "name") as? String ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if mailboxName.isEmpty {
+                    continue
+                }
+                out.append(
+                    MailSourceDescriptor(
+                        id: "mail:\(accountName):\(mailboxName)",
+                        accountId: accountName,
+                        mailbox: mailboxName,
+                        sourceName: "\(accountName) - \(mailboxName)"
+                    )
+                )
+            }
+        }
+        return out.sorted { lhs, rhs in
+            lhs.sourceName.localizedCaseInsensitiveCompare(rhs.sourceName) == .orderedAscending
+        }
+    }
+
+    private func oldestMessageDateSync(accountId: String, mailbox: String) -> Date? {
+        guard let targetMailbox = findMailbox(accountId: accountId, mailbox: mailbox) else {
+            return nil
+        }
+        guard let messages = targetMailbox.value(forKey: "messages") as? NSArray else {
+            return nil
+        }
+        if messages.count == 0 {
+            return nil
+        }
+        var oldest: Date?
+        for item in messages {
+            guard let message = item as? NSObject else { continue }
+            guard let sent = message.value(forKey: "dateSent") as? Date else { continue }
+            if let current = oldest {
+                if sent < current {
+                    oldest = sent
+                }
+            } else {
+                oldest = sent
+            }
+        }
+        return oldest
+    }
+
+    private func messageCountSync(accountId: String, mailbox: String) -> Int {
+        guard let targetMailbox = findMailbox(accountId: accountId, mailbox: mailbox) else {
+            return 0
+        }
+        guard let messages = targetMailbox.value(forKey: "messages") as? NSArray else {
+            return 0
+        }
+        return messages.count
+    }
+
+    private func fetchMessagesSync(accountId: String, mailbox: String, since: Date, limit: Int) -> [RawMessage] {
+        guard let targetMailbox = findMailbox(accountId: accountId, mailbox: mailbox) else {
+            return []
+        }
+        guard let messages = targetMailbox.value(forKey: "messages") as? NSArray else {
+            return []
+        }
+        if messages.count == 0 || limit <= 0 {
+            return []
+        }
+
+        var out: [RawMessage] = []
+        for index in 0..<messages.count {
+            guard let message = messages[index] as? NSObject else {
+                continue
+            }
+            guard let sent = message.value(forKey: "dateSent") as? Date else {
+                continue
+            }
+            if sent < since {
+                continue
+            }
+            guard let messageId = messageIdentifier(message) else {
+                continue
+            }
+            let subject = message.value(forKey: "subject") as? String ?? ""
+            let sender = message.value(forKey: "sender") as? String ?? ""
+            let body = truncate(subject, maxLength: 500)
+            let toRecipients = recipientEmails(from: message.value(forKey: "toRecipients"))
+            out.append(
+                RawMessage(
+                    messageId: messageId,
+                    accountId: accountId,
+                    subject: subject,
+                    from: sender,
+                    to: toRecipients,
+                    date: sent,
+                    bodyText: body,
+                    mailbox: mailbox
+                )
+            )
+            if out.count >= limit {
+                break
+            }
+        }
+        return out
     }
 
     func fetchMessagesSince(_ since: Date, limit: Int) async -> [RawMessage] {
@@ -277,9 +331,6 @@ final class MailWatcher: @unchecked Sendable {
 
                     autoreleasepool {
                         guard let messageId = messageIdentifier(message) else {
-                            return
-                        }
-                        if localStore.isMessageProcessed(messageId) {
                             return
                         }
 
@@ -373,12 +424,34 @@ final class MailWatcher: @unchecked Sendable {
     }
 
     private func selectableBackfillMailboxes(from mailboxes: [NSObject]) -> [NSObject] {
-        let includeKeywords = ["inbox", "sent"]
+        let includeKeywords = ["inbox", "sent", "archive", "all mail"]
         return mailboxes.filter { mailbox in
             let name = (mailbox.value(forKey: "name") as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
             return includeKeywords.contains(where: { name.contains($0) })
         }
+    }
+
+    private func findMailbox(accountId: String, mailbox: String) -> NSObject? {
+        guard let mailApp = SBApplication(bundleIdentifier: "com.apple.mail") else {
+            logger.error("mail source fetch failed: could not create SBApplication for Mail")
+            return nil
+        }
+        let appObject = mailApp as NSObject
+        let accounts = objectArray(from: appObject.value(forKey: "accounts"))
+        guard let account = accounts.first(where: {
+            (($0.value(forKey: "name") as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(accountId) == .orderedSame
+        }) else {
+            return nil
+        }
+        let mailboxes = objectArray(from: account.value(forKey: "mailboxes"))
+        return mailboxes.first(where: {
+            (($0.value(forKey: "name") as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(mailbox) == .orderedSame
+        })
     }
 }
