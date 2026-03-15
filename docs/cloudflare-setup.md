@@ -148,7 +148,7 @@ Example commands (dev):
 ## Notes while waiting for Skyler OAuth/Claude key
 
 - `POST /tasks/triage` and `POST /briefings/daily` return safe no-op if `OPENAI_API_KEY` is missing.
-- Mail sync runs via Mac IMAP agent (`agent/`) for now.
+- Mail sync is handled by the native macOS agent (`agent-mac`).
 - Test AI Gateway OpenAI wiring with `POST /ai/test`.
 - Outbound mail queue endpoints are:
   - `POST /mail/send` (enqueue)
@@ -170,6 +170,6 @@ Example commands (dev):
 
 - `wrangler secret put` stores Worker secrets encrypted at rest by Cloudflare.
 - Those secrets are available to your Worker at runtime as plaintext environment values.
-- iCloud app-specific password is stored only in the local Mac agent `.env` file.
+- Native macOS agent secrets are stored in Keychain (with `.env` only as a local dev fallback).
 - Embeddings are processed asynchronously through Cloudflare Queue (`EMBEDDING_QUEUE`).
 - Embedding quota/rate failures are tracked/retried via D1 `embedding_jobs` and do not block mail ingest.

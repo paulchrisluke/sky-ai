@@ -1,115 +1,81 @@
-# Mac Agent Setup (Friend-Proof)
+# Mac Agent Setup (Native `agent-mac`)
 
-This is the operational setup for a non-technical user Mac that must auto-recover after reboot/crash.
+This is the default Mac setup for Blawby. The app is native Swift/macOS and runs as a background agent.
 
-## 1) Install dependencies on Mac
+## 1) Prerequisites
 
 ```bash
-brew install node
-npm install -g pm2
+xcode-select --install
+brew install xcodegen
 ```
 
 ## 2) Get the project
 
 ```bash
 git clone https://github.com/paulchrisluke/sky-ai.git
-cd sky-ai
+cd sky-ai/agent-mac
 ```
 
-## 3) Configure local agent
+## 3) Configure local env (dev fallback)
 
 ```bash
-cd agent
 cp .env.example .env
-npm install
 ```
 
-Fill `agent/.env` with:
+Set values in `agent-mac/.env`:
 
-- `APPLE_ID` / `APPLE_APP_PASSWORD`
-- `WORKER_INGEST_URL`
-- `WORKER_WS_URL` (for Blawby WebSocket push)
-- `WORKER_OUTBOUND_NEXT_URL`
-- `WORKER_OUTBOUND_RESULT_URL`
-- `WORKER_API_KEY` (required; must match Worker secret)
-- `WORKSPACE_ID` (default: `default`)
-- `MAILBOXES` (default: `INBOX,Sent Messages`)
-- `STATE_FILE` (default: `../data/mailbox-state.json`)
-- SMTP defaults for iCloud are already in `.env.example` (`smtp.mail.me.com:587`)
+- `WORKER_WS_URL`
+- `WORKER_API_KEY`
+- `WORKSPACE_ID`
+- `ACCOUNT_ID`
+- `OPENAI_API_KEY`
 
-Use Apple app-specific passwords only.
+Notes:
+- In-app Preferences + Keychain are the source of truth for production.
+- `.env` is for local/dev launch convenience.
 
-## 4) Start as persistent service
+## 4) Build and run
 
 ```bash
-cd agent
-npm run pm2:start
-pm2 save
-pm2 startup
+swift build
+.build/debug/BlawbyAgent
 ```
 
-Run the command printed by `pm2 startup` (it usually needs `sudo`).
-
-## 5) Remote support safety net
-
-Enable macOS Screen Sharing:
-
-- System Settings -> General -> Sharing -> Screen Sharing: ON
-
-## 6) Health checks
+## 5) Install as login/background service
 
 ```bash
-pm2 status
-pm2 logs email-sync --lines 100
+./install.sh
 ```
 
-## 7) Optional historical backfill
+This installs the binary under `~/.blawby/bin` and loads launch agent `com.blawby.agent`.
 
-Run this one-off command to ingest older mail in a controlled, checkpointed way.
+## 6) Verify
 
 ```bash
-cd ~/sky-ai/agent
-npm run backfill -- --since=2024-01-01 --mailboxes=INBOX
+tail -n 100 ~/.blawby/logs/agent.log
+launchctl list | grep com.blawby.agent
 ```
 
-Optional flags:
+You should see:
+- websocket connected
+- observer startup logs (mail/calendar/messages)
+- sync logs (`[sync] ...`)
 
-- `--until=2024-12-31`
-- `--batchSize=25`
-- `--delayMs=250`
-
-Checkpoint state is written to `~/sky-ai/data/backfill-state.json`.
-
-## If IMAP/CalDAV auth fails
-
-Symptoms:
-
-- IMAP: `AUTHENTICATIONFAILED`
-- CalDAV: `401` / `caldav_principal_not_found`
-
-Fix on Skyler account:
-
-1. Go to `https://appleid.apple.com`
-2. Sign in -> Security -> App-Specific Passwords
-3. Generate a new app password labeled `Blawby Mac Mini`
-4. Update `APPLE_APP_PASSWORD` in `agent/.env`
-5. Restart: `npx pm2 restart all`
-
-## After pulling latest changes
-
-Use this when syncing the Mac Mini to current code:
+## 7) Uninstall
 
 ```bash
-cd ~/sky-ai
-git pull
-cd agent
-npm install
-npx pm2 restart all
+./uninstall.sh
 ```
 
-## Notes
+## Xcode workflow (optional)
 
-- Cloudflare Tunnel is not used in the current architecture.
-- Agent now does:
-  - IMAP IDLE + CalDAV poll -> WebSocket push to `/agents/blawby-agent/primary`
-  - SMTP send on behalf of `APPLE_ID` by polling Worker `/mail/outbound/next`
+From `agent-mac/`:
+
+```bash
+xcodegen generate
+open BlawbyAgent.xcodeproj
+```
+
+## Legacy Node agent
+
+The old Node/PM2 flow in `/agent` is legacy compatibility only and is not the target architecture.

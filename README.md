@@ -1,6 +1,6 @@
 # sky-ai
 
-Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
+Cloudflare backend + native macOS agent (`agent-mac`) for Sky AI.
 
 ## Development Mode
 
@@ -16,8 +16,8 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 - R2: raw artifacts
 - Vectorize: memory retrieval index
 - Workers Cron: scheduled sync/briefing jobs
-- Mac Mailbox Agent (`agent/`): IMAP sync from iCloud mailboxes to Worker ingest endpoint
-- PM2 on Mac: process persistence and always-on connectivity
+- Native Mac Agent (`agent-mac/`): event-driven Mail/Calendar/Messages ingestion + local processing + WebSocket publish
+- Local persistence: SQLite via GRDB (`~/.blawby/blawby.db`)
 
 ## Structure (Living)
 
@@ -26,7 +26,8 @@ Cloudflare backend + Mac-hosted mailbox connector for Sky AI.
 - `workers/shared`: shared contracts/utilities (citation contract, run events)
 - `workers/api/src/agents/blawby.ts`: Cloudflare Agents SDK memory agent (`BlawbyAgent`)
 - `db/migrations`: D1 schema evolution
-- `agent/`: Mac-side mailbox connector + backfill tooling
+- `agent-mac/`: native macOS app/agent (Swift) for local ingestion and sync
+- `agent/`: legacy Node agent (temporary, pending full retirement)
 
 ## Tools
 
@@ -96,7 +97,7 @@ Use the auto-generated Worker domain by default:
 ## Secrets Clarification
 
 - `wrangler secret put` is encrypted at rest by Cloudflare.
-- In the current setup, iCloud app-specific password is used only by the Mac agent (`agent/.env`).
+- In the native setup, API secrets are stored in macOS Keychain and non-secret settings in `UserDefaults` (with `.env` fallback for local dev runs).
 - Worker secret `WORKER_API_KEY` is required for agent <-> Worker auth.
 - `OPENAI_API_KEY` is required for AI Gateway OpenAI-based triage/briefing and `/ai/test`.
 - Jobs worker daily briefing schedule policy:
@@ -110,9 +111,10 @@ Use the auto-generated Worker domain by default:
 - Cloudflare backend can be deployed now.
 - `/tasks/triage` and `/briefings/daily` are safe no-op if `OPENAI_API_KEY` is missing.
 - `/ai/test` verifies OpenAI via Cloudflare AI Gateway.
-- iCloud mailbox sync can run now via the local Mac agent (`agent/`) with app-specific passwords.
+- iCloud mailbox sync runs via the native local Mac agent (`agent-mac/`).
 - Email capabilities now include:
-  - Sync of `INBOX` (or configured mailboxes) via IMAP
+  - Event-driven mail polling/observation from macOS Mail integration
+  - Local entity extraction on Mac (`EntityExtractor`) before publish
   - SMTP send on behalf of the mailbox via outbound queue (`/mail/send`)
   - Canonical persistence in D1 (`email_threads`, `email_messages`, participants)
   - Idempotent ingest keys (`source_message_key`) to prevent duplicates
@@ -259,13 +261,8 @@ The script will:
 
 ## Historical Backfill (Controlled)
 
-Use the Mac agent one-off backfill command. This is checkpointed and dedupe-safe.
-
-1. In `agent/.env`, set optional backfill vars (`BACKFILL_*`) or pass args.
-2. Run from `agent/`:
-   - `npm run backfill -- --since=2024-01-01 --mailboxes=INBOX`
-   - optional: `--until=2024-12-31 --batchSize=25 --delayMs=250`
-3. Progress checkpoint is written to `data/backfill-state.json`.
+Historical backfill is currently available only through the legacy Node tooling in `/agent`.
+Do not extend this path. Migration target is full native parity in `agent-mac`.
 
 ## Railway ChatKit Skeleton
 
