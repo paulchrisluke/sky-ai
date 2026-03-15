@@ -20,13 +20,6 @@ final class SyncRuntimeController {
     private var started = false
 
     var onMenuRefresh: (@MainActor () -> Void)?
-    var onMailChange: (@MainActor () -> Void)?
-    var onCalendarChange: (@MainActor () -> Void)?
-    var onMessagesAvailabilityChanged: (@MainActor (_ available: Bool, _ connected: Bool) -> Void)?
-    var onMailAccountNamesChanged: (@MainActor ([String]) -> Void)?
-    var onCalendarSourceNamesChanged: (@MainActor ([String]) -> Void)?
-    var onCalendarSourceDiscoveryFailed: (@MainActor () -> Void)?
-    var onMessagesProgress: (@MainActor (MessagesReaderProgress) -> Void)?
 
     init(dependencies: Dependencies) {
         self.deps = dependencies
@@ -35,9 +28,6 @@ final class SyncRuntimeController {
     func start() {
         guard !started else { return }
         started = true
-
-        let messagesAvailable = FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/Messages/chat.db")
-        onMessagesAvailabilityChanged?(messagesAvailable, messagesAvailable)
 
         deps.webSocketPublisher.connect()
         deps.sourceManager.start()
@@ -48,7 +38,6 @@ final class SyncRuntimeController {
                 guard self.deps.isSyncEnabled() else { return }
                 self.deps.sourceManager.markSourcesChanged(sourceType: "mail")
                 await self.deps.syncCoordinator.runMailSync()
-                self.onMailChange?()
                 self.onMenuRefresh?()
             }
         }
@@ -59,7 +48,6 @@ final class SyncRuntimeController {
                 guard self.deps.isSyncEnabled() else { return }
                 self.deps.sourceManager.markSourcesChanged(sourceType: "calendar")
                 await self.deps.syncCoordinator.runCalendarSync()
-                self.onCalendarChange?()
                 self.onMenuRefresh?()
             }
         }
@@ -82,35 +70,24 @@ final class SyncRuntimeController {
                 }
             },
             onProgress: { [weak self] progress in
+                _ = progress
                 Task { @MainActor in
-                    self?.onMessagesProgress?(progress)
                     self?.onMenuRefresh?()
                 }
             }
         )
 
         Task {
-            let names = await deps.mailWatcher.accountNames()
-            await MainActor.run {
-                deps.localStore.upsertMailAccounts(names)
-                onMailAccountNamesChanged?(deps.localStore.knownMailAccounts())
-                onMenuRefresh?()
-            }
+            _ = await deps.mailWatcher.accountNames()
+            await MainActor.run { onMenuRefresh?() }
         }
 
         Task {
             do {
-                let names = try await deps.calendarWatcher.calendarSourceNames()
-                await MainActor.run {
-                    deps.localStore.upsertCalendarSources(names)
-                    onCalendarSourceNamesChanged?(deps.localStore.knownCalendarSources())
-                    onMenuRefresh?()
-                }
+                _ = try await deps.calendarWatcher.calendarSourceNames()
+                await MainActor.run { onMenuRefresh?() }
             } catch {
-                await MainActor.run {
-                    onCalendarSourceDiscoveryFailed?()
-                    onMenuRefresh?()
-                }
+                await MainActor.run { onMenuRefresh?() }
             }
         }
 
@@ -131,8 +108,6 @@ final class SyncRuntimeController {
         deps.calendarWatcher.stopObserving()
         messagesReader?.stop()
         messagesReader = nil
-        let messagesAvailable = FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/Messages/chat.db")
-        onMessagesAvailabilityChanged?(messagesAvailable, false)
         deps.sourceManager.stop()
         deps.webSocketPublisher.disconnect()
     }

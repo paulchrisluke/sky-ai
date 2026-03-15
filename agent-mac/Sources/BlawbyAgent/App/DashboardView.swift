@@ -5,93 +5,232 @@ struct DashboardView: View {
     @ObservedObject var sourceManager: SourceManager
     @ObservedObject var state: MenuBarState
 
+    @State private var selectedSourceId: String?
+    @State private var sourceSearch = ""
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Overview")
-                        .font(.title2.weight(.semibold))
-                    Text("\(formatNumber(totalSynced)) / \(formatNumber(totalEstimated)) items synced")
-                        .font(.headline)
-                    HStack(spacing: 12) {
-                        Label(state.connection, systemImage: "dot.radiowaves.left.and.right")
-                            .foregroundColor(connectionColor)
-                        Text("Last sync: \(state.lastSync)")
-                            .foregroundColor(.secondary)
-                    }
-                    .font(.subheadline)
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Active Sources")
-                        .font(.title3.weight(.semibold))
-
-                    if activeSources.isEmpty {
-                        Text("No active sources.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(activeSources, id: \.id) { source in
-                            SourceRow(source: source)
-                            Divider()
-                        }
-                    }
+        NavigationSplitView {
+            List(selection: $selectedSourceId) {
+                ForEach(filteredSources, id: \.id) { source in
+                    SourceSidebarRow(source: source)
+                        .tag(source.id)
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .navigationTitle("Sources")
+            .searchable(text: $sourceSearch, prompt: "Filter sources")
+        } detail: {
+            if let source = selectedSource {
+                SourceDetailView(
+                    source: source,
+                    connection: state.connection,
+                    lastSync: state.lastSync
+                )
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "tray")
+                        .font(.system(size: 30))
+                        .foregroundColor(.secondary)
+                    Text("Select a Source")
+                        .font(.headline)
+                    Text("Choose a source from the sidebar to inspect status and sync progress.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .onAppear {
+            if selectedSourceId == nil {
+                selectedSourceId = filteredSources.first?.id
+            }
+        }
+        .onChange(of: filteredSources.map(\.id)) { ids in
+            if let selectedSourceId, ids.contains(selectedSourceId) {
+                return
+            }
+            self.selectedSourceId = ids.first
         }
     }
 
-    private var totalSynced: Int {
-        sourceManager.sources.filter(\.enabled).reduce(0) { $0 + max(0, $1.totalSynced) }
+    private var filteredSources: [ConnectedSource] {
+        let query = sourceSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sources = activeSources
+        guard !query.isEmpty else { return sources }
+
+        return sources.filter { source in
+            source.sourceName.localizedCaseInsensitiveContains(query)
+                || source.sourceType.localizedCaseInsensitiveContains(query)
+                || source.status.localizedCaseInsensitiveContains(query)
+        }
     }
 
-    private var totalEstimated: Int {
-        sourceManager.sources.filter(\.enabled).reduce(0) { $0 + max(0, $1.totalEstimated) }
+    private var selectedSource: ConnectedSource? {
+        guard let selectedSourceId else { return nil }
+        return activeSources.first { $0.id == selectedSourceId }
     }
 
     private var activeSources: [ConnectedSource] {
-        let enabled = sourceManager.sources.filter(\.enabled)
-        let prioritized = enabled
-            .filter { $0.totalEstimated > 0 }
+        sourceManager.sources
+            .filter(\.enabled)
             .sorted { lhs, rhs in
-                if lhs.totalEstimated == rhs.totalEstimated {
+                if lhs.status == rhs.status {
                     return lhs.sourceName.localizedCaseInsensitiveCompare(rhs.sourceName) == .orderedAscending
                 }
-                return lhs.totalEstimated > rhs.totalEstimated
+                return sortPriority(lhs.status) < sortPriority(rhs.status)
             }
-
-        let pending = enabled
-            .filter { $0.totalEstimated == 0 && ($0.status == "pending" || $0.status == "syncing") }
-            .sorted { $0.sourceName.localizedCaseInsensitiveCompare($1.sourceName) == .orderedAscending }
-
-        return prioritized + pending
     }
 
-    private var connectionColor: Color {
-        let lowered = state.connection.lowercased()
-        if lowered.hasPrefix("connected") {
-            return .green
-        } else if lowered.hasPrefix("reconnecting") || lowered.hasPrefix("connecting") {
-            return .yellow
-        } else {
-            return .red
+    private func sortPriority(_ status: String) -> Int {
+        switch status {
+        case "error": return 0
+        case "syncing": return 1
+        case "pending": return 2
+        case "current": return 3
+        default: return 4
+        }
+    }
+}
+
+private struct SourceSidebarRow: View {
+    let source: ConnectedSource
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: iconName)
+                .foregroundColor(statusColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(source.sourceName)
+                    .lineLimit(1)
+                Text(source.status.capitalized)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Text("\(source.totalSynced)/\(max(source.totalEstimated, source.totalSynced))")
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
         }
     }
 
-    private func formatNumber(_ value: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    private var iconName: String {
+        switch source.sourceType {
+        case "mail": return "envelope.fill"
+        case "calendar": return "calendar"
+        case "messages": return "message.fill"
+        default: return "circle.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        switch source.status {
+        case "syncing": return .blue
+        case "current": return .green
+        case "error": return .red
+        default: return .secondary
+        }
+    }
+}
+
+private struct SourceDetailView: View {
+    let source: ConnectedSource
+    let connection: String
+    let lastSync: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Label(source.sourceName, systemImage: iconName)
+                    .font(.title2.weight(.semibold))
+                Spacer()
+                StatusBadge(status: source.status)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Sync Progress")
+                    .font(.headline)
+                ProgressView(value: progressValue)
+                    .progressViewStyle(.linear)
+                Text("\(source.totalSynced) of \(progressTotal) synced")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
+            Divider()
+
+            Group {
+                detailRow(label: "Type", value: source.sourceType.capitalized)
+                detailRow(label: "Account", value: source.accountId)
+                detailRow(label: "Connection", value: connection)
+                detailRow(label: "Last Sync", value: lastSync)
+                if let error = source.lastError, !error.isEmpty {
+                    detailRow(label: "Last Error", value: error, color: .red)
+                }
+            }
+            Spacer()
+        }
+        .padding(24)
+    }
+
+    private var progressTotal: Int {
+        max(source.totalEstimated, source.totalSynced)
+    }
+
+    private var progressValue: Double {
+        guard progressTotal > 0 else { return 0 }
+        return min(1.0, max(0.0, Double(source.totalSynced) / Double(progressTotal)))
+    }
+
+    private var iconName: String {
+        switch source.sourceType {
+        case "mail": return "envelope.fill"
+        case "calendar": return "calendar"
+        case "messages": return "message.fill"
+        default: return "circle.fill"
+        }
+    }
+
+    @ViewBuilder
+    private func detailRow(label: String, value: String, color: Color = .primary) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .frame(width: 110, alignment: .leading)
+                .foregroundColor(.secondary)
+            Text(value)
+                .foregroundColor(color)
+                .textSelection(.enabled)
+            Spacer()
+        }
+        .font(.body)
+    }
+}
+
+private struct StatusBadge: View {
+    let status: String
+
+    var body: some View {
+        Text(status.capitalized)
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(backgroundColor.opacity(0.18))
+            .foregroundColor(backgroundColor)
+            .clipShape(Capsule())
+    }
+
+    private var backgroundColor: Color {
+        switch status {
+        case "syncing": return .blue
+        case "current": return .green
+        case "error": return .red
+        default: return .secondary
+        }
     }
 }
 
 final class DashboardWindowController: NSWindowController {
     convenience init(sourceManager: SourceManager, state: MenuBarState) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 920, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -102,7 +241,7 @@ final class DashboardWindowController: NSWindowController {
 
     private func setup(sourceManager: SourceManager, state: MenuBarState) {
         window?.title = "Blawby Dashboard"
-        window?.minSize = NSSize(width: 640, height: 420)
+        window?.minSize = NSSize(width: 760, height: 460)
         window?.setFrameAutosaveName("BlawbyDashboardWindow")
         window?.contentViewController = NSHostingController(
             rootView: DashboardView(sourceManager: sourceManager, state: state)

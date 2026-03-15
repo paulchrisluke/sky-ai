@@ -42,14 +42,14 @@ Current alignment:
 - Preferences and dashboard are normal `NSWindow` flows, not popover-only workflows.
 - AppDelegate UI responsibilities were split into `AppUIController` to reduce lifecycle coupling.
 - Runtime/watcher lifecycle was split into `SyncRuntimeController` to reduce AppDelegate orchestration load.
+- Startup dependency composition was split into `AppStartupComposer`.
+- Native app commands/shortcuts are wired via `AppCommandController` (Dashboard, Preferences, Pause/Resume, Quit).
+- Dashboard now uses a split-view desktop layout with selectable source detail.
 - Preferences layout now uses Auto Layout (`NSGridView`) instead of manual frame math.
 
 Not yet aligned (next targets):
 
-- `AppDelegate` is still broad; status formatting and startup composition can be split further into focused services.
-- Menu/command architecture is minimal; keyboard shortcuts and responder-chain command handling are limited.
 - The app is AppKit-first with SwiftUI-hosted views, but not fully scene-driven SwiftUI (`Window`/`MenuBarExtra`) yet.
-- Dashboard currently surfaces source status; richer native desktop patterns (toolbar commands, split panes, detailed inspectors) are still pending.
 - README-level architecture is now documented, but automated architecture checks (lint/test assertions around thread confinement and UI boundaries) are not in place yet.
 
 ## Structure (Living)

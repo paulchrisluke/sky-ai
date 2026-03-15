@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		03ECE348308DC64C933CCF20 /* AppUIController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 714744053CC39C9C72ADB63B /* AppUIController.swift */; };
 		053BC6A42FCF45858B3D65AF /* SyncRuntimeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CA821B9C735487DAEE2C2ED /* SyncRuntimeController.swift */; };
+		0677E0E657EC4AB3A9987E79 /* AppCommandController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E458A0447EA04DA88EAF77CC /* AppCommandController.swift */; };
 		07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */; };
 		289661C0209D41B5319B0657 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C61DC164DE3E5327702F99 /* Config.swift */; };
 		2934EF299DD477179A67C5E5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = BB22FC45049BCFD0751A8C05 /* GRDB */; };
@@ -30,6 +31,7 @@
 		D125204F81C69D021288F9E1 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28B4C46851AA9CFB67EB06F /* main.swift */; };
 		D2F5CA44EA53E5343394DFC2 /* SourceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51397B60B3C9B31D8BEAA14 /* SourceManager.swift */; };
 		DFFC1AC2AA62764E85066948 /* MessagesReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03F3929134BE941F4D84B17C /* MessagesReader.swift */; };
+		E0283AFD6DB44773A5B08094 /* AppStartupComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F9CA772E5A94E7F8CD42BEC /* AppStartupComposer.swift */; };
 		E05C5F898DC18439BCCA9DAB /* Mail.sdef in Resources */ = {isa = PBXBuildFile; fileRef = 2DBF363EB08A6121C368B7D3 /* Mail.sdef */; };
 		E28372C641824150C40949B0 /* EntityExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0A817E9BA538BAB3D28137 /* EntityExtractor.swift */; };
 		E4AA27EF6229A9F55A7CE3C9 /* WebSocketPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */; };
@@ -53,6 +55,7 @@
 /* Begin PBXFileReference section */
 		00B3BD000A32BFE8D55E39A8 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		03F3929134BE941F4D84B17C /* MessagesReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesReader.swift; sourceTree = "<group>"; };
+		0F9CA772E5A94E7F8CD42BEC /* AppStartupComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStartupComposer.swift; sourceTree = "<group>"; };
 		06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "blawby-logo-source.png"; sourceTree = "<group>"; };
 		0FA6D9F37F3C7B9B5574DF43 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
@@ -82,6 +85,7 @@
 		C28B4C46851AA9CFB67EB06F /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		C51397B60B3C9B31D8BEAA14 /* SourceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceManager.swift; sourceTree = "<group>"; };
 		CAA25A68472D76D0C994520D /* CalendarWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarWatcher.swift; sourceTree = "<group>"; };
+		E458A0447EA04DA88EAF77CC /* AppCommandController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCommandController.swift; sourceTree = "<group>"; };
 		FE15D867F583668A8E9ED2AC /* BlawbyAgent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BlawbyAgent.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -121,7 +125,9 @@
 		454844A0E0F6606864D8C714 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				E458A0447EA04DA88EAF77CC /* AppCommandController.swift */,
 				6C784BE09AF926E1EED926D3 /* AppDelegate.swift */,
+				0F9CA772E5A94E7F8CD42BEC /* AppStartupComposer.swift */,
 				714744053CC39C9C72ADB63B /* AppUIController.swift */,
 				00B3BD000A32BFE8D55E39A8 /* DashboardView.swift */,
 				206689B593945129B37BFCD0 /* MenuBarController.swift */,
@@ -349,6 +355,8 @@
 				AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */,
 				8906183134A01A77D5CC849A /* DashboardView.swift in Sources */,
 				5669259E3FB85B9AAB83B428 /* EmlxReader.swift in Sources */,
+				0677E0E657EC4AB3A9987E79 /* AppCommandController.swift in Sources */,
+				E0283AFD6DB44773A5B08094 /* AppStartupComposer.swift in Sources */,
 				E28372C641824150C40949B0 /* EntityExtractor.swift in Sources */,
 				07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */,
 				AE169531AE4BFA3F8237E346 /* KeychainStore.swift in Sources */,
