@@ -15,6 +15,9 @@ import {
   isProviderTemporarilyDisabled,
   markProviderHealthy
 } from '../../shared/providerHealth';
+import { BlawbyAgent as BlawbyAgentBase } from '../../agents/blawby';
+
+export class BlawbyAgent extends BlawbyAgentBase {}
 
 export interface Env extends AccessAuthEnv {
   SKY_DB: D1Database;

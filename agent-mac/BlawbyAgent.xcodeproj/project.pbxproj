@@ -12,6 +12,7 @@
 		2934EF299DD477179A67C5E5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = BB22FC45049BCFD0751A8C05 /* GRDB */; };
 		41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D04FFB67431F372BB5AF25 /* Preferences.swift */; };
 		4A85C2E7F1CF5C5BD288E20D /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */; };
+		865B4EFF997483C49A9D8997 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */; };
 		916A9CDE35FA7CD559EAD220 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C784BE09AF926E1EED926D3 /* AppDelegate.swift */; };
 		9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA25A68472D76D0C994520D /* CalendarWatcher.swift */; };
 		A3D7E233E6113FDA009088F8 /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206689B593945129B37BFCD0 /* MenuBarController.swift */; };
@@ -28,9 +29,20 @@
 		F8EB764AD635AF4AC529E989 /* MailProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AD1458AF0D14F688184AE90 /* MailProcessor.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		BC7933B0D4BB7A0277EC153B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C422B8B0B5CCDE1B98776636 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 82ED3CBA1FADC94B14E23293;
+			remoteInfo = BlawbyAgent;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		03F3929134BE941F4D84B17C /* MessagesReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesReader.swift; sourceTree = "<group>"; };
 		179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		1E125D8D55798E8F07C4698C /* BlawbyAgentTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BlawbyAgentTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		206689B593945129B37BFCD0 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
 		22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvLoader.swift; sourceTree = "<group>"; };
 		29C61DC164DE3E5327702F99 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
@@ -43,6 +55,7 @@
 		6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
 		7172F45B5B28D80C2994749B /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
 		7AD1458AF0D14F688184AE90 /* MailProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailProcessor.swift; sourceTree = "<group>"; };
+		A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinatorTests.swift; sourceTree = "<group>"; };
 		A8D04FFB67431F372BB5AF25 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
 		AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketPublisher.swift; sourceTree = "<group>"; };
 		C28B4C46851AA9CFB67EB06F /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -114,8 +127,18 @@
 			isa = PBXGroup;
 			children = (
 				FE15D867F583668A8E9ED2AC /* BlawbyAgent.app */,
+				1E125D8D55798E8F07C4698C /* BlawbyAgentTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		697AA728D7FBC844026CF633 /* BlawbyAgentTests */ = {
+			isa = PBXGroup;
+			children = (
+				A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */,
+			);
+			name = BlawbyAgentTests;
+			path = Tests/BlawbyAgentTests;
 			sourceTree = "<group>";
 		};
 		83A9F14D60DEF70EA4D3EE6C /* Publishers */ = {
@@ -156,6 +179,7 @@
 			isa = PBXGroup;
 			children = (
 				26D4C3366FD7BAB9AD4ADF25 /* BlawbyAgent */,
+				697AA728D7FBC844026CF633 /* BlawbyAgentTests */,
 				5DCCF81F84C458B80263CE30 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -182,6 +206,24 @@
 			productReference = FE15D867F583668A8E9ED2AC /* BlawbyAgent.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A64338D7CAC7F6FBADFA6099 /* BlawbyAgentTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CE5D6CFBEFD51F16C5D88A7A /* Build configuration list for PBXNativeTarget "BlawbyAgentTests" */;
+			buildPhases = (
+				2B5E4E1D4B0B1F9E842B9DF4 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				374B1F1165BE7748C25A48B6 /* PBXTargetDependency */,
+			);
+			name = BlawbyAgentTests;
+			packageProductDependencies = (
+			);
+			productName = BlawbyAgentTests;
+			productReference = 1E125D8D55798E8F07C4698C /* BlawbyAgentTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -192,6 +234,9 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					82ED3CBA1FADC94B14E23293 = {
+						ProvisioningStyle = Automatic;
+					};
+					A64338D7CAC7F6FBADFA6099 = {
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -214,11 +259,20 @@
 			projectRoot = "";
 			targets = (
 				82ED3CBA1FADC94B14E23293 /* BlawbyAgent */,
+				A64338D7CAC7F6FBADFA6099 /* BlawbyAgentTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXSourcesBuildPhase section */
+		2B5E4E1D4B0B1F9E842B9DF4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				865B4EFF997483C49A9D8997 /* SyncCoordinatorTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		2FC3B14FF6B6A0F2CED9A9C7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -245,6 +299,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		374B1F1165BE7748C25A48B6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 82ED3CBA1FADC94B14E23293 /* BlawbyAgent */;
+			targetProxy = BC7933B0D4BB7A0277EC153B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		454DA359B2DE2CB61AFBAB6D /* Release */ = {
@@ -374,15 +436,40 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = BlawbyAgent/BlawbyAgent.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = 948S9JG4VL;
 				INFOPLIST_FILE = BlawbyAgent/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = "-framework EventKit -framework Contacts -framework ScriptingBridge";
+				OTHER_LDFLAGS = (
+					"-framework",
+					EventKit,
+					"-framework",
+					Contacts,
+					"-framework",
+					ScriptingBridge,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgent;
 				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		BA77FC188DE4125AD99335FC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgentTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BlawbyAgent.app/Contents/MacOS/BlawbyAgent";
 			};
 			name = Debug;
 		};
@@ -390,15 +477,40 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = BlawbyAgent/BlawbyAgent.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = 948S9JG4VL;
 				INFOPLIST_FILE = BlawbyAgent/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				OTHER_LDFLAGS = "-framework EventKit -framework Contacts -framework ScriptingBridge";
+				OTHER_LDFLAGS = (
+					"-framework",
+					EventKit,
+					"-framework",
+					Contacts,
+					"-framework",
+					ScriptingBridge,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgent;
 				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		FA6CFA09D772C23CB18CBED0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgentTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BlawbyAgent.app/Contents/MacOS/BlawbyAgent";
 			};
 			name = Release;
 		};
@@ -419,6 +531,15 @@
 			buildConfigurations = (
 				7ED4A756DB04AB3DCDA42733 /* Debug */,
 				DE92039CB0FD2AA46269880C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CE5D6CFBEFD51F16C5D88A7A /* Build configuration list for PBXNativeTarget "BlawbyAgentTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BA77FC188DE4125AD99335FC /* Debug */,
+				FA6CFA09D772C23CB18CBED0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

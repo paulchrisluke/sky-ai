@@ -40,6 +40,7 @@ targets:
         product: GRDB
     settings:
       base:
+        CODE_SIGN_ENTITLEMENTS: BlawbyAgent/BlawbyAgent.entitlements
         OTHER_LDFLAGS: "-framework EventKit -framework Contacts -framework ScriptingBridge"
   BlawbyAgentTests:
     type: bundle.unit-test

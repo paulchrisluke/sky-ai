@@ -46,10 +46,6 @@ new_classes = ["ChatCoordinator"]
 tag = "v2"
 new_sqlite_classes = ["BlawbyAgent"]
 
-[[migrations]]
-tag = "v3"
-deleted_classes = ["BlawbyAgent"]
-
 [env.prod]
 compatibility_date = "2026-03-05"
 compatibility_flags = ["nodejs_compat"]
