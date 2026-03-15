@@ -48,26 +48,51 @@ final class PreferencesWindowController: NSWindowController {
     }
 
     private func makeConnectionView() -> NSView {
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 620, height: 420))
+        let content = NSView()
 
         let labels = ["Worker URL", "API Key", "Workspace ID", "Account ID", "OpenAI API Key"]
         let fields: [NSView] = [workerField, apiKeyField, workspaceField, accountField, openAIField]
 
-        var y = 330.0
-        for (index, label) in labels.enumerated() {
+        var labelFields: [NSTextField] = []
+        let rows: [[NSView]] = zip(labels, fields).map { label, field in
             let labelField = NSTextField(labelWithString: label)
-            labelField.frame = NSRect(x: 24, y: y, width: 160, height: 24)
-            content.addSubview(labelField)
-
-            let field = fields[index]
-            field.frame = NSRect(x: 190, y: y - 2, width: 400, height: 24)
-            content.addSubview(field)
-            y -= 44
+            labelField.alignment = .right
+            labelField.translatesAutoresizingMaskIntoConstraints = false
+            field.translatesAutoresizingMaskIntoConstraints = false
+            labelFields.append(labelField)
+            return [labelField, field]
         }
 
+        let formGrid = NSGridView(views: rows)
+        formGrid.translatesAutoresizingMaskIntoConstraints = false
+        formGrid.rowSpacing = 12
+        formGrid.columnSpacing = 12
+        formGrid.column(at: 0).xPlacement = .trailing
+        formGrid.column(at: 1).xPlacement = .fill
+
         let saveButton = NSButton(title: "Save", target: self, action: #selector(save))
-        saveButton.frame = NSRect(x: 510, y: 22, width: 80, height: 30)
+        saveButton.translatesAutoresizingMaskIntoConstraints = false
+
+        content.addSubview(formGrid)
         content.addSubview(saveButton)
+
+        var constraints: [NSLayoutConstraint] = [
+            formGrid.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            formGrid.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            formGrid.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+
+            saveButton.topAnchor.constraint(greaterThanOrEqualTo: formGrid.bottomAnchor, constant: 20),
+            saveButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            saveButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
+            workerField.widthAnchor.constraint(greaterThanOrEqualToConstant: 320)
+        ]
+        if let firstLabel = labelFields.first {
+            constraints.append(firstLabel.widthAnchor.constraint(equalToConstant: 160))
+            for labelField in labelFields.dropFirst() {
+                constraints.append(labelField.widthAnchor.constraint(equalTo: firstLabel.widthAnchor))
+            }
+        }
+        NSLayoutConstraint.activate(constraints)
 
         return content
     }

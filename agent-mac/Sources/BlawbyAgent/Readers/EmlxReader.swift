@@ -39,6 +39,24 @@ final class EmlxReader: @unchecked Sendable {
         var accounts: [EmlxAccount] = []
         for url in contents {
             let folderName = url.lastPathComponent
+            if folderName.count > 10 { // UUID-like folder
+                let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+                var filesProbed = 0
+                while let file = enumerator?.nextObject() as? URL {
+                    if file.pathExtension == "emlx" {
+                        if let data = try? Data(contentsOf: file), let head = String(data: data.prefix(4096), encoding: .utf8) {
+                            let lines = head.components(separatedBy: "\n")
+                            let idHeaders = lines.filter { 
+                                let l = $0.lowercased()
+                                return l.hasPrefix("delivered-to:") || l.hasPrefix("from:") || l.hasPrefix("to:") || l.hasPrefix("x-real-to:")
+                            }
+                            logger.info("DIAGNOSTIC ID HEADERS for \(folderName) in \(file.lastPathComponent):\n\(idHeaders.joined(separator: "\n"))")
+                        }
+                        filesProbed += 1
+                        if filesProbed >= 3 { break }
+                    }
+                }
+            }
             if folderName == "MailData" { continue }
             
             // 1. Try AccountInfo.plist

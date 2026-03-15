@@ -1,11 +1,8 @@
 import AppKit
 import ServiceManagement
-import Combine
 
 final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
-    private var menuBar: MenuBarController?
-    private var preferencesWindow: PreferencesWindowController?
-    private var dashboardWindow: DashboardWindowController?
+    private var uiController: AppUIController?
 
     private var logger: Logger?
     private var localStore: LocalStore?
@@ -17,8 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var contactsReader: ContactsReader?
     private var webSocketPublisher: WebSocketPublisher?
     private var config: Config?
-    private var sourceCancellable: AnyCancellable?
-
     private var mailProcessedToday = 0
     private var calendarSynced = 0
     private let iso = ISO8601DateFormatter()
@@ -47,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        uiController = AppUIController()
 
         do {
             let baseDir = resolveBlawbyHome()
@@ -108,18 +104,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             self.mailWatcher = mailWatcher
             self.calendarWatcher = calendarWatcher
             self.webSocketPublisher = webSocketPublisher
-            self.sourceCancellable = sourceManager.$sources
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in
+            if let uiController {
+                uiController.observeSources(sourceManager) { [weak self] in
                     self?.updateMenu()
                 }
 
-            menuBar = MenuBarController(
-                sourceManager: sourceManager,
-                setSyncEnabled: { [weak self] enabled in self?.setSyncEnabled(enabled) },
-                openDashboard: { [weak self] in self?.openDashboard() },
-                preferences: { [weak self] in self?.openPreferences() }
-            )
+                uiController.setupMenuBar(
+                    sourceManager: sourceManager,
+                    setSyncEnabled: { [weak self] enabled in self?.setSyncEnabled(enabled) },
+                    openDashboard: { [weak self] in self?.openDashboard() },
+                    preferences: { [weak self] in self?.openPreferences() }
+                )
+            }
 
             coordinator.setOnStatusChanged { [weak self] snapshot in
                 Task { @MainActor in
@@ -164,29 +160,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     @MainActor
     private func openPreferences() {
         guard let config, let sourceManager else { return }
-        if preferencesWindow == nil {
-            preferencesWindow = PreferencesWindowController(config: config, sourceManager: sourceManager)
-        }
-        preferencesWindow?.showWindow(nil)
-        preferencesWindow?.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        uiController?.openPreferences(config: config, sourceManager: sourceManager)
     }
 
     @MainActor
     private func openDashboard() {
-        guard let sourceManager, let menuBar else { return }
-        if dashboardWindow == nil {
-            dashboardWindow = DashboardWindowController(sourceManager: sourceManager, state: menuBar.state)
-        }
-        dashboardWindow?.showWindow(nil)
-        dashboardWindow?.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        guard let sourceManager else { return }
+        uiController?.openDashboard(sourceManager: sourceManager)
     }
 
     @MainActor
     private func updateMenu() {
         let sources = sourceManager?.sources ?? []
-        menuBar?.update(
+        uiController?.updateMenu(
             lastSync: lastSyncDisplay,
             connection: connectionDisplay,
             syncActivated: syncActivated,

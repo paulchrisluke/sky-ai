@@ -33,6 +33,24 @@ Cloudflare backend + native macOS agent (`agent-mac`) for Sky AI.
 - UI state is shared through controller/view-model style objects (MVC/MVVM blend), with AppKit owning lifecycle and SwiftUI used for view composition.
 - UI updates run on main actor/thread (`@MainActor`), with async/background sync work off the UI path.
 
+## Apple-Native Alignment Status (March 15, 2026)
+
+Current alignment:
+
+- Menu bar is lightweight and action-oriented (status + pause/resume + open windows).
+- Deep interaction moved into a standard macOS dashboard window (`DashboardWindowController` + `DashboardView`).
+- Preferences and dashboard are normal `NSWindow` flows, not popover-only workflows.
+- AppDelegate UI responsibilities were split into `AppUIController` to reduce lifecycle coupling.
+- Preferences layout now uses Auto Layout (`NSGridView`) instead of manual frame math.
+
+Not yet aligned (next targets):
+
+- `AppDelegate` is still too broad; sync runtime/bootstrap orchestration should be split into focused coordinator/services.
+- Menu/command architecture is minimal; keyboard shortcuts and responder-chain command handling are limited.
+- The app is AppKit-first with SwiftUI-hosted views, but not fully scene-driven SwiftUI (`Window`/`MenuBarExtra`) yet.
+- Dashboard currently surfaces source status; richer native desktop patterns (toolbar commands, split panes, detailed inspectors) are still pending.
+- README-level architecture is now documented, but automated architecture checks (lint/test assertions around thread confinement and UI boundaries) are not in place yet.
+
 ## Structure (Living)
 
 - `workers/api`: request-time APIs, query execution, WebSocket coordination, Blawby memory injection
