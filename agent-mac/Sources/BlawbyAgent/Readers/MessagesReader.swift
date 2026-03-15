@@ -122,7 +122,7 @@ final class MessagesReader: @unchecked Sendable {
                 try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT ROWID as rowid, text, date, handle.id as sender
+                    SELECT message.ROWID as rowid, message.text as text, message.date as date, handle.id as sender
                     FROM message
                     LEFT JOIN handle ON handle.ROWID = message.handle_id
                     WHERE text IS NOT NULL
