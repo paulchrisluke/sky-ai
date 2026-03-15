@@ -1,5 +1,5 @@
-import { Agent } from 'agents';
-import { ingestCalendarEventsCore, type JsonRecord } from '../shared/ingestCore';
+import { Agent, callable } from 'agents';
+import { ingestCalendarEventsCore, ingestMessageChunksCore, type JsonRecord } from '../shared/ingestCore';
 
 type BlawbyEnv = Cloudflare.Env & {
   SKY_DB: D1Database;
@@ -135,6 +135,12 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
     }
     if (type === 'calendar') {
       await ingestCalendarEventsCore(this.env, payload);
+      await this.skillImmediateContext();
+      return;
+    }
+    if (type === 'chunks') {
+      const result = await ingestMessageChunksCore(this.env, payload);
+      console.log(`[blawby] chunks: chunked=${result.chunked} skipped=${result.skipped}`);
       await this.skillImmediateContext();
       return;
     }
@@ -363,6 +369,7 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
     });
   }
 
+  @callable()
   getContext(): string {
     return [
       '## Immediate Context',

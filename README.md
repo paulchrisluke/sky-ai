@@ -27,7 +27,7 @@ Cloudflare backend + native macOS agent (`agent-mac`) for Sky AI.
 - `workers/api/src/agents/blawby.ts`: Cloudflare Agents SDK memory agent (`BlawbyAgent`)
 - `db/migrations`: D1 schema evolution
 - `agent-mac/`: native macOS app/agent (Swift) for local ingestion and sync
-- `agent/`: legacy Node agent (temporary, pending full retirement)
+- `agent/`: legacy Node agent (archive-only after Skyler Mac Mini Swift cutover; do not delete yet)
 
 ## Tools
 
@@ -261,8 +261,17 @@ The script will:
 
 ## Historical Backfill (Controlled)
 
-Historical backfill is currently available only through the legacy Node tooling in `/agent`.
-Do not extend this path. Migration target is full native parity in `agent-mac`.
+Legacy Node backfill (`agent/backfill.js`) has been retired because `/ingest/mail-thread` now returns `410 deprecated_endpoint`.
+Use `agent-mac` + modern ingest paths only (`/ingest/entities`, `/ingest/message-chunks`).
+
+## Production Migration Checklist
+
+Primary blocker for production migration is Skyler Mac Mini running the Swift app (`agent-mac`) as the active publisher.
+
+Use [docs/prod-migration-checklist.md](/Users/paulchrisluke/Repos 2026/sky-ai/docs/prod-migration-checklist.md) for:
+- Skyler Mac Mini install/verification
+- Node `agent/` retirement staging (archive first, delete later)
+- `sky-ai-prod` D1 migration parity with dev
 
 ## Railway ChatKit Skeleton
 

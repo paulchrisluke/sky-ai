@@ -1,27 +1,32 @@
 import Foundation
 
+struct MailProcessingResult {
+    let entities: [ExtractedEntity]
+    let rawMessages: [RawMessage]
+}
+
 final class MailProcessor {
     private let localStore: LocalStore
-    private let extractor: EntityExtractor
+    private let extractor: any EntityExtracting
 
-    init(localStore: LocalStore, extractor: EntityExtractor) {
+    init(localStore: LocalStore, extractor: any EntityExtracting) {
         self.localStore = localStore
         self.extractor = extractor
     }
 
-    func process(messages: [RawMessage], workspaceId: String) async throws -> [ExtractedEntity] {
+    func process(messages: [RawMessage], workspaceId: String) async throws -> MailProcessingResult {
         if messages.isEmpty {
-            return []
+            return MailProcessingResult(entities: [], rawMessages: [])
         }
 
         let newMessages = messages.filter { !localStore.isMessageProcessed($0.messageId) }
         if newMessages.isEmpty {
-            return []
+            return MailProcessingResult(entities: [], rawMessages: [])
         }
 
         let extracted = try await extractor.extract(messages: newMessages, workspaceId: workspaceId)
         if extracted.isEmpty {
-            return []
+            return MailProcessingResult(entities: [], rawMessages: newMessages)
         }
 
         var countsByMessageId: [String: Int] = [:]
@@ -39,6 +44,6 @@ final class MailProcessor {
             )
         }
 
-        return extracted
+        return MailProcessingResult(entities: extracted, rawMessages: newMessages)
     }
 }

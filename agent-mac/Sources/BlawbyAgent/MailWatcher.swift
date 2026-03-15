@@ -65,6 +65,7 @@ final class MailWatcher: @unchecked Sendable {
             }
 
             for mailbox in inboxes {
+                let mailboxName = mailbox.value(forKey: "name") as? String ?? "INBOX"
                 guard let messages = mailbox.value(forKey: "messages") as? NSArray else {
                     continue
                 }
@@ -97,6 +98,7 @@ final class MailWatcher: @unchecked Sendable {
 
                         let subject = message.value(forKey: "subject") as? String ?? ""
                         let sender = message.value(forKey: "sender") as? String ?? ""
+                        let toRecipients = recipientEmails(from: message.value(forKey: "toRecipients"))
                         let content = message.value(forKey: "content") as? String ?? subject
                         let bodyText = truncate(content, maxLength: 2000)
 
@@ -106,9 +108,10 @@ final class MailWatcher: @unchecked Sendable {
                                 accountId: config.accountId,
                                 subject: subject,
                                 from: sender,
-                                to: [],
+                                to: toRecipients,
                                 date: dateSent,
-                                bodyText: bodyText
+                                bodyText: bodyText,
+                                mailbox: mailboxName
                             )
                         )
 
@@ -168,5 +171,35 @@ final class MailWatcher: @unchecked Sendable {
 
     private func truncate(_ text: String, maxLength: Int) -> String {
         String(text.prefix(maxLength))
+    }
+
+    private func recipientEmails(from value: Any?) -> [String] {
+        let recipients = objectArray(from: value)
+        return recipients.compactMap { recipient in
+            let addressKeys = ["address", "emailAddress", "email"]
+            for key in addressKeys {
+                if let email = recipient.value(forKey: key) as? String,
+                   !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return email.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+
+            if let raw = recipient.value(forKey: "name") as? String,
+               let extracted = extractEmailAddress(from: raw) {
+                return extracted
+            }
+            return nil
+        }
+    }
+
+    private func extractEmailAddress(from input: String) -> String? {
+        if input.contains("@"), !input.contains("<") {
+            return input.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let start = input.firstIndex(of: "<"), let end = input.firstIndex(of: ">"), start < end else {
+            return nil
+        }
+        let email = input[input.index(after: start)..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+        return email.isEmpty ? nil : email
     }
 }

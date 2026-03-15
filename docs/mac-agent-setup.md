@@ -79,3 +79,27 @@ open BlawbyAgent.xcodeproj
 ## Legacy Node agent
 
 The old Node/PM2 flow in `/agent` is legacy compatibility only and is not the target architecture.
+
+## Production Cutover (Skyler Mac Mini)
+
+Status as of March 15, 2026: this is the production blocker.
+
+Required cutover steps:
+
+1. Install and run Swift agent on Skyler Mac Mini.
+2. Confirm launch agent is loaded:
+   - `launchctl list | grep com.blawby.agent`
+3. Confirm runtime logs are healthy:
+   - `tail -n 100 ~/.blawby/logs/agent.log`
+   - Verify websocket connected and sync publish activity.
+4. Confirm Cloudflare ingest health:
+   - `/ingest/entities` receives payloads from Mac Mini.
+   - `/ingest/message-chunks` receives payloads from Mac Mini.
+5. Freeze Node agent:
+   - No new features or fixes in `agent/`.
+   - Keep directory present for rollback-only window.
+
+Retirement policy:
+
+1. Archive `agent/` after 7+ days of stable Swift-only production runtime.
+2. Delete `agent/` only after explicit sign-off and rollback window closure.

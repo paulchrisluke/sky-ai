@@ -99,6 +99,31 @@ Repeat D1/R2/Vectorize creation for prod resources, then:
 - set PROD secrets using `npx wrangler secret put <NAME> --env prod`
 - deploy with `npx wrangler deploy --env prod`
 
+### D1 schema parity (`sky-ai-prod`)
+
+Goal: prod must have the same applied migration set as dev before full cutover.
+
+Check pending migrations:
+
+```bash
+npx wrangler d1 migrations list sky-ai-dev
+npx wrangler d1 migrations list sky-ai-prod
+```
+
+Apply any unapplied migrations to prod:
+
+```bash
+npx wrangler d1 migrations apply sky-ai-prod
+```
+
+Recommended verification:
+
+```bash
+npx wrangler d1 migrations list sky-ai-prod
+```
+
+Expected result: no unapplied migration files remaining.
+
 ## 7) Cloudflare Access (API auth)
 
 No custom keypair generation is needed. Cloudflare Access issues and signs JWTs.

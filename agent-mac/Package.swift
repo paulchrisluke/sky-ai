@@ -27,6 +27,11 @@ let package = Package(
                 .linkedFramework("ServiceManagement"),
                 .linkedFramework("ScriptingBridge")
             ]
+        ),
+        .testTarget(
+            name: "BlawbyAgentTests",
+            dependencies: ["BlawbyAgent"],
+            path: "Tests/BlawbyAgentTests"
         )
     ]
 )

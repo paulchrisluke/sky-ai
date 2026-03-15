@@ -8,6 +8,7 @@ struct RawMessage: Sendable {
     let to: [String]
     let date: Date
     let bodyText: String
+    let mailbox: String
 }
 
 struct ExtractedEntity: Codable, Sendable {
@@ -95,7 +96,11 @@ enum EntityExtractorError: Error {
     case invalidOpenAIResponse
 }
 
-final class EntityExtractor {
+protocol EntityExtracting {
+    func extract(messages: [RawMessage], workspaceId: String) async throws -> [ExtractedEntity]
+}
+
+final class EntityExtractor: EntityExtracting {
     private let apiKey: String?
     private let contactsReader: ContactsReader?
     private let logger: Logger

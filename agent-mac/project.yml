@@ -41,3 +41,10 @@ targets:
     settings:
       base:
         OTHER_LDFLAGS: "-framework EventKit -framework Contacts -framework ScriptingBridge"
+  BlawbyAgentTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/BlawbyAgentTests
+    dependencies:
+      - target: BlawbyAgent

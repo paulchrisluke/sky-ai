@@ -1,5 +1,22 @@
 import Foundation
 
+protocol WebSocketPublishing {
+    func send(type: String, payload: String) async throws
+}
+
+protocol MailWatching {
+    func fetchNewMessages() -> [RawMessage]
+}
+
+protocol MailProcessing {
+    func process(messages: [RawMessage], workspaceId: String) async throws -> MailProcessingResult
+}
+
+protocol CalendarWatching {
+    func fetchUnsentPayloads() async throws -> [CalendarPayload]
+    func markPayloadEventsSent(_ payload: CalendarPayload)
+}
+
 final class SyncCoordinator {
     private let stateQueue = DispatchQueue(label: "com.blawby.agent.sync.state")
     private var mailSyncRunning = false
@@ -8,19 +25,19 @@ final class SyncCoordinator {
 
     private let config: Config
     private let localStore: LocalStore
-    private let webSocketPublisher: WebSocketPublisher
-    private let mailWatcher: MailWatcher
-    private let mailProcessor: MailProcessor
-    private let calendarWatcher: CalendarWatcher
+    private let webSocketPublisher: any WebSocketPublishing
+    private let mailWatcher: any MailWatching
+    private let mailProcessor: any MailProcessing
+    private let calendarWatcher: any CalendarWatching
     private let logger: Logger
 
     init(
         config: Config,
         localStore: LocalStore,
-        webSocketPublisher: WebSocketPublisher,
-        mailWatcher: MailWatcher,
-        mailProcessor: MailProcessor,
-        calendarWatcher: CalendarWatcher,
+        webSocketPublisher: any WebSocketPublishing,
+        mailWatcher: any MailWatching,
+        mailProcessor: any MailProcessing,
+        calendarWatcher: any CalendarWatching,
         logger: Logger
     ) {
         self.config = config
@@ -163,7 +180,9 @@ final class SyncCoordinator {
         }
 
         do {
-            let entities = try await mailProcessor.process(messages: newMessages, workspaceId: config.workspaceId)
+            let processed = try await mailProcessor.process(messages: newMessages, workspaceId: config.workspaceId)
+            let entities = processed.entities
+            let rawMessages = processed.rawMessages
             if entities.isEmpty {
                 logger.info("[sync] mail: processed=\(newMessages.count) entities=0 sent=true")
                 return
@@ -180,25 +199,77 @@ final class SyncCoordinator {
                 throw NSError(domain: "SyncCoordinator", code: 1, userInfo: [NSLocalizedDescriptionKey: "entities payload encode failed"])
             }
 
+            let chunksPayload = ChunksPayload(
+                type: "chunks",
+                workspaceId: config.workspaceId,
+                accountId: config.accountId,
+                messages: rawMessages.map {
+                    ChunksPayload.Message(
+                        messageId: $0.messageId,
+                        subject: $0.subject,
+                        bodyText: $0.bodyText,
+                        fromEmail: $0.from,
+                        toEmails: $0.to,
+                        mailbox: $0.mailbox,
+                        sentAt: iso8601WithFractionalSeconds($0.date)
+                    )
+                }
+            )
+            let chunksData = try JSONEncoder().encode(chunksPayload)
+            guard let chunksJson = String(data: chunksData, encoding: .utf8) else {
+                throw NSError(domain: "SyncCoordinator", code: 3, userInfo: [NSLocalizedDescriptionKey: "chunks payload encode failed"])
+            }
+
             do {
                 try await webSocketPublisher.send(type: "entities", payload: json)
+                try await webSocketPublisher.send(type: "chunks", payload: chunksJson)
+
                 for messageId in Set(entities.map({ $0.messageId })) {
                     localStore.markMessageSent(messageId)
                 }
                 logger.info("[sync] mail: processed=\(newMessages.count) entities=\(entities.count) sent=true")
             } catch {
                 _ = localStore.enqueuePayload(type: "entities", json: json)
+                _ = localStore.enqueuePayload(type: "chunks", json: chunksJson)
                 logger.info("[sync] mail: processed=\(newMessages.count) entities=\(entities.count) sent=queued")
             }
         } catch {
             logger.error("[sync] mail failed: \(error.localizedDescription)")
         }
     }
+
+    private func iso8601WithFractionalSeconds(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
 }
+
+extension WebSocketPublisher: WebSocketPublishing {}
+extension MailWatcher: MailWatching {}
+extension MailProcessor: MailProcessing {}
+extension CalendarWatcher: CalendarWatching {}
 
 private struct EntitiesPayload: Codable {
     let type: String
     let workspaceId: String
     let accountId: String
     let entities: [ExtractedEntity]
+}
+
+private struct ChunksPayload: Codable {
+    struct Message: Codable {
+        let messageId: String
+        let subject: String
+        let bodyText: String
+        let fromEmail: String
+        let toEmails: [String]
+        let mailbox: String
+        let sentAt: String
+    }
+
+    let type: String
+    let workspaceId: String
+    let accountId: String
+    let messages: [Message]
 }

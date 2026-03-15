@@ -1,8 +1,18 @@
+import { chunkText, cleanEmailBody } from './textUtils';
+
 export type JsonRecord = Record<string, unknown>;
 
 export type IngestCoreEnv = {
   SKY_DB: D1Database;
 };
+
+export type EmbeddingQueueMessage = {
+  sourceRecordId: string;
+};
+
+const CHUNK_SIZE = 1200;
+const CHUNK_OVERLAP = 200;
+const MAX_CHUNKS_PER_MESSAGE = 24;
 
 type NormalizedAddress = {
   email: string;
@@ -252,6 +262,148 @@ export async function ingestMailThreadCore(
   };
 }
 
+export async function ingestMessageChunksCore(
+  env: IngestCoreEnv & { EMBEDDING_QUEUE?: QueueBinding },
+  payload: JsonRecord
+): Promise<{ chunked: number; skipped: number }> {
+  const workspaceId = stringOr(payload.workspaceId) || 'default';
+  const accountId = stringOr(payload.accountId);
+  const messages = Array.isArray(payload.messages) ? (payload.messages as JsonRecord[]) : [];
+
+  if (!accountId) throw new Error('accountId is required');
+  if (messages.length === 0) return { chunked: 0, skipped: 0 };
+
+  let chunked = 0;
+  let skipped = 0;
+
+  for (const message of messages) {
+    const messageId = stringOr(message.messageId);
+    const subject = stringOr(message.subject) || '';
+    const bodyText = stringOr(message.bodyText) || '';
+    const fromEmail = stringOr(message.fromEmail);
+    const toEmails = Array.isArray(message.toEmails) ? (message.toEmails as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+    const mailbox = stringOr(message.mailbox);
+    const sentAt = stringOr(message.sentAt);
+
+    if (!messageId || !bodyText.trim()) {
+      skipped += 1;
+      continue;
+    }
+
+    const existingChunk = await env.SKY_DB
+      .prepare(
+        `SELECT id
+         FROM memory_chunks
+         WHERE json_extract(metadata_json, '$.messageId') = ?
+         LIMIT 1`
+      )
+      .bind(messageId)
+      .first<{ id: string }>();
+    if (existingChunk?.id) {
+      skipped += 1;
+      continue;
+    }
+
+    const emailMessage = await env.SKY_DB
+      .prepare(
+        `SELECT id
+         FROM email_messages
+         WHERE id = ?
+         LIMIT 1`
+      )
+      .bind(messageId)
+      .first<{ id: string }>();
+    if (!emailMessage?.id) {
+      skipped += 1;
+      continue;
+    }
+
+    let sourceRecord = await env.SKY_DB
+      .prepare(
+        `SELECT id
+         FROM normalized_records
+         WHERE workspace_id = ?
+           AND record_type = 'email_message'
+           AND json_extract(body_json, '$.messageId') = ?
+         LIMIT 1`
+      )
+      .bind(workspaceId, messageId)
+      .first<{ id: string }>();
+
+    if (!sourceRecord?.id) {
+      const sourceRecordId = crypto.randomUUID();
+      await env.SKY_DB
+        .prepare(
+          `INSERT INTO normalized_records
+           (id, workspace_id, record_type, source_artifact_id, body_json, created_at, updated_at)
+           VALUES (?, ?, 'email_message', NULL, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        )
+        .bind(
+          sourceRecordId,
+          workspaceId,
+          JSON.stringify({
+            messageId,
+            subject,
+            bodyText,
+            fromEmail,
+            toEmails,
+            mailbox,
+            sentAt,
+            accountId
+          })
+        )
+        .run();
+      sourceRecord = { id: sourceRecordId };
+    }
+
+    const cleaned = cleanEmailBody(bodyText);
+    if (!cleaned.trim()) {
+      skipped += 1;
+      continue;
+    }
+
+    const sourceText = `Subject: ${subject}\n\n${cleaned}`;
+    const chunks = chunkText(sourceText, CHUNK_SIZE, CHUNK_OVERLAP, MAX_CHUNKS_PER_MESSAGE);
+    if (chunks.length === 0) {
+      skipped += 1;
+      continue;
+    }
+
+    for (let i = 0; i < chunks.length; i += 1) {
+      await env.SKY_DB
+        .prepare(
+          `INSERT INTO memory_chunks
+           (id, workspace_id, account_id, source_record_id, vector_id, chunk_text, metadata_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+        )
+        .bind(
+          crypto.randomUUID(),
+          workspaceId,
+          accountId,
+          sourceRecord.id,
+          `${messageId}:${i}`,
+          chunks[i],
+          JSON.stringify({
+            messageId,
+            subject,
+            fromEmail,
+            toEmails,
+            mailbox,
+            sentAt,
+            accountId,
+            chunkIndex: i
+          })
+        )
+        .run();
+    }
+
+    await enqueueEmbeddingJob(env, workspaceId, accountId, sourceRecord.id);
+    chunked += 1;
+  }
+
+  return { chunked, skipped };
+}
+
 async function upsertEmailThread(
   env: IngestCoreEnv,
   input: {
@@ -443,6 +595,47 @@ async function ensureWorkspace(env: IngestCoreEnv, workspaceId: string): Promise
     )
     .bind(workspaceId, workspaceId)
     .run();
+}
+
+export async function enqueueEmbeddingJob(
+  env: IngestCoreEnv & { EMBEDDING_QUEUE?: QueueBinding },
+  workspaceId: string,
+  accountId: string,
+  sourceRecordId: string
+): Promise<void> {
+  const updated = await env.SKY_DB
+    .prepare(
+      `UPDATE embedding_jobs
+       SET status = 'queued',
+           last_error = NULL,
+           next_attempt_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE source_record_id = ?`
+    )
+    .bind(sourceRecordId)
+    .run();
+
+  const changes = Number((updated as unknown as { meta?: { changes?: number } }).meta?.changes || 0);
+  if (changes === 0) {
+    await env.SKY_DB
+      .prepare(
+        `INSERT OR IGNORE INTO embedding_jobs
+         (id, workspace_id, account_id, source_record_id, status, attempts, next_attempt_at, last_error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'queued', 0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      )
+      .bind(crypto.randomUUID(), workspaceId, accountId, sourceRecordId)
+      .run();
+  }
+
+  await enqueueEmbeddingQueueMessage(env, { sourceRecordId });
+}
+
+export async function enqueueEmbeddingQueueMessage(
+  env: IngestCoreEnv & { EMBEDDING_QUEUE?: QueueBinding },
+  payload: EmbeddingQueueMessage
+): Promise<void> {
+  if (!env.EMBEDDING_QUEUE) return;
+  await env.EMBEDDING_QUEUE.send(payload);
 }
 
 async function sha256Hex(input: string): Promise<string> {

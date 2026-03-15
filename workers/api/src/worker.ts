@@ -2064,7 +2064,7 @@ function authorizeOpsRequest(request: Request, env: Env): boolean {
 }
 
 async function loadBlawbyContext(env: Env): Promise<string> {
-  const agent = getAgentByName(env.BLAWBY_AGENT, 'primary') as {
+  const agent = (await getAgentByName(env.BLAWBY_AGENT, 'primary')) as {
     getContext(): Promise<string>;
   };
   return agent.getContext();
@@ -2084,7 +2084,7 @@ async function runBlawbySkill(request: Request, env: Env): Promise<Response> {
   if (!['immediateContext', 'shortTermMemory', 'longTermMemory', 'knowledgeProfile'].includes(skill)) {
     return json({ ok: false, error: 'invalid skill' }, 400);
   }
-  const agent = getAgentByName(env.BLAWBY_AGENT, 'primary') as {
+  const agent = (await getAgentByName(env.BLAWBY_AGENT, 'primary')) as {
     skillImmediateContext(): Promise<void>;
     skillShortTermMemory(): Promise<void>;
     skillLongTermMemory(): Promise<void>;
@@ -2111,7 +2111,7 @@ async function getBlawbyContext(request: Request, env: Env): Promise<Response> {
     return json({ ok: false, error: 'unauthorized' }, 401);
   }
 
-  const agent = getAgentByName(env.BLAWBY_AGENT, 'primary') as {
+  const agent = (await getAgentByName(env.BLAWBY_AGENT, 'primary')) as {
     getContext(): Promise<string>;
   };
   const context = await agent.getContext();
