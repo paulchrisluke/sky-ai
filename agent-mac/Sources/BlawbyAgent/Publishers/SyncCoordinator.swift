@@ -1,6 +1,10 @@
 import Foundation
 
 final class SyncCoordinator {
+    private let stateQueue = DispatchQueue(label: "com.blawby.agent.sync.state")
+    private var mailSyncRunning = false
+    private var calendarSyncRunning = false
+
     private let config: Config
     private let localStore: LocalStore
     private let webSocketPublisher: WebSocketPublisher
@@ -28,6 +32,12 @@ final class SyncCoordinator {
     }
 
     func runMailSync() async {
+        guard beginMailSync() else {
+            logger.warning("[sync] mail skipped: previous run still in progress")
+            return
+        }
+        defer { endMailSync() }
+
         let newMessages = mailWatcher.fetchNewMessages()
         if newMessages.isEmpty {
             logger.info("[sync] mail: processed=0 entities=0 sent=true")
@@ -68,6 +78,12 @@ final class SyncCoordinator {
     }
 
     func runCalendarSync() async {
+        guard beginCalendarSync() else {
+            logger.warning("[sync] calendar skipped: previous run still in progress")
+            return
+        }
+        defer { endCalendarSync() }
+
         do {
             let payloads = try await calendarWatcher.fetchUnsentPayloads()
             if payloads.isEmpty {
@@ -116,6 +132,38 @@ final class SyncCoordinator {
                     localStore.markPayloadSent(item.id)
                 }
             }
+        }
+    }
+
+    private func beginMailSync() -> Bool {
+        stateQueue.sync {
+            if mailSyncRunning {
+                return false
+            }
+            mailSyncRunning = true
+            return true
+        }
+    }
+
+    private func endMailSync() {
+        stateQueue.sync {
+            mailSyncRunning = false
+        }
+    }
+
+    private func beginCalendarSync() -> Bool {
+        stateQueue.sync {
+            if calendarSyncRunning {
+                return false
+            }
+            calendarSyncRunning = true
+            return true
+        }
+    }
+
+    private func endCalendarSync() {
+        stateQueue.sync {
+            calendarSyncRunning = false
         }
     }
 }

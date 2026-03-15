@@ -2,6 +2,9 @@ import Foundation
 import ScriptingBridge
 
 final class MailWatcher {
+    private let maxMessagesToInspectPerPoll = 300
+    private let maxNewMessagesPerPoll = 20
+
     private let configStore: ConfigStore
     private let localStore: LocalStore
     private let logger: Logger
@@ -28,6 +31,7 @@ final class MailWatcher {
         let lastSeen = localStore.getCursor(accountId: config.accountId, source: "mail").lastSeenAt ?? .distantPast
         var newestSeen = lastSeen
         var rawMessages: [RawMessage] = []
+        var inspected = 0
 
         let accounts = objectArray(from: appObject.value(forKey: "accounts"))
         logger.info("mail poll started accounts=\(accounts.count)")
@@ -40,39 +44,66 @@ final class MailWatcher {
             }
 
             for mailbox in inboxes {
-                let messages = objectArray(from: mailbox.value(forKey: "messages"))
-                for message in messages {
-                    guard let dateSent = message.value(forKey: "dateSent") as? Date else {
-                        continue
-                    }
-                    if dateSent <= lastSeen {
-                        continue
-                    }
-                    guard let messageId = messageIdentifier(message) else {
-                        continue
-                    }
-
-                    let subject = message.value(forKey: "subject") as? String ?? ""
-                    let sender = message.value(forKey: "sender") as? String ?? ""
-                    let toRecipients = recipientAddresses(from: message.value(forKey: "toRecipients"))
-                    let bodyText = truncate(bodyText(from: message.value(forKey: "content")), maxLength: 2000)
-
-                    rawMessages.append(
-                        RawMessage(
-                            messageId: messageId,
-                            accountId: config.accountId,
-                            subject: subject,
-                            from: sender,
-                            to: toRecipients,
-                            date: dateSent,
-                            bodyText: bodyText
-                        )
-                    )
-
-                    if dateSent > newestSeen {
-                        newestSeen = dateSent
-                    }
+                guard let messages = mailbox.value(forKey: "messages") as? NSArray else {
+                    continue
                 }
+                if messages.count == 0 {
+                    continue
+                }
+
+                var index = messages.count - 1
+                while index >= 0 {
+                    guard let message = messages[index] as? NSObject else {
+                        if index == 0 { break }
+                        index -= 1
+                        continue
+                    }
+                    if inspected >= maxMessagesToInspectPerPoll || rawMessages.count >= maxNewMessagesPerPoll {
+                        break
+                    }
+                    inspected += 1
+
+                    autoreleasepool {
+                        guard let dateSent = message.value(forKey: "dateSent") as? Date else {
+                            return
+                        }
+                        if dateSent <= lastSeen {
+                            return
+                        }
+                        guard let messageId = messageIdentifier(message) else {
+                            return
+                        }
+
+                        let subject = message.value(forKey: "subject") as? String ?? ""
+                        let sender = message.value(forKey: "sender") as? String ?? ""
+                        let bodyText = truncate(subject, maxLength: 2000)
+
+                        rawMessages.append(
+                            RawMessage(
+                                messageId: messageId,
+                                accountId: config.accountId,
+                                subject: subject,
+                                from: sender,
+                                to: [],
+                                date: dateSent,
+                                bodyText: bodyText
+                            )
+                        )
+
+                        if dateSent > newestSeen {
+                            newestSeen = dateSent
+                        }
+                    }
+
+                    if index == 0 { break }
+                    index -= 1
+                }
+                if inspected >= maxMessagesToInspectPerPoll || rawMessages.count >= maxNewMessagesPerPoll {
+                    break
+                }
+            }
+            if inspected >= maxMessagesToInspectPerPoll || rawMessages.count >= maxNewMessagesPerPoll {
+                break
             }
         }
 
@@ -86,8 +117,10 @@ final class MailWatcher {
         }
 
         if rawMessages.isEmpty {
+            logger.info("mail poll completed inspected=\(inspected) new=0")
             return []
         }
+        logger.info("mail poll completed inspected=\(inspected) new=\(rawMessages.count)")
         return rawMessages
     }
 
@@ -101,19 +134,6 @@ final class MailWatcher {
         return []
     }
 
-    private func recipientAddresses(from value: Any?) -> [String] {
-        let recipients = objectArray(from: value)
-        return recipients.compactMap { recipient in
-            if let address = recipient.value(forKey: "address") as? String {
-                return address
-            }
-            if let name = recipient.value(forKey: "name") as? String {
-                return name
-            }
-            return nil
-        }
-    }
-
     private func messageIdentifier(_ message: NSObject) -> String? {
         if let messageId = message.value(forKey: "messageId") as? String, !messageId.isEmpty {
             return messageId
@@ -122,23 +142,6 @@ final class MailWatcher {
             return String(messageId)
         }
         return nil
-    }
-
-    private func bodyText(from value: Any?) -> String {
-        if let text = value as? String {
-            return normalizeWhitespace(text)
-        }
-        if let rich = value as? NSAttributedString {
-            return normalizeWhitespace(rich.string)
-        }
-        if let object = value as? NSObject {
-            return normalizeWhitespace(object.description)
-        }
-        return ""
-    }
-
-    private func normalizeWhitespace(_ text: String) -> String {
-        text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func truncate(_ text: String, maxLength: Int) -> String {

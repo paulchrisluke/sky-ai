@@ -72,7 +72,8 @@ final class LocalStore {
                 return (lastSeenAt, lastSeenUid)
             }
         } catch {
-            fatalError("LocalStore.getCursor failed: \(error)")
+            fputs("LocalStore.getCursor failed: \(error)\n", stderr)
+            return (nil, nil)
         }
     }
 
