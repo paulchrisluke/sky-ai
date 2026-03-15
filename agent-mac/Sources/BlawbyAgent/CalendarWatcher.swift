@@ -111,7 +111,13 @@ final class CalendarWatcher: @unchecked Sendable {
 
     func discoverSources() async throws -> [CalendarSourceDescriptor] {
         try await ensureAccess()
-        return eventStore.calendars(for: .event)
+        let calendars = eventStore.calendars(for: .event)
+        
+        // Deduplicate by calendarIdentifier to avoid duplicates from multiple accounts
+        let uniqueCalendars = Dictionary(grouping: calendars, by: { $0.calendarIdentifier })
+            .compactMapValues { $0.first } // Take the first occurrence of each unique calendar
+        
+        return uniqueCalendars.values
             .map { CalendarSourceDescriptor(id: $0.calendarIdentifier, sourceName: $0.title) }
             .sorted { $0.sourceName.localizedCaseInsensitiveCompare($1.sourceName) == .orderedAscending }
     }

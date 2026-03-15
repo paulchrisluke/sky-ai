@@ -175,6 +175,10 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
         let discovered = await mailWatcher.discoverSources()
         for source in discovered {
             let existing = localStore.connectedSource(id: source.id)
+            
+            // Get message count to populate total_estimated
+            let messageCount = await mailWatcher.messageCount(accountId: source.accountId, mailbox: source.mailbox)
+            
             localStore.upsertConnectedSource(
                 id: source.id,
                 sourceType: "mail",
@@ -182,7 +186,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                 sourceName: source.sourceName,
                 enabled: existing?.enabled ?? true,
                 syncCursor: existing?.syncCursor,
-                totalEstimated: existing?.totalEstimated ?? 0,
+                totalEstimated: existing?.totalEstimated ?? messageCount,
                 totalSynced: existing?.totalSynced ?? 0,
                 status: existing?.status ?? "idle",
                 lastError: existing?.lastError
@@ -196,6 +200,11 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             for source in sources {
                 let id = "calendar:\(source.id)"
                 let existing = localStore.connectedSource(id: id)
+                
+                // Get event count for the past year to populate total_estimated
+                let oneYearAgo = Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date()
+                let events = try await calendarWatcher.fetchEvents(calendarId: source.id, since: oneYearAgo, until: Date())
+                
                 localStore.upsertConnectedSource(
                     id: id,
                     sourceType: "calendar",
@@ -203,7 +212,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                     sourceName: source.sourceName,
                     enabled: existing?.enabled ?? true,
                     syncCursor: existing?.syncCursor,
-                    totalEstimated: existing?.totalEstimated ?? 0,
+                    totalEstimated: existing?.totalEstimated ?? events.count,
                     totalSynced: existing?.totalSynced ?? 0,
                     status: existing?.status ?? "idle",
                     lastError: existing?.lastError

@@ -89,27 +89,17 @@ final class MenuBarController: NSObject {
         }
         sourceItems.removeAll()
 
-        let sorted = sources.sorted {
-            if $0.sourceType == $1.sourceType {
-                return $0.sourceName.localizedCaseInsensitiveCompare($1.sourceName) == .orderedAscending
-            }
-            return $0.sourceType.localizedCaseInsensitiveCompare($1.sourceType) == .orderedAscending
-        }
-
-        if sorted.isEmpty {
-            let item = NSMenuItem(title: "No sources discovered", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            insertSourceItem(item)
-            return
-        }
-
-        for source in sorted {
-            let icon = iconForSourceType(source.sourceType)
-            let progress = progressText(for: source)
-            let item = NSMenuItem(title: "\(icon) \(source.sourceName)  \(progress)", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            insertSourceItem(item)
-        }
+        // Show a summary instead of detailed source list in menu bar
+        let enabled = sources.filter(\.enabled)
+        let total = sources.count
+        
+        let summaryItem = NSMenuItem(
+            title: "\(enabled.count) of \(total) sources enabled", 
+            action: nil, 
+            keyEquivalent: ""
+        )
+        summaryItem.isEnabled = false
+        insertSourceItem(summaryItem)
     }
 
     private func insertSourceItem(_ item: NSMenuItem) {
