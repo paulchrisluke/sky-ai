@@ -128,8 +128,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 }
             }
 
-            Task { await coordinator.runMailSync() }
-            Task { await coordinator.runCalendarSync() }
+            Task {
+                await coordinator.runInitialBootstrapSyncIfNeeded()
+                await coordinator.runMailSync()
+                await coordinator.runCalendarSync()
+            }
             updateMenu()
 
             configureLoginItemRegistration(logger: logger)

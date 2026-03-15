@@ -49,7 +49,17 @@ final class MailWatcher: @unchecked Sendable {
         let appObject = mailApp as NSObject
 
         let config = configStore.load()
-        let lastSeen = localStore.getCursor(accountId: config.accountId, source: "mail").lastSeenAt ?? .distantPast
+        let cursor = localStore.getCursor(accountId: config.accountId, source: "mail_live")
+        guard let lastSeen = cursor.lastSeenAt else {
+            localStore.setCursor(
+                accountId: config.accountId,
+                source: "mail_live",
+                lastSeenAt: Date(),
+                lastSeenUid: nil
+            )
+            logger.info("mail live cursor initialized")
+            return []
+        }
         var newestSeen = lastSeen
         var rawMessages: [RawMessage] = []
         var inspected = 0
@@ -95,6 +105,9 @@ final class MailWatcher: @unchecked Sendable {
                         guard let messageId = messageIdentifier(message) else {
                             return
                         }
+                        if localStore.isMessageProcessed(messageId) {
+                            return
+                        }
 
                         let subject = message.value(forKey: "subject") as? String ?? ""
                         let sender = message.value(forKey: "sender") as? String ?? ""
@@ -135,7 +148,7 @@ final class MailWatcher: @unchecked Sendable {
         if newestSeen > lastSeen {
             localStore.setCursor(
                 accountId: config.accountId,
-                source: "mail",
+                source: "mail_live",
                 lastSeenAt: newestSeen,
                 lastSeenUid: nil
             )
@@ -159,7 +172,7 @@ final class MailWatcher: @unchecked Sendable {
         let config = configStore.load()
         var rawMessages: [RawMessage] = []
         var inspected = 0
-        let maxInspect = max(limit * 5, 500)
+        let maxInspect = max(limit * 50, 5000)
 
         let accounts = objectArray(from: appObject.value(forKey: "accounts"))
         logger.info("mail backfill started accounts=\(accounts.count) since=\(since)")
@@ -200,6 +213,9 @@ final class MailWatcher: @unchecked Sendable {
                             return
                         }
                         guard let messageId = messageIdentifier(message) else {
+                            return
+                        }
+                        if localStore.isMessageProcessed(messageId) {
                             return
                         }
 

@@ -70,9 +70,9 @@ final class CalendarWatcher: @unchecked Sendable {
         }
     }
 
-    func fetchUnsentPayloads() async throws -> [CalendarPayload] {
+    func fetchUnsentPayloads(backfill: Bool) async throws -> [CalendarPayload] {
         try await ensureAccess()
-        return buildUnsentPayloads()
+        return buildUnsentPayloads(backfill: backfill)
     }
 
     func markPayloadEventsSent(_ payload: CalendarPayload) {
@@ -112,10 +112,12 @@ final class CalendarWatcher: @unchecked Sendable {
         }
     }
 
-    private func buildUnsentPayloads() -> [CalendarPayload] {
+    private func buildUnsentPayloads(backfill: Bool) -> [CalendarPayload] {
         let now = Date()
-        guard let start = Calendar.current.date(byAdding: .day, value: -7, to: now),
-              let end = Calendar.current.date(byAdding: .day, value: 30, to: now) else {
+        let backDays = backfill ? -3650 : -7
+        let forwardDays = backfill ? 365 : 30
+        guard let start = Calendar.current.date(byAdding: .day, value: backDays, to: now),
+              let end = Calendar.current.date(byAdding: .day, value: forwardDays, to: now) else {
             logger.error("calendar date range generation failed")
             return []
         }

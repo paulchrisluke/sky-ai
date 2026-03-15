@@ -302,6 +302,19 @@ final class LocalStore {
         }
     }
 
+    func isBootstrapCompleted(accountId: String, key: String) -> Bool {
+        getCursor(accountId: accountId, source: "bootstrap:\(key)").lastSeenAt != nil
+    }
+
+    func markBootstrapCompleted(accountId: String, key: String) {
+        setCursor(
+            accountId: accountId,
+            source: "bootstrap:\(key)",
+            lastSeenAt: Date(),
+            lastSeenUid: "done"
+        )
+    }
+
     func replaceContacts(_ contacts: [StoredContact]) {
         do {
             try dbQueue.write { db in

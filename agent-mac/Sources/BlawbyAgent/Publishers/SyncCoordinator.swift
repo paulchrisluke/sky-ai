@@ -28,7 +28,7 @@ protocol MailProcessing {
 }
 
 protocol CalendarWatching {
-    func fetchUnsentPayloads() async throws -> [CalendarPayload]
+    func fetchUnsentPayloads(backfill: Bool) async throws -> [CalendarPayload]
     func markPayloadEventsSent(_ payload: CalendarPayload)
 }
 
@@ -127,6 +127,30 @@ final class SyncCoordinator {
     }
 
     func runCalendarSync() async {
+        await runCalendarSync(backfill: false)
+    }
+
+    func runCalendarBackfill() async {
+        await runCalendarSync(backfill: true)
+    }
+
+    func runInitialBootstrapSyncIfNeeded() async {
+        if !localStore.isBootstrapCompleted(accountId: config.accountId, key: "mail") {
+            logger.info("[sync] bootstrap mail backfill starting")
+            await runMailBackfill(days: 3650, limit: 20000)
+            localStore.markBootstrapCompleted(accountId: config.accountId, key: "mail")
+            logger.info("[sync] bootstrap mail backfill completed")
+        }
+
+        if !localStore.isBootstrapCompleted(accountId: config.accountId, key: "calendar") {
+            logger.info("[sync] bootstrap calendar backfill starting")
+            await runCalendarBackfill()
+            localStore.markBootstrapCompleted(accountId: config.accountId, key: "calendar")
+            logger.info("[sync] bootstrap calendar backfill completed")
+        }
+    }
+
+    private func runCalendarSync(backfill: Bool) async {
         guard beginCalendarSync() else {
             logger.warning("[sync] calendar skipped: previous run still in progress")
             publishStatus()
@@ -142,9 +166,9 @@ final class SyncCoordinator {
         }
 
         do {
-            let payloads = try await calendarWatcher.fetchUnsentPayloads()
+            let payloads = try await calendarWatcher.fetchUnsentPayloads(backfill: backfill)
             if payloads.isEmpty {
-                logger.info("[sync] calendar: events=0 sent=true")
+                logger.info("[sync] calendar \(backfill ? "backfill" : "sync"): events=0 sent=true")
                 stateQueue.sync {
                     lastCalendarEvents = 0
                     lastCalendarDelivery = "sent"
@@ -176,14 +200,14 @@ final class SyncCoordinator {
                 lastCalendarDelivery = queued ? "queued" : "sent"
             }
             publishStatus()
-            logger.info("[sync] calendar: events=\(eventsCount) sent=\(queued ? "queued" : "true")")
+            logger.info("[sync] calendar \(backfill ? "backfill" : "sync"): events=\(eventsCount) sent=\(queued ? "queued" : "true")")
         } catch {
             stateQueue.sync {
                 lastCalendarEvents = 0
                 lastCalendarDelivery = "failed"
             }
             publishStatus()
-            logger.error("[sync] calendar failed: \(error.localizedDescription)")
+            logger.error("[sync] calendar \(backfill ? "backfill" : "sync") failed: \(error.localizedDescription)")
         }
     }
 
