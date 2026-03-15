@@ -9,11 +9,15 @@ let package = Package(
     products: [
         .executable(name: "BlawbyAgent", targets: ["BlawbyAgent"])
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.0.0")
+    ],
     targets: [
         .executableTarget(
             name: "BlawbyAgent",
-            dependencies: [],
+            dependencies: [
+                .product(name: "GRDB", package: "GRDB.swift")
+            ],
             path: "Sources/BlawbyAgent",
             linkerSettings: [
                 .linkedFramework("EventKit"),

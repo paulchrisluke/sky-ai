@@ -29,15 +29,16 @@ struct CalendarPayload: Codable {
 
 final class CalendarWatcher {
     private let config: Config
+    private let localStore: LocalStore
     private let logger: Logger
     private let onPayload: (String) -> Void
     private let eventStore = EKEventStore()
     private let iso = ISO8601DateFormatter()
-    private var snapshotByCalendar: [String: String] = [:]
     private var storeObserver: NSObjectProtocol?
 
-    init(config: Config, logger: Logger, onPayload: @escaping (String) -> Void) {
+    init(config: Config, localStore: LocalStore, logger: Logger, onPayload: @escaping (String) -> Void) {
         self.config = config
+        self.localStore = localStore
         self.logger = logger
         self.onPayload = onPayload
         self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -99,6 +100,13 @@ final class CalendarWatcher {
 
         for calendar in eventStore.calendars(for: .event) {
             let calendarEvents = grouped[calendar.calendarIdentifier] ?? []
+            let unsentEvents = calendarEvents.filter { event in
+                !localStore.isEventSent(uid: event.calendarItemIdentifier, calendarId: calendar.calendarIdentifier)
+            }
+            if unsentEvents.isEmpty {
+                continue
+            }
+
             let payload = CalendarPayload(
                 type: "calendar",
                 workspaceId: config.workspaceId,
@@ -106,7 +114,7 @@ final class CalendarWatcher {
                 calendarId: calendar.calendarIdentifier,
                 calendarName: calendar.title,
                 sourceProvider: "calendar_mac",
-                events: calendarEvents.map { event in
+                events: unsentEvents.map { event in
                     let attendees: [[String: String?]] = (event.attendees ?? []).map { attendee in
                         [
                             "email": attendee.url.absoluteString,
@@ -135,12 +143,12 @@ final class CalendarWatcher {
             do {
                 let data = try JSONEncoder().encode(payload)
                 guard let json = String(data: data, encoding: .utf8) else { continue }
-                if snapshotByCalendar[calendar.calendarIdentifier] != json {
-                    snapshotByCalendar[calendar.calendarIdentifier] = json
-                    logger.info(
-                        "calendar payload sent calendar=\(calendar.title) calendarId=\(calendar.calendarIdentifier) eventCount=\(calendarEvents.count)"
-                    )
-                    onPayload(json)
+                logger.info(
+                    "calendar payload sent calendar=\(calendar.title) calendarId=\(calendar.calendarIdentifier) eventCount=\(unsentEvents.count)"
+                )
+                onPayload(json)
+                for event in unsentEvents {
+                    localStore.markEventSent(uid: event.calendarItemIdentifier, calendarId: calendar.calendarIdentifier)
                 }
             } catch {
                 logger.error("calendar encode error for \(calendar.title): \(error.localizedDescription)")

@@ -10,6 +10,7 @@ let baseDir = resolveBlawbyHome()
 do {
     try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
     let logger = try Logger(baseDirectory: baseDir)
+    let localStore = try LocalStore(baseDirectory: baseDir)
     let configStore = try ConfigStore(baseDirectory: baseDir)
     let config = configStore.load()
 
@@ -17,11 +18,11 @@ do {
 
     let webSocket = AgentWebSocketClient(config: config, logger: logger)
 
-    let calendarWatcher = CalendarWatcher(config: config, logger: logger) { payload in
+    let calendarWatcher = CalendarWatcher(config: config, localStore: localStore, logger: logger) { payload in
         webSocket.enqueue(payload)
     }
 
-    let mailWatcher = MailWatcher(configStore: configStore, logger: logger) { payload in
+    let mailWatcher = MailWatcher(configStore: configStore, localStore: localStore, logger: logger) { payload in
         webSocket.enqueue(payload)
     }
 

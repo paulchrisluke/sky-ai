@@ -16,14 +16,16 @@ struct EmailPayload: Codable {
 
 final class MailWatcher {
     private let configStore: ConfigStore
+    private let localStore: LocalStore
     private let logger: Logger
     private let onPayload: (String) -> Void
     private let iso = ISO8601DateFormatter()
     private let queue = DispatchQueue(label: "com.blawby.agent.mail")
     private var timer: DispatchSourceTimer?
 
-    init(configStore: ConfigStore, logger: Logger, onPayload: @escaping (String) -> Void) {
+    init(configStore: ConfigStore, localStore: LocalStore, logger: Logger, onPayload: @escaping (String) -> Void) {
         self.configStore = configStore
+        self.localStore = localStore
         self.logger = logger
         self.onPayload = onPayload
         self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -52,13 +54,10 @@ final class MailWatcher {
             return
         }
 
-        guard let appObject = mailApp as? NSObject else {
-            logger.error("mail watcher failed: Mail app object is not NSObject")
-            return
-        }
+        let appObject = mailApp as NSObject
 
         let config = configStore.load()
-        let lastSeen = config.lastSeenDate ?? .distantPast
+        let lastSeen = localStore.getCursor(accountId: config.accountId, source: "mail").lastSeenAt ?? .distantPast
         var newestSeen = lastSeen
 
         let accounts = objectArray(from: appObject.value(forKey: "accounts"))
@@ -116,11 +115,12 @@ final class MailWatcher {
         }
 
         if newestSeen > lastSeen {
-            do {
-                try configStore.updateLastSeenDate(newestSeen)
-            } catch {
-                logger.error("mail lastSeenDate update failed: \(error.localizedDescription)")
-            }
+            localStore.setCursor(
+                accountId: config.accountId,
+                source: "mail",
+                lastSeenAt: newestSeen,
+                lastSeenUid: nil
+            )
         }
     }
 
