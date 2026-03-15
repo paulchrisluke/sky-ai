@@ -17,13 +17,23 @@ struct MacMessagePayload: Codable {
 }
 
 final class MessagesReader: @unchecked Sendable {
+    private struct MessageBatch {
+        let json: String
+        let count: Int
+    }
+
+    private let bootstrapBatchSize = 200
+    private let bootstrapMaxBatchesPerRun = 20
+    private let pollIntervalSeconds: TimeInterval = 30
     private let localStore: LocalStore
     private let logger: Logger
     private let accountId: String
     private let workspaceId: String
     private let dbPath: String
     private var source: DispatchSourceFileSystemObject?
+    private var pollTimer: DispatchSourceTimer?
     private var fileDescriptor: Int32 = -1
+    private let queue = DispatchQueue(label: "com.blawby.agent.messages", qos: .utility)
     private let iso = ISO8601DateFormatter()
 
     init(localStore: LocalStore, logger: Logger, accountId: String, workspaceId: String) {
@@ -41,16 +51,30 @@ final class MessagesReader: @unchecked Sendable {
             return
         }
 
+        // Startup drain ensures historical messages progress even if no new file writes occur.
+        queue.async { [weak self] in
+            self?.drainPendingMessages(trigger: "startup", onChange: onChange)
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + pollIntervalSeconds, repeating: pollIntervalSeconds)
+        timer.setEventHandler { [weak self] in
+            self?.drainPendingMessages(trigger: "poll", onChange: onChange)
+        }
+        pollTimer = timer
+        timer.resume()
+        logger.info("messages poll started interval=\(Int(pollIntervalSeconds))s")
+
         fileDescriptor = open(dbPath, O_EVTONLY)
         if fileDescriptor < 0 {
             fileDescriptor = open(dbPath, O_RDONLY)
         }
         if fileDescriptor < 0 {
-            logger.error("messages watcher open failed")
+            let err = String(cString: strerror(errno))
+            logger.error("messages watcher open failed: \(err)")
             return
         }
 
-        let queue = DispatchQueue.global(qos: .utility)
         let src = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fileDescriptor,
             eventMask: [.write, .extend, .rename, .delete],
@@ -58,10 +82,7 @@ final class MessagesReader: @unchecked Sendable {
         )
         src.setEventHandler { [weak self] in
             guard let self else { return }
-            let payload = self.fetchLatestPayload()
-            if let payload {
-                onChange(payload)
-            }
+            self.drainPendingMessages(trigger: "fs-event", onChange: onChange)
         }
         src.setCancelHandler { [weak self] in
             guard let self else { return }
@@ -75,7 +96,22 @@ final class MessagesReader: @unchecked Sendable {
         logger.info("messages watcher started")
     }
 
-    private func fetchLatestPayload() -> String? {
+    private func drainPendingMessages(trigger: String, onChange: @escaping @Sendable (String) -> Void) {
+        var total = 0
+        var batches = 0
+        while batches < bootstrapMaxBatchesPerRun {
+            guard let batch = fetchLatestPayload(limit: bootstrapBatchSize) else { break }
+            onChange(batch.json)
+            batches += 1
+            total += batch.count
+            if batch.count < bootstrapBatchSize { break }
+        }
+        if total > 0 {
+            logger.info("messages drain trigger=\(trigger) batches=\(batches) messages=\(total)")
+        }
+    }
+
+    private func fetchLatestPayload(limit: Int) -> MessageBatch? {
         do {
             let dbQueue = try DatabaseQueue(path: dbPath)
             let cursor = localStore.getCursor(accountId: accountId, source: "messages")
@@ -92,9 +128,9 @@ final class MessagesReader: @unchecked Sendable {
                     WHERE text IS NOT NULL
                       AND date > ?
                     ORDER BY date ASC
-                    LIMIT 50
+                    LIMIT ?
                     """,
-                    arguments: [lastAppleTime]
+                    arguments: [lastAppleTime, max(1, limit)]
                 )
             }
             if rows.isEmpty { return nil }
@@ -116,7 +152,8 @@ final class MessagesReader: @unchecked Sendable {
             localStore.setCursor(accountId: accountId, source: "messages", lastSeenAt: latest, lastSeenUid: nil)
             let payload = MacMessagePayload(type: "message", accountId: accountId, workspaceId: workspaceId, messages: items)
             let data = try JSONEncoder().encode(payload)
-            return String(data: data, encoding: .utf8)
+            guard let json = String(data: data, encoding: .utf8) else { return nil }
+            return MessageBatch(json: json, count: items.count)
         } catch {
             logger.error("messages read failed: \(error.localizedDescription)")
             return nil
