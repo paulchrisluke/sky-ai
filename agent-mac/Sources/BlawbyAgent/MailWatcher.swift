@@ -8,6 +8,7 @@ final class MailWatcher: @unchecked Sendable {
     private let configStore: ConfigStore
     private let localStore: LocalStore
     private let logger: Logger
+    private let workQueue = DispatchQueue(label: "com.blawby.agent.mailwatcher", qos: .utility)
     private var distributedObserver: NSObjectProtocol?
     private var safetyTimer: DispatchSourceTimer?
 
@@ -40,7 +41,15 @@ final class MailWatcher: @unchecked Sendable {
         logger.info("mail observer started (distributed notification + 15m safety)")
     }
 
-    func fetchNewMessages() -> [RawMessage] {
+    func fetchNewMessages() async -> [RawMessage] {
+        await withCheckedContinuation { continuation in
+            workQueue.async { [self] in
+                continuation.resume(returning: fetchNewMessagesSync())
+            }
+        }
+    }
+
+    private func fetchNewMessagesSync() -> [RawMessage] {
         guard let mailApp = SBApplication(bundleIdentifier: "com.apple.mail") else {
             logger.error("mail watcher failed: could not create SBApplication for Mail")
             return []
@@ -165,11 +174,23 @@ final class MailWatcher: @unchecked Sendable {
         return rawMessages
     }
 
-    func fetchMessagesSince(_ since: Date, limit: Int) -> [RawMessage] {
-        fetchMessagesBetween(since, Date.distantFuture, limit: limit)
+    func fetchMessagesSince(_ since: Date, limit: Int) async -> [RawMessage] {
+        await withCheckedContinuation { continuation in
+            workQueue.async { [self] in
+                continuation.resume(returning: fetchMessagesBetweenSync(since, Date.distantFuture, limit: limit))
+            }
+        }
     }
 
-    func fetchMessagesBetween(_ start: Date, _ end: Date, limit: Int) -> [RawMessage] {
+    func fetchMessagesBetween(_ start: Date, _ end: Date, limit: Int) async -> [RawMessage] {
+        await withCheckedContinuation { continuation in
+            workQueue.async { [self] in
+                continuation.resume(returning: fetchMessagesBetweenSync(start, end, limit: limit))
+            }
+        }
+    }
+
+    private func fetchMessagesBetweenSync(_ start: Date, _ end: Date, limit: Int) -> [RawMessage] {
         let boundedStart = min(start, end)
         let boundedEnd = max(start, end)
         guard let mailApp = SBApplication(bundleIdentifier: "com.apple.mail") else {

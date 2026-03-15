@@ -24,9 +24,9 @@ protocol WebSocketPublishing {
 }
 
 protocol MailWatching {
-    func fetchNewMessages() -> [RawMessage]
-    func fetchMessagesSince(_ since: Date, limit: Int) -> [RawMessage]
-    func fetchMessagesBetween(_ start: Date, _ end: Date, limit: Int) -> [RawMessage]
+    func fetchNewMessages() async -> [RawMessage]
+    func fetchMessagesSince(_ since: Date, limit: Int) async -> [RawMessage]
+    func fetchMessagesBetween(_ start: Date, _ end: Date, limit: Int) async -> [RawMessage]
 }
 
 protocol MailProcessing {
@@ -129,9 +129,7 @@ final class SyncCoordinator: @unchecked Sendable {
 
         let seconds = max(1, days) * 24 * 60 * 60
         let cutoff = Date(timeIntervalSinceNow: -Double(seconds))
-        let backfillMessages = await MainActor.run {
-            mailWatcher.fetchMessagesSince(cutoff, limit: max(1, limit))
-        }
+        let backfillMessages = await mailWatcher.fetchMessagesSince(cutoff, limit: max(1, limit))
         await processMailMessages(backfillMessages, mode: "backfill")
 
         while completeMailSyncPass() {
@@ -214,9 +212,7 @@ final class SyncCoordinator: @unchecked Sendable {
                 publishStatus()
 
                 let currentWindowCursorEnd = windowCursorEnd
-                let windowMessages = await MainActor.run {
-                    mailWatcher.fetchMessagesBetween(windowStart, currentWindowCursorEnd, limit: bootstrapMailChunkLimit)
-                }
+                let windowMessages = await mailWatcher.fetchMessagesBetween(windowStart, currentWindowCursorEnd, limit: bootstrapMailChunkLimit)
                 await processMailMessages(windowMessages, mode: "backfill")
 
                 while completeMailSyncPass() {
@@ -394,9 +390,7 @@ final class SyncCoordinator: @unchecked Sendable {
     }
 
     private func runMailSyncPass() async {
-        let newMessages = await MainActor.run {
-            mailWatcher.fetchNewMessages()
-        }
+        let newMessages = await mailWatcher.fetchNewMessages()
         await processMailMessages(newMessages, mode: "sync")
     }
 
