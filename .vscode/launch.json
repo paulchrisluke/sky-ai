@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sky-ai}/agent-mac",
+            "name": "Debug BlawbyAgent (agent-mac)",
+            "target": "BlawbyAgent",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug BlawbyAgent (agent-mac)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sky-ai}/agent-mac",
+            "name": "Release BlawbyAgent (agent-mac)",
+            "target": "BlawbyAgent",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release BlawbyAgent (agent-mac)"
+        }
+    ]
+}

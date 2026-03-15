@@ -8,10 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */; };
+		1A2B3C4D5E6F708192A3B4C5 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F708192A3B4C5D6 /* DashboardView.swift */; };
 		289661C0209D41B5319B0657 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C61DC164DE3E5327702F99 /* Config.swift */; };
 		2934EF299DD477179A67C5E5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = BB22FC45049BCFD0751A8C05 /* GRDB */; };
 		41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D04FFB67431F372BB5AF25 /* Preferences.swift */; };
 		4A85C2E7F1CF5C5BD288E20D /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */; };
+		5669259E3FB85B9AAB83B428 /* EmlxReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618247051F36D3E6E0F259B2 /* EmlxReader.swift */; };
 		5CC9CA5CFEAE6825FD97365D /* SourcesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 268D5A0DF63E60EC68837921 /* SourcesView.swift */; };
 		73EF4F35647CB37D7EA34F2A /* blawby-logo-source.png in Resources */ = {isa = PBXBuildFile; fileRef = 06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */; };
 		865B4EFF997483C49A9D8997 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */; };
@@ -57,11 +59,13 @@
 		268D5A0DF63E60EC68837921 /* SourcesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesView.swift; sourceTree = "<group>"; };
 		29C61DC164DE3E5327702F99 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
 		2B16F395DEC869A73CE18AB5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		2B3C4D5E6F708192A3B4C5D6 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		2DBF363EB08A6121C368B7D3 /* Mail.sdef */ = {isa = PBXFileReference; path = Mail.sdef; sourceTree = "<group>"; };
 		451B18EF815B4011EC7984E0 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
 		49CF3713D972922FB05679E3 /* MailWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailWatcher.swift; sourceTree = "<group>"; };
 		4A0A817E9BA538BAB3D28137 /* EntityExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityExtractor.swift; sourceTree = "<group>"; };
 		57F3234AC7A5DD02502FB8E4 /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logger.swift; sourceTree = "<group>"; };
+		618247051F36D3E6E0F259B2 /* EmlxReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmlxReader.swift; sourceTree = "<group>"; };
 		62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsReader.swift; sourceTree = "<group>"; };
 		6C784BE09AF926E1EED926D3 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
@@ -114,6 +118,7 @@
 			isa = PBXGroup;
 			children = (
 				6C784BE09AF926E1EED926D3 /* AppDelegate.swift */,
+				2B3C4D5E6F708192A3B4C5D6 /* DashboardView.swift */,
 				206689B593945129B37BFCD0 /* MenuBarController.swift */,
 				7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */,
 				6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */,
@@ -126,6 +131,7 @@
 			isa = PBXGroup;
 			children = (
 				62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */,
+				618247051F36D3E6E0F259B2 /* EmlxReader.swift */,
 				03F3929134BE941F4D84B17C /* MessagesReader.swift */,
 			);
 			path = Readers;
@@ -334,6 +340,8 @@
 				9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */,
 				289661C0209D41B5319B0657 /* Config.swift in Sources */,
 				AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */,
+				1A2B3C4D5E6F708192A3B4C5 /* DashboardView.swift in Sources */,
+				5669259E3FB85B9AAB83B428 /* EmlxReader.swift in Sources */,
 				E28372C641824150C40949B0 /* EntityExtractor.swift in Sources */,
 				07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */,
 				AE169531AE4BFA3F8237E346 /* KeychainStore.swift in Sources */,

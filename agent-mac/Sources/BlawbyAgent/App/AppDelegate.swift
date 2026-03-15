@@ -5,6 +5,7 @@ import Combine
 final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var menuBar: MenuBarController?
     private var preferencesWindow: PreferencesWindowController?
+    private var dashboardWindow: DashboardWindowController?
 
     private var logger: Logger?
     private var localStore: LocalStore?
@@ -64,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 workerUrl: prefs.workerUrl ?? fileConfig.workerUrl,
                 apiKey: prefs.apiKey ?? fileConfig.apiKey,
                 workspaceId: prefs.workspaceId ?? fileConfig.workspaceId,
-                accountId: prefs.accountId ?? fileConfig.accountId,
+                accountId: ConfigStore.normalizeAccountId(prefs.accountId ?? fileConfig.accountId),
                 openaiApiKey: prefs.openaiApiKey ?? fileConfig.openaiApiKey
             )
             self.config = config
@@ -116,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             menuBar = MenuBarController(
                 sourceManager: sourceManager,
                 setSyncEnabled: { [weak self] enabled in self?.setSyncEnabled(enabled) },
+                openDashboard: { [weak self] in self?.openDashboard() },
                 preferences: { [weak self] in self?.openPreferences() }
             )
 
@@ -167,6 +169,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
         preferencesWindow?.showWindow(nil)
         preferencesWindow?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @MainActor
+    private func openDashboard() {
+        guard let sourceManager, let menuBar else { return }
+        if dashboardWindow == nil {
+            dashboardWindow = DashboardWindowController(sourceManager: sourceManager, state: menuBar.state)
+        }
+        dashboardWindow?.showWindow(nil)
+        dashboardWindow?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 

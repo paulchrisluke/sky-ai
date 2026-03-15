@@ -38,10 +38,42 @@ final class ConfigStore {
 
         let data = try Data(contentsOf: fileURL)
         do {
-            self.cached = try decoder.decode(Config.self, from: data)
+            let raw = try decoder.decode(Config.self, from: data)
+            // Normalize accountId
+            self.cached = Config(
+                workerUrl: raw.workerUrl,
+                apiKey: raw.apiKey,
+                workspaceId: raw.workspaceId,
+                accountId: ConfigStore.normalizeAccountId(raw.accountId),
+                openaiApiKey: raw.openaiApiKey
+            )
         } catch {
             throw ConfigError.invalid(error.localizedDescription)
         }
+    }
+
+    static func normalizeAccountId(_ id: String) -> String {
+        if id.contains("_") && !id.contains("@") {
+            let lower = id.lowercased()
+            let suffixes = ["_com", "_net", "_org", "_me", "_mac", "_earth", "_co_uk", "_gov", "_edu", "_io"]
+            for suffix in suffixes {
+                if lower.hasSuffix(suffix) {
+                    let parts = id.components(separatedBy: "_")
+                    if parts.count >= 3 {
+                        if suffix == "_co_uk" && parts.count >= 4 {
+                            let user = parts.prefix(parts.count - 3).joined(separator: "_")
+                            return "\(user)@\(parts[parts.count-3]).co.uk"
+                        } else if suffix != "_co_uk" {
+                            let tld = parts.last!
+                            let domain = parts[parts.count - 2]
+                            let user = parts.prefix(parts.count - 2).joined(separator: "_")
+                            return "\(user)@\(domain).\(tld)"
+                        }
+                    }
+                }
+            }
+        }
+        return id
     }
 
     func load() -> Config {

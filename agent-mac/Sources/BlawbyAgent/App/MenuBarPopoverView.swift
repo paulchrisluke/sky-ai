@@ -3,12 +3,15 @@ import SwiftUI
 class MenuBarState: ObservableObject {
     @Published var connection: String = "Connecting"
     @Published var lastSync: String = "-"
+    @Published var syncActivated: Bool = true
 }
 
 struct MenuBarPopoverView: View {
     @ObservedObject var sourceManager: SourceManager
     @ObservedObject var state: MenuBarState
     let onClose: () -> Void
+    let onToggleSync: () -> Void
+    let onOpenDashboard: () -> Void
     let onOpenPreferences: () -> Void
 
     var body: some View {
@@ -65,28 +68,31 @@ struct MenuBarPopoverView: View {
 
             Divider()
 
-            // Active Sources
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Active sources (top 5)")
+            // Quick Actions
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Quick actions")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                    .padding(.horizontal)
-                    .padding(.vertical, 12)
 
-                let topSources = Array(activeSources().prefix(5))
-
-                if topSources.isEmpty {
-                    Text("No active sources")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
-                        .padding(.bottom, 12)
-                } else {
-                    ForEach(topSources, id: \.id) { source in
-                        SourceRow(source: source)
+                HStack(spacing: 8) {
+                    Button(action: onToggleSync) {
+                        Label(state.syncActivated ? "Pause Sync" : "Resume Sync", systemImage: state.syncActivated ? "pause.fill" : "play.fill")
+                            .frame(maxWidth: .infinity)
                     }
+                    .buttonStyle(.borderedProminent)
+
+                    Button(action: onOpenDashboard) {
+                        Label("Open Dashboard", systemImage: "rectangle.on.rectangle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
                 }
+
+                Text("Active sources now live in the Dashboard window.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
+            .padding()
             
             Divider()
             
@@ -118,23 +124,6 @@ struct MenuBarPopoverView: View {
 
     private var totalEstimated: Int {
         sourceManager.sources.filter(\.enabled).reduce(0) { $0 + max(0, $1.totalEstimated) }
-    }
-
-    private func activeSources() -> [ConnectedSource] {
-        let enabled = sourceManager.sources.filter(\.enabled)
-        let realCounts = enabled
-            .filter { $0.totalEstimated > 0 }
-            .sorted { $0.totalEstimated > $1.totalEstimated }
-            
-        if realCounts.count >= 5 {
-            return realCounts
-        }
-        
-        let pending = enabled
-            .filter { $0.totalEstimated == 0 && ($0.status == "pending" || $0.status == "syncing") }
-            .sorted { $0.id < $1.id }
-            
-        return realCounts + pending
     }
 
     private var connectionColor: Color {
@@ -242,3 +231,25 @@ struct SourceRow: View {
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 }
+
+/*
+#Preview {
+    MenuBarPopoverView(
+        sourceManager: SourceManager(
+            config: Config(workerUrl: "", apiKey: "", workspaceId: "", accountId: "", openaiApiKey: nil),
+            localStore: try! LocalStore(baseDirectory: URL(fileURLWithPath: "/tmp")),
+            mailWatcher: MailWatcher(configStore: try! ConfigStore(baseDirectory: URL(fileURLWithPath: "/tmp")), logger: .none),
+            calendarWatcher: CalendarWatcher(config: Config(workerUrl: "", apiKey: "", workspaceId: "", accountId: "", openaiApiKey: nil), logger: .none),
+            mailProcessor: MailProcessor(localStore: try! LocalStore(baseDirectory: URL(fileURLWithPath: "/tmp")), extractor: EntityExtractor(apiKey: nil, contactsReader: ContactsReader(localStore: try! LocalStore(baseDirectory: URL(fileURLWithPath: "/tmp")), logger: .none), logger: .none)),
+            webSocketPublisher: WebSocketPublisher(config: Config(workerUrl: "", apiKey: "", workspaceId: "", accountId: "", openaiApiKey: nil), logger: .none),
+            logger: .none
+        ),
+        state: MenuBarState(),
+        onClose: { print("Closed") },
+        onToggleSync: { print("Sync toggled") },
+        onOpenDashboard: { print("Dashboard opened") },
+        onOpenPreferences: { print("Preferences opened") }
+    )
+    .frame(width: 320)
+}
+*/

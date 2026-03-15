@@ -5,15 +5,17 @@ import SwiftUI
 final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private let popover: NSPopover
-    private let state: MenuBarState
+    let state: MenuBarState
 
     private let sourceManager: SourceManager
     private let setSyncEnabledHandler: @MainActor (Bool) -> Void
+    private let openDashboardHandler: () -> Void
     private let preferencesHandler: () -> Void
 
     init(
         sourceManager: SourceManager,
         setSyncEnabled: @escaping @MainActor (Bool) -> Void,
+        openDashboard: @escaping () -> Void,
         preferences: @escaping () -> Void
     ) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -21,6 +23,7 @@ final class MenuBarController: NSObject {
         self.state = MenuBarState()
         self.sourceManager = sourceManager
         self.setSyncEnabledHandler = setSyncEnabled
+        self.openDashboardHandler = openDashboard
         self.preferencesHandler = preferences
         super.init()
         setup()
@@ -44,6 +47,16 @@ final class MenuBarController: NSObject {
             onClose: { [weak self] in
                 self?.popover.performClose(nil)
             },
+            onToggleSync: { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in
+                    self.setSyncEnabledHandler(!self.state.syncActivated)
+                }
+            },
+            onOpenDashboard: { [weak self] in
+                self?.popover.performClose(nil)
+                self?.openDashboardHandler()
+            },
             onOpenPreferences: { [weak self] in
                 self?.popover.performClose(nil)
                 self?.preferencesHandler()
@@ -62,6 +75,7 @@ final class MenuBarController: NSObject {
     ) {
         state.connection = connection
         state.lastSync = lastSync
+        state.syncActivated = syncActivated
 
         let topStatus = topStatusTitle(for: sources)
         updateStatusIcon(connection: connection, topStatus: topStatus)
@@ -137,4 +151,3 @@ final class MenuBarController: NSObject {
         }
     }
 }
-

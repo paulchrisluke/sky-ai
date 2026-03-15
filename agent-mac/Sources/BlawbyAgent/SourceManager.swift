@@ -28,7 +28,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
     private var dirtySourceIds: Set<String> = []
     private var syncingIds: Set<String> = []
 
-    private let perSourceBatchSize = 25
+    private let perSourceBatchSize = 100
     private let interSourceDelayNanoseconds: UInt64 = 500_000_000
 
     init(
@@ -80,10 +80,21 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
     }
 
     func discoverSources() async {
+        checkFullDiskAccess()
         await discoverMailSources()
         await discoverCalendarSources()
         discoverMessagesSource()
         await refreshSources()
+    }
+
+    private func checkFullDiskAccess() {
+        let mailRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mail/V10")
+        let isFDA = FileManager.default.isReadableFile(atPath: mailRoot.path)
+        if isFDA {
+            logger.info("SourceManager: Full Disk Access GRANTED (V10 is readable)")
+        } else {
+            logger.warning("SourceManager: Full Disk Access MISSING! Mail sync will be slow. Grant FDA to BlawbyAgent in System Settings > Privacy & Security.")
+        }
     }
 
     func setEnabled(_ id: String, enabled: Bool) async {
@@ -366,7 +377,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             syncCursor: newestDate,
             totalEstimated: estimated,
             totalSynced: newSyncedTotal,
-            status: "syncing",
+            status: newSyncedTotal >= estimated ? "current" : "syncing",
             lastError: nil
         )
     }
