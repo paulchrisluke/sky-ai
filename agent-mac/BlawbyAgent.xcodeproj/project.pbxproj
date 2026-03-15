@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		03ECE348308DC64C933CCF20 /* AppUIController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 714744053CC39C9C72ADB63B /* AppUIController.swift */; };
+		053BC6A42FCF45858B3D65AF /* SyncRuntimeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CA821B9C735487DAEE2C2ED /* SyncRuntimeController.swift */; };
 		07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */; };
 		289661C0209D41B5319B0657 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C61DC164DE3E5327702F99 /* Config.swift */; };
 		2934EF299DD477179A67C5E5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = BB22FC45049BCFD0751A8C05 /* GRDB */; };
@@ -69,6 +70,7 @@
 		618247051F36D3E6E0F259B2 /* EmlxReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmlxReader.swift; sourceTree = "<group>"; };
 		62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsReader.swift; sourceTree = "<group>"; };
 		6C784BE09AF926E1EED926D3 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		6CA821B9C735487DAEE2C2ED /* SyncRuntimeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRuntimeController.swift; sourceTree = "<group>"; };
 		6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
 		714744053CC39C9C72ADB63B /* AppUIController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUIController.swift; sourceTree = "<group>"; };
 		7172F45B5B28D80C2994749B /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
@@ -125,6 +127,7 @@
 				206689B593945129B37BFCD0 /* MenuBarController.swift */,
 				7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */,
 				6E5E80F21B15B56569946019 /* PreferencesWindowController.swift */,
+				6CA821B9C735487DAEE2C2ED /* SyncRuntimeController.swift */,
 				268D5A0DF63E60EC68837921 /* SourcesView.swift */,
 			);
 			path = App;
@@ -360,6 +363,7 @@
 				4A85C2E7F1CF5C5BD288E20D /* PreferencesWindowController.swift in Sources */,
 				D2F5CA44EA53E5343394DFC2 /* SourceManager.swift in Sources */,
 				5CC9CA5CFEAE6825FD97365D /* SourcesView.swift in Sources */,
+				053BC6A42FCF45858B3D65AF /* SyncRuntimeController.swift in Sources */,
 				B195F2396EB9DA0B8459F1E2 /* SyncCoordinator.swift in Sources */,
 				E4AA27EF6229A9F55A7CE3C9 /* WebSocketPublisher.swift in Sources */,
 				D125204F81C69D021288F9E1 /* main.swift in Sources */,

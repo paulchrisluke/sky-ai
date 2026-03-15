@@ -41,11 +41,12 @@ Current alignment:
 - Deep interaction moved into a standard macOS dashboard window (`DashboardWindowController` + `DashboardView`).
 - Preferences and dashboard are normal `NSWindow` flows, not popover-only workflows.
 - AppDelegate UI responsibilities were split into `AppUIController` to reduce lifecycle coupling.
+- Runtime/watcher lifecycle was split into `SyncRuntimeController` to reduce AppDelegate orchestration load.
 - Preferences layout now uses Auto Layout (`NSGridView`) instead of manual frame math.
 
 Not yet aligned (next targets):
 
-- `AppDelegate` is still too broad; sync runtime/bootstrap orchestration should be split into focused coordinator/services.
+- `AppDelegate` is still broad; status formatting and startup composition can be split further into focused services.
 - Menu/command architecture is minimal; keyboard shortcuts and responder-chain command handling are limited.
 - The app is AppKit-first with SwiftUI-hosted views, but not fully scene-driven SwiftUI (`Window`/`MenuBarExtra`) yet.
 - Dashboard currently surfaces source status; richer native desktop patterns (toolbar commands, split panes, detailed inspectors) are still pending.

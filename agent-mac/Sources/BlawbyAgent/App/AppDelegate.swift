@@ -3,16 +3,13 @@ import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var uiController: AppUIController?
+    private var runtimeController: SyncRuntimeController?
 
     private var logger: Logger?
     private var localStore: LocalStore?
     private var syncCoordinator: SyncCoordinator?
     private var sourceManager: SourceManager?
-    private var mailWatcher: MailWatcher?
-    private var calendarWatcher: CalendarWatcher?
-    private var messagesReader: MessagesReader?
     private var contactsReader: ContactsReader?
-    private var webSocketPublisher: WebSocketPublisher?
     private var config: Config?
     private var mailProcessedToday = 0
     private var calendarSynced = 0
@@ -35,8 +32,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var messagesTotal = 0
     private var messageBatchCount = 0
     private var syncActivated = false
-    private var syncRuntimeStarted = false
-    private var bootstrapTask: Task<Void, Never>?
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -101,9 +96,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
             self.syncCoordinator = coordinator
             self.sourceManager = sourceManager
-            self.mailWatcher = mailWatcher
-            self.calendarWatcher = calendarWatcher
-            self.webSocketPublisher = webSocketPublisher
             if let uiController {
                 uiController.observeSources(sourceManager) { [weak self] in
                     self?.updateMenu()
@@ -133,17 +125,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                     self?.applyConnectionState(state)
                 }
             }
+            let runtimeDeps = SyncRuntimeController.Dependencies(
+                syncCoordinator: coordinator,
+                sourceManager: sourceManager,
+                mailWatcher: mailWatcher,
+                calendarWatcher: calendarWatcher,
+                logger: logger,
+                config: config,
+                localStore: localStore,
+                webSocketPublisher: webSocketPublisher,
+                isSyncEnabled: { [weak self] in
+                    self?.syncActivated == true
+                }
+            )
+            let runtimeController = SyncRuntimeController(dependencies: runtimeDeps)
+            runtimeController.onMenuRefresh = { [weak self] in
+                self?.updateMenu()
+            }
+            runtimeController.onMailChange = { [weak self] in
+                guard let self else { return }
+                self.mailProcessedToday += 1
+            }
+            runtimeController.onCalendarChange = { [weak self] in
+                guard let self else { return }
+                self.calendarSynced += 1
+            }
+            runtimeController.onMessagesAvailabilityChanged = { [weak self] available, connected in
+                guard let self else { return }
+                self.messagesSourceAvailable = available
+                self.messagesSourceConnected = connected
+            }
+            runtimeController.onMailAccountNamesChanged = { [weak self] names in
+                guard let self else { return }
+                self.mailAccountNames = names
+                self.knownMailAccountNames = names
+            }
+            runtimeController.onCalendarSourceNamesChanged = { [weak self] names in
+                guard let self else { return }
+                self.calendarSourceNames = names
+                self.knownCalendarSourceNames = names
+            }
+            runtimeController.onCalendarSourceDiscoveryFailed = { [weak self] in
+                guard let self else { return }
+                self.calendarSourceNames = []
+                self.calendarStatusDisplay = "Sources 0/\(max(self.knownCalendarSourceNames.count, 0)) | Synced 0/0"
+            }
+            runtimeController.onMessagesProgress = { [weak self] progress in
+                guard let self else { return }
+                self.messagesTotal += progress.messages
+                self.messageBatchCount += progress.batches
+            }
+            self.runtimeController = runtimeController
+
             if syncActivated {
-                startSyncRuntime(
-                    coordinator: coordinator,
-                    sourceManager: sourceManager,
-                    mailWatcher: mailWatcher,
-                    calendarWatcher: calendarWatcher,
-                    logger: logger,
-                    config: config,
-                    localStore: localStore,
-                    webSocketPublisher: webSocketPublisher
-                )
+                runtimeController.start()
             } else {
                 connectionDisplay = "Paused"
                 syncDisplay = "Off"
@@ -155,6 +190,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         } catch {
             fputs("BlawbyAgent startup failed: \(error.localizedDescription)\n", stderr)
         }
+    }
+
+    @MainActor
+    func applicationWillTerminate(_ notification: Notification) {
+        runtimeController?.stop()
     }
 
     @MainActor
@@ -289,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         logger?.info("sync activated preference updated: \(syncActivated)")
 
         if !syncActivated {
-            stopSyncRuntime()
+            runtimeController?.stop()
             connectionDisplay = "Paused"
             syncDisplay = "Off"
             syncProgressDisplay = nil
@@ -297,153 +337,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             return
         }
 
-        guard
-            let coordinator = syncCoordinator,
-            let sourceManager = sourceManager,
-            let mailWatcher = mailWatcher,
-            let calendarWatcher = calendarWatcher,
-            let localStore = localStore,
-            let logger = logger,
-            let config = config,
-            let webSocketPublisher = webSocketPublisher
-        else {
-            return
-        }
-        startSyncRuntime(
-            coordinator: coordinator,
-            sourceManager: sourceManager,
-            mailWatcher: mailWatcher,
-            calendarWatcher: calendarWatcher,
-            logger: logger,
-            config: config,
-            localStore: localStore,
-            webSocketPublisher: webSocketPublisher
-        )
+        runtimeController?.start()
         updateMenu()
-    }
-
-    @MainActor
-    private func startSyncRuntime(
-        coordinator: SyncCoordinator,
-        sourceManager: SourceManager,
-        mailWatcher: MailWatcher,
-        calendarWatcher: CalendarWatcher,
-        logger: Logger,
-        config: Config,
-        localStore: LocalStore,
-        webSocketPublisher: WebSocketPublisher
-    ) {
-        guard !syncRuntimeStarted else { return }
-        syncRuntimeStarted = true
-        messagesSourceAvailable = FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/Messages/chat.db")
-        messagesSourceConnected = messagesSourceAvailable
-
-        webSocketPublisher.connect()
-        sourceManager.start()
-
-        mailWatcher.startObserving { [weak self] in
-            Task {
-                guard let self else { return }
-                guard self.syncActivated else { return }
-                await MainActor.run {
-                    sourceManager.markSourcesChanged(sourceType: "mail")
-                }
-                await self.syncCoordinator?.runMailSync()
-                await MainActor.run {
-                    self.mailProcessedToday += 1
-                    self.updateMenu()
-                }
-            }
-        }
-
-        calendarWatcher.startObserving { [weak self] in
-            Task {
-                guard let self else { return }
-                guard self.syncActivated else { return }
-                await MainActor.run {
-                    sourceManager.markSourcesChanged(sourceType: "calendar")
-                }
-                await self.syncCoordinator?.runCalendarSync()
-                await MainActor.run {
-                    self.calendarSynced += 1
-                    self.updateMenu()
-                }
-            }
-        }
-
-        let messagesReader = MessagesReader(
-            localStore: localStore,
-            logger: logger,
-            accountId: config.accountId,
-            workspaceId: config.workspaceId
-        )
-        self.messagesReader = messagesReader
-        messagesReader.start(onChange: { [weak self] payload in
-            Task {
-                guard let self else { return }
-                guard self.syncActivated else { return }
-                await self.syncCoordinator?.publishRawPayload(type: "message", json: payload)
-                await MainActor.run {
-                    self.updateMenu()
-                }
-            }
-        }, onProgress: { [weak self] progress in
-            Task { @MainActor in
-                guard let self else { return }
-                self.messagesTotal += progress.messages
-                self.messageBatchCount += progress.batches
-                self.updateMenu()
-            }
-        })
-
-        Task {
-            let names = await mailWatcher.accountNames()
-            await MainActor.run {
-                self.mailAccountNames = names
-                self.localStore?.upsertMailAccounts(names)
-                self.knownMailAccountNames = self.localStore?.knownMailAccounts() ?? names
-                self.updateMenu()
-            }
-        }
-
-        Task {
-            do {
-                let names = try await calendarWatcher.calendarSourceNames()
-                await MainActor.run {
-                    self.calendarSourceNames = names
-                    self.localStore?.upsertCalendarSources(names)
-                    self.knownCalendarSourceNames = self.localStore?.knownCalendarSources() ?? names
-                    self.updateMenu()
-                }
-            } catch {
-                await MainActor.run {
-                    self.calendarSourceNames = []
-                    self.calendarStatusDisplay = "Sources 0/\(max(self.knownCalendarSourceNames.count, 0)) | Synced 0/0"
-                    self.updateMenu()
-                }
-            }
-        }
-
-        bootstrapTask = Task.detached {
-            await coordinator.runInitialBootstrapSyncIfNeeded()
-            await coordinator.runMailSync()
-            await coordinator.runCalendarSync()
-        }
-    }
-
-    @MainActor
-    private func stopSyncRuntime() {
-        guard syncRuntimeStarted else { return }
-        syncRuntimeStarted = false
-
-        bootstrapTask?.cancel()
-        bootstrapTask = nil
-        mailWatcher?.stopObserving()
-        calendarWatcher?.stopObserving()
-        messagesReader?.stop()
-        messagesSourceConnected = false
-        sourceManager?.stop()
-        webSocketPublisher?.disconnect()
     }
 
     private func configureLoginItemRegistration(logger: Logger) {
