@@ -69,12 +69,9 @@ final class MailWatcher: @unchecked Sendable {
 
         for account in accounts {
             let mailboxes = objectArray(from: account.value(forKey: "mailboxes"))
-            let inboxes = mailboxes.filter { mailbox in
-                let name = (mailbox.value(forKey: "name") as? String ?? "").lowercased()
-                return name == "inbox"
-            }
+            let backfillMailboxes = selectableBackfillMailboxes(from: mailboxes)
 
-            for mailbox in inboxes {
+            for mailbox in backfillMailboxes {
                 let mailboxName = mailbox.value(forKey: "name") as? String ?? "INBOX"
                 guard let messages = mailbox.value(forKey: "messages") as? NSArray else {
                     continue
@@ -94,14 +91,20 @@ final class MailWatcher: @unchecked Sendable {
                         break
                     }
                     inspected += 1
+                    if inspected % 500 == 0 {
+                        logger.info("mail backfill progress inspected=\(inspected) matched=\(rawMessages.count) mailbox=\(mailboxName)")
+                    }
+
+                    guard let dateSent = message.value(forKey: "dateSent") as? Date else {
+                        if index == 0 { break }
+                        index -= 1
+                        continue
+                    }
+                    if dateSent <= lastSeen {
+                        break
+                    }
 
                     autoreleasepool {
-                        guard let dateSent = message.value(forKey: "dateSent") as? Date else {
-                            return
-                        }
-                        if dateSent <= lastSeen {
-                            return
-                        }
                         guard let messageId = messageIdentifier(message) else {
                             return
                         }
@@ -211,13 +214,21 @@ final class MailWatcher: @unchecked Sendable {
                     }
                     inspected += 1
 
+                    guard let dateSent = message.value(forKey: "dateSent") as? Date else {
+                        if index == 0 { break }
+                        index -= 1
+                        continue
+                    }
+                    if dateSent < boundedStart {
+                        break
+                    }
+                    if dateSent >= boundedEnd {
+                        if index == 0 { break }
+                        index -= 1
+                        continue
+                    }
+
                     autoreleasepool {
-                        guard let dateSent = message.value(forKey: "dateSent") as? Date else {
-                            return
-                        }
-                        if dateSent < boundedStart || dateSent >= boundedEnd {
-                            return
-                        }
                         guard let messageId = messageIdentifier(message) else {
                             return
                         }
@@ -313,5 +324,21 @@ final class MailWatcher: @unchecked Sendable {
         }
         let email = input[input.index(after: start)..<end].trimmingCharacters(in: .whitespacesAndNewlines)
         return email.isEmpty ? nil : email
+    }
+
+    private func selectableBackfillMailboxes(from mailboxes: [NSObject]) -> [NSObject] {
+        let excludedNames: Set<String> = [
+            "trash",
+            "junk",
+            "spam",
+            "deleted messages",
+            "bin"
+        ]
+        return mailboxes.filter { mailbox in
+            let name = (mailbox.value(forKey: "name") as? String ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            return !excludedNames.contains(name)
+        }
     }
 }

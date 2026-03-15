@@ -129,7 +129,9 @@ final class SyncCoordinator: @unchecked Sendable {
 
         let seconds = max(1, days) * 24 * 60 * 60
         let cutoff = Date(timeIntervalSinceNow: -Double(seconds))
-        let backfillMessages = mailWatcher.fetchMessagesSince(cutoff, limit: max(1, limit))
+        let backfillMessages = await MainActor.run {
+            mailWatcher.fetchMessagesSince(cutoff, limit: max(1, limit))
+        }
         await processMailMessages(backfillMessages, mode: "backfill")
 
         while completeMailSyncPass() {
@@ -150,10 +152,6 @@ final class SyncCoordinator: @unchecked Sendable {
     }
 
     func runInitialBootstrapSyncIfNeeded() async {
-        if !localStore.isBootstrapCompleted(accountId: config.accountId, key: "mail") {
-            await runBootstrapMailBackfill()
-        }
-
         if !localStore.isBootstrapCompleted(accountId: config.accountId, key: "calendar") {
             logger.info("[sync] bootstrap calendar backfill starting")
             stateQueue.sync {
@@ -164,6 +162,11 @@ final class SyncCoordinator: @unchecked Sendable {
             localStore.markBootstrapCompleted(accountId: config.accountId, key: "calendar")
             logger.info("[sync] bootstrap calendar backfill completed")
         }
+
+        if !localStore.isBootstrapCompleted(accountId: config.accountId, key: "mail") {
+            await runBootstrapMailBackfill()
+        }
+
         stateQueue.sync {
             bootstrapStatus = "completed"
         }
@@ -210,7 +213,10 @@ final class SyncCoordinator: @unchecked Sendable {
                 }
                 publishStatus()
 
-                let windowMessages = mailWatcher.fetchMessagesBetween(windowStart, windowCursorEnd, limit: bootstrapMailChunkLimit)
+                let currentWindowCursorEnd = windowCursorEnd
+                let windowMessages = await MainActor.run {
+                    mailWatcher.fetchMessagesBetween(windowStart, currentWindowCursorEnd, limit: bootstrapMailChunkLimit)
+                }
                 await processMailMessages(windowMessages, mode: "backfill")
 
                 while completeMailSyncPass() {
@@ -388,7 +394,9 @@ final class SyncCoordinator: @unchecked Sendable {
     }
 
     private func runMailSyncPass() async {
-        let newMessages = mailWatcher.fetchNewMessages()
+        let newMessages = await MainActor.run {
+            mailWatcher.fetchNewMessages()
+        }
         await processMailMessages(newMessages, mode: "sync")
     }
 
