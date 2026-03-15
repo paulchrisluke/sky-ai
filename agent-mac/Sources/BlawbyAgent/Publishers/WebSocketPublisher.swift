@@ -108,17 +108,23 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
         task.resume()
     }
 
-    private func startReceiveLoop() {
-        guard let task = socketTask else { return }
+    private func startReceiveLoop(for task: URLSessionWebSocketTask) {
         task.receive { [weak self] result in
             guard let strongSelf = self else { return }
             strongSelf.queue.async {
+                guard task === strongSelf.socketTask else {
+                    return
+                }
                 switch result {
                 case let .success(message):
                     strongSelf.handleInboundMessage(message)
-                    strongSelf.startReceiveLoop()
+                    strongSelf.startReceiveLoop(for: task)
                 case let .failure(error):
-                    strongSelf.handleDisconnect(logMessage: "websocket receive error \(error.localizedDescription)")
+                    let ns = error as NSError
+                    let code = task.closeCode.rawValue
+                    strongSelf.handleDisconnect(
+                        logMessage: "websocket receive error domain=\(ns.domain) code=\(ns.code) wsCloseCode=\(code) message=\(ns.localizedDescription)"
+                    )
                 }
             }
         }
@@ -172,13 +178,16 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
         }
         task.send(.string(json)) { [self] error in
             if let error {
-                self.handlePingSendFailure(error)
+                self.handlePingSendFailure(error, task: task)
             }
         }
     }
 
-    private func handlePingSendFailure(_ error: Error) {
+    private func handlePingSendFailure(_ error: Error, task: URLSessionWebSocketTask) {
         queue.async { [self] in
+            guard task === self.socketTask else {
+                return
+            }
             self.handleDisconnect(logMessage: "websocket ping error \(error.localizedDescription)")
         }
     }
@@ -213,11 +222,14 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         queue.async {
+            guard webSocketTask === self.socketTask else {
+                return
+            }
             self.disconnectHandled = false
             self.connected = true
             self.reconnectAttempt = 0
             self.logger.info("websocket connected")
-            self.startReceiveLoop()
+            self.startReceiveLoop(for: webSocketTask)
             self.startPingTimer()
             self.onConnected?()
         }
@@ -230,7 +242,16 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
         reason: Data?
     ) {
         queue.async {
-            self.handleDisconnect(logMessage: "websocket closed code=\(closeCode.rawValue)")
+            guard webSocketTask === self.socketTask else {
+                return
+            }
+            let reasonText: String
+            if let reason, !reason.isEmpty {
+                reasonText = String(data: reason, encoding: .utf8) ?? "<binary:\(reason.count)>"
+            } else {
+                reasonText = "<none>"
+            }
+            self.handleDisconnect(logMessage: "websocket closed code=\(closeCode.rawValue) reason=\(reasonText)")
         }
     }
 }
