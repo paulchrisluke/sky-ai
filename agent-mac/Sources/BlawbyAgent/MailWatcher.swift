@@ -1,7 +1,7 @@
 import Foundation
 import ScriptingBridge
 
-final class MailWatcher {
+final class MailWatcher: @unchecked Sendable {
     private let maxMessagesToInspectPerPoll = 300
     private let maxNewMessagesPerPoll = 20
 
@@ -21,7 +21,7 @@ final class MailWatcher {
         self.logger = logger
     }
 
-    func startObserving(onChange: @escaping () -> Void) {
+    func startObserving(onChange: @escaping @Sendable () -> Void) {
         distributedObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("com.apple.mail.MessageReceived"),
             object: nil,

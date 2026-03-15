@@ -27,7 +27,7 @@ struct CalendarPayload: Codable {
     let events: [CalendarEventPayload]
 }
 
-final class CalendarWatcher {
+final class CalendarWatcher: @unchecked Sendable {
     private let config: Config
     private let localStore: LocalStore
     private let logger: Logger
@@ -44,7 +44,7 @@ final class CalendarWatcher {
         self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
 
-    func startObserving(onChange: @escaping () -> Void) {
+    func startObserving(onChange: @escaping @Sendable () -> Void) {
         Task {
             do {
                 try await ensureAccess()

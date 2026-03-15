@@ -1,5 +1,6 @@
 import AppKit
 
+@MainActor
 final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
@@ -51,11 +52,9 @@ final class MenuBarController: NSObject {
     }
 
     func update(lastSync: String, mailProcessed: Int, calendarSynced: Int) {
-        DispatchQueue.main.async {
-            self.lastSyncItem.title = "Last synced: \(lastSync)"
-            self.mailItem.title = "Mail: \(mailProcessed) processed today"
-            self.calendarItem.title = "Calendar: \(calendarSynced) events synced"
-        }
+        lastSyncItem.title = "Last synced: \(lastSync)"
+        mailItem.title = "Mail: \(mailProcessed) processed today"
+        calendarItem.title = "Calendar: \(calendarSynced) events synced"
     }
 
     @objc private func syncNowAction() {

@@ -1,10 +1,11 @@
 import Foundation
 import Contacts
 
-final class ContactsReader {
+final class ContactsReader: @unchecked Sendable {
     private let store = CNContactStore()
     private let localStore: LocalStore
     private let logger: Logger
+    private let refreshQueue = DispatchQueue(label: "com.blawby.agent.contacts.refresh", qos: .utility)
     private var observer: NSObjectProtocol?
 
     init(localStore: LocalStore, logger: Logger) {
@@ -43,6 +44,12 @@ final class ContactsReader {
     }
 
     private func refreshAllContacts() {
+        refreshQueue.async { [weak self] in
+            self?.refreshAllContactsOnQueue()
+        }
+    }
+
+    private func refreshAllContactsOnQueue() {
         let keys: [CNKeyDescriptor] = [
             CNContactGivenNameKey as CNKeyDescriptor,
             CNContactFamilyNameKey as CNKeyDescriptor,

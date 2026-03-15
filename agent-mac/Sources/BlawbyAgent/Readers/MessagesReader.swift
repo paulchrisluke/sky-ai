@@ -16,7 +16,7 @@ struct MacMessagePayload: Codable {
     }
 }
 
-final class MessagesReader {
+final class MessagesReader: @unchecked Sendable {
     private let localStore: LocalStore
     private let logger: Logger
     private let accountId: String
@@ -35,7 +35,7 @@ final class MessagesReader {
         self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
 
-    func start(onChange: @escaping (String) -> Void) {
+    func start(onChange: @escaping @Sendable (String) -> Void) {
         guard FileManager.default.fileExists(atPath: dbPath) else {
             logger.warning("messages db missing at \(dbPath)")
             return

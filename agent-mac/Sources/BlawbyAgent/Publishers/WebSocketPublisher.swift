@@ -5,8 +5,8 @@ enum WebSocketPublisherError: Error {
     case invalidPayload
 }
 
-final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate {
-    var onConnected: (() -> Void)?
+final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+    private var onConnected: (@Sendable () -> Void)?
 
     private let config: Config
     private let logger: Logger
@@ -23,6 +23,12 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate {
     init(config: Config, logger: Logger) {
         self.config = config
         self.logger = logger
+    }
+
+    func setOnConnected(_ handler: (@Sendable () -> Void)?) {
+        queue.async {
+            self.onConnected = handler
+        }
     }
 
     func connect() {
@@ -100,20 +106,19 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate {
 
         logger.info("websocket connecting")
         task.resume()
-        startReceiveLoop()
     }
 
     private func startReceiveLoop() {
         guard let task = socketTask else { return }
         task.receive { [weak self] result in
-            guard let self else { return }
-            self.queue.async {
+            guard let strongSelf = self else { return }
+            strongSelf.queue.async {
                 switch result {
                 case let .success(message):
-                    self.handleInboundMessage(message)
-                    self.startReceiveLoop()
+                    strongSelf.handleInboundMessage(message)
+                    strongSelf.startReceiveLoop()
                 case let .failure(error):
-                    self.handleDisconnect(logMessage: "websocket receive error \(error.localizedDescription)")
+                    strongSelf.handleDisconnect(logMessage: "websocket receive error \(error.localizedDescription)")
                 }
             }
         }
@@ -165,12 +170,16 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate {
               let json = String(data: data, encoding: .utf8) else {
             return
         }
-        task.send(.string(json)) { [weak self] error in
+        task.send(.string(json)) { [self] error in
             if let error {
-                self?.queue.async {
-                    self?.handleDisconnect(logMessage: "websocket ping error \(error.localizedDescription)")
-                }
+                self.handlePingSendFailure(error)
             }
+        }
+    }
+
+    private func handlePingSendFailure(_ error: Error) {
+        queue.async { [self] in
+            self.handleDisconnect(logMessage: "websocket ping error \(error.localizedDescription)")
         }
     }
 
@@ -208,6 +217,7 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate {
             self.connected = true
             self.reconnectAttempt = 0
             self.logger.info("websocket connected")
+            self.startReceiveLoop()
             self.startPingTimer()
             self.onConnected?()
         }

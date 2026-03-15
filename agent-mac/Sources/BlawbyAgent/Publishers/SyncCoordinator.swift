@@ -3,6 +3,7 @@ import Foundation
 final class SyncCoordinator {
     private let stateQueue = DispatchQueue(label: "com.blawby.agent.sync.state")
     private var mailSyncRunning = false
+    private var pendingMailSync = false
     private var calendarSyncRunning = false
 
     private let config: Config
@@ -33,47 +34,20 @@ final class SyncCoordinator {
 
     func runMailSync() async {
         guard beginMailSync() else {
-            logger.warning("[sync] mail skipped: previous run still in progress")
-            return
-        }
-        defer { endMailSync() }
-
-        let newMessages = mailWatcher.fetchNewMessages()
-        if newMessages.isEmpty {
-            logger.info("[sync] mail: processed=0 entities=0 sent=true")
+            logger.info("[sync] mail coalesced: run already in progress")
             return
         }
 
-        do {
-            let entities = try await mailProcessor.process(messages: newMessages, workspaceId: config.workspaceId)
-            if entities.isEmpty {
-                logger.info("[sync] mail: processed=\(newMessages.count) entities=0 sent=true")
-                return
-            }
+        while true {
+            let startedAt = Date()
+            await runMailSyncPass()
+            let duration = Int(Date().timeIntervalSince(startedAt))
 
-            let payloadWithScope = EntitiesPayload(
-                type: "entities",
-                workspaceId: config.workspaceId,
-                accountId: config.accountId,
-                entities: entities
-            )
-            let payloadData = try JSONEncoder().encode(payloadWithScope)
-            guard let json = String(data: payloadData, encoding: .utf8) else {
-                throw NSError(domain: "SyncCoordinator", code: 1, userInfo: [NSLocalizedDescriptionKey: "entities payload encode failed"])
+            if completeMailSyncPass() {
+                logger.info("[sync] mail coalesced: running queued pass after \(duration)s")
+                continue
             }
-
-            do {
-                try await webSocketPublisher.send(type: "entities", payload: json)
-                for messageId in Set(entities.map({ $0.messageId })) {
-                    localStore.markMessageSent(messageId)
-                }
-                logger.info("[sync] mail: processed=\(newMessages.count) entities=\(entities.count) sent=true")
-            } catch {
-                _ = localStore.enqueuePayload(type: "entities", json: json)
-                logger.info("[sync] mail: processed=\(newMessages.count) entities=\(entities.count) sent=queued")
-            }
-        } catch {
-            logger.error("[sync] mail failed: \(error.localizedDescription)")
+            break
         }
     }
 
@@ -146,6 +120,7 @@ final class SyncCoordinator {
     private func beginMailSync() -> Bool {
         stateQueue.sync {
             if mailSyncRunning {
+                pendingMailSync = true
                 return false
             }
             mailSyncRunning = true
@@ -153,9 +128,14 @@ final class SyncCoordinator {
         }
     }
 
-    private func endMailSync() {
+    private func completeMailSyncPass() -> Bool {
         stateQueue.sync {
+            if pendingMailSync {
+                pendingMailSync = false
+                return true
+            }
             mailSyncRunning = false
+            return false
         }
     }
 
@@ -172,6 +152,46 @@ final class SyncCoordinator {
     private func endCalendarSync() {
         stateQueue.sync {
             calendarSyncRunning = false
+        }
+    }
+
+    private func runMailSyncPass() async {
+        let newMessages = mailWatcher.fetchNewMessages()
+        if newMessages.isEmpty {
+            logger.info("[sync] mail: processed=0 entities=0 sent=true")
+            return
+        }
+
+        do {
+            let entities = try await mailProcessor.process(messages: newMessages, workspaceId: config.workspaceId)
+            if entities.isEmpty {
+                logger.info("[sync] mail: processed=\(newMessages.count) entities=0 sent=true")
+                return
+            }
+
+            let payloadWithScope = EntitiesPayload(
+                type: "entities",
+                workspaceId: config.workspaceId,
+                accountId: config.accountId,
+                entities: entities
+            )
+            let payloadData = try JSONEncoder().encode(payloadWithScope)
+            guard let json = String(data: payloadData, encoding: .utf8) else {
+                throw NSError(domain: "SyncCoordinator", code: 1, userInfo: [NSLocalizedDescriptionKey: "entities payload encode failed"])
+            }
+
+            do {
+                try await webSocketPublisher.send(type: "entities", payload: json)
+                for messageId in Set(entities.map({ $0.messageId })) {
+                    localStore.markMessageSent(messageId)
+                }
+                logger.info("[sync] mail: processed=\(newMessages.count) entities=\(entities.count) sent=true")
+            } catch {
+                _ = localStore.enqueuePayload(type: "entities", json: json)
+                logger.info("[sync] mail: processed=\(newMessages.count) entities=\(entities.count) sent=queued")
+            }
+        } catch {
+            logger.error("[sync] mail failed: \(error.localizedDescription)")
         }
     }
 }

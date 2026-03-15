@@ -1,7 +1,7 @@
 import AppKit
 import ServiceManagement
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var menuBar: MenuBarController?
     private var preferencesWindow: PreferencesWindowController?
 
@@ -70,15 +70,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 preferences: { [weak self] in self?.openPreferences() }
             )
 
-            webSocketPublisher.onConnected = { [weak self] in
-                guard let self else { return }
-                Task { await self.syncCoordinator?.drainOutboundQueue() }
+            webSocketPublisher.setOnConnected { [weak self] in
+                Task { @MainActor in
+                    await self?.syncCoordinator?.drainOutboundQueue()
+                }
             }
             webSocketPublisher.connect()
 
             mailWatcher.startObserving { [weak self] in
-                guard let self else { return }
-                Task {
+                Task { @MainActor in
+                    guard let self else { return }
                     await self.syncCoordinator?.runMailSync()
                     self.mailProcessedToday += 1
                     self.updateMenu()
@@ -86,8 +87,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             calendarWatcher.startObserving { [weak self] in
-                guard let self else { return }
-                Task {
+                Task { @MainActor in
+                    guard let self else { return }
                     await self.syncCoordinator?.runCalendarSync()
                     self.calendarSynced += 1
                     self.updateMenu()
@@ -102,8 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             self.messagesReader = messagesReader
             messagesReader.start { [weak self] payload in
-                guard let self else { return }
-                Task {
+                Task { @MainActor in
+                    guard let self else { return }
                     await self.syncCoordinator?.publishRawPayload(type: "message", json: payload)
                     self.updateMenu()
                 }
@@ -123,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @MainActor
     private func syncNow() {
         guard let syncCoordinator else { return }
         Task {
@@ -133,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @MainActor
     private func openPreferences() {
         guard let config else { return }
         if preferencesWindow == nil {
@@ -143,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    @MainActor
     private func updateMenu() {
         let ts = iso.string(from: Date())
         menuBar?.update(lastSync: ts, mailProcessed: mailProcessedToday, calendarSynced: calendarSynced)

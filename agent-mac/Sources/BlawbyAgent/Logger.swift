@@ -28,15 +28,16 @@ final class Logger {
     private func write(level: String, message: String) {
         let timestamp = formatter.string(from: Date())
         let line = "[\(timestamp)] [\(level)] \(message)\n"
+        let logURL = self.logURL
         print(line, terminator: "")
 
-        queue.async {
-            if !FileManager.default.fileExists(atPath: self.logURL.path) {
-                FileManager.default.createFile(atPath: self.logURL.path, contents: nil)
+        queue.async { [logURL] in
+            if !FileManager.default.fileExists(atPath: logURL.path) {
+                FileManager.default.createFile(atPath: logURL.path, contents: nil)
             }
             guard let data = line.data(using: .utf8) else { return }
             do {
-                let handle = try FileHandle(forWritingTo: self.logURL)
+                let handle = try FileHandle(forWritingTo: logURL)
                 try handle.seekToEnd()
                 try handle.write(contentsOf: data)
                 try handle.close()
