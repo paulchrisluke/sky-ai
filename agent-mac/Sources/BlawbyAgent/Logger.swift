@@ -21,6 +21,10 @@ final class Logger {
         write(level: "ERROR", message: message)
     }
 
+    func warning(_ message: String) {
+        write(level: "WARN", message: message)
+    }
+
     private func write(level: String, message: String) {
         let timestamp = formatter.string(from: Date())
         let line = "[\(timestamp)] [\(level)] \(message)\n"

@@ -1,34 +1,32 @@
 import Foundation
 import ScriptingBridge
 
-struct EmailPayload: Codable {
+struct EntitiesPayload: Codable {
     let type: String
-    let source: String
-    let workspaceId: String
-    let accountId: String
-    let accountEmail: String
-    let subject: String
-    let from: [String]
-    let to: [String]
-    let date: String
-    let rawRfc822: String
+    let entities: [ExtractedEntity]
 }
 
 final class MailWatcher {
     private let configStore: ConfigStore
     private let localStore: LocalStore
+    private let mailProcessor: MailProcessor
     private let logger: Logger
     private let onPayload: (String) -> Void
-    private let iso = ISO8601DateFormatter()
     private let queue = DispatchQueue(label: "com.blawby.agent.mail")
     private var timer: DispatchSourceTimer?
 
-    init(configStore: ConfigStore, localStore: LocalStore, logger: Logger, onPayload: @escaping (String) -> Void) {
+    init(
+        configStore: ConfigStore,
+        localStore: LocalStore,
+        mailProcessor: MailProcessor,
+        logger: Logger,
+        onPayload: @escaping (String) -> Void
+    ) {
         self.configStore = configStore
         self.localStore = localStore
+        self.mailProcessor = mailProcessor
         self.logger = logger
         self.onPayload = onPayload
-        self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
 
     func start() {
@@ -59,12 +57,12 @@ final class MailWatcher {
         let config = configStore.load()
         let lastSeen = localStore.getCursor(accountId: config.accountId, source: "mail").lastSeenAt ?? .distantPast
         var newestSeen = lastSeen
+        var rawMessages: [RawMessage] = []
 
         let accounts = objectArray(from: appObject.value(forKey: "accounts"))
         logger.info("mail poll started accounts=\(accounts.count)")
 
         for account in accounts {
-            let accountEmail = firstEmailAddress(account) ?? "unknown"
             let mailboxes = objectArray(from: account.value(forKey: "mailboxes"))
             let inboxes = mailboxes.filter { mailbox in
                 let name = (mailbox.value(forKey: "name") as? String ?? "").lowercased()
@@ -80,32 +78,26 @@ final class MailWatcher {
                     if dateSent <= lastSeen {
                         continue
                     }
+                    guard let messageId = messageIdentifier(message) else {
+                        continue
+                    }
 
                     let subject = message.value(forKey: "subject") as? String ?? ""
                     let sender = message.value(forKey: "sender") as? String ?? ""
                     let toRecipients = recipientAddresses(from: message.value(forKey: "toRecipients"))
-                    let rawRfc822 = message.value(forKey: "source") as? String ?? ""
+                    let bodyText = truncate(bodyText(from: message.value(forKey: "content")), maxLength: 2000)
 
-                    let payload = EmailPayload(
-                        type: "email",
-                        source: "mac_mail",
-                        workspaceId: config.workspaceId,
-                        accountId: config.accountId,
-                        accountEmail: accountEmail,
-                        subject: subject,
-                        from: sender.isEmpty ? [] : [sender],
-                        to: toRecipients,
-                        date: iso.string(from: dateSent),
-                        rawRfc822: rawRfc822
+                    rawMessages.append(
+                        RawMessage(
+                            messageId: messageId,
+                            accountId: config.accountId,
+                            subject: subject,
+                            from: sender,
+                            to: toRecipients,
+                            date: dateSent,
+                            bodyText: bodyText
+                        )
                     )
-
-                    do {
-                        let data = try JSONEncoder().encode(payload)
-                        guard let json = String(data: data, encoding: .utf8) else { continue }
-                        onPayload(json)
-                    } catch {
-                        logger.error("mail payload encode failed: \(error.localizedDescription)")
-                    }
 
                     if dateSent > newestSeen {
                         newestSeen = dateSent
@@ -122,6 +114,28 @@ final class MailWatcher {
                 lastSeenUid: nil
             )
         }
+
+        if rawMessages.isEmpty {
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let entities = try await mailProcessor.process(messages: rawMessages, workspaceId: config.workspaceId)
+                if entities.isEmpty {
+                    return
+                }
+                let payload = EntitiesPayload(type: "entities", entities: entities)
+                let data = try JSONEncoder().encode(payload)
+                guard let json = String(data: data, encoding: .utf8) else {
+                    return
+                }
+                onPayload(json)
+            } catch {
+                logger.error("mail processing failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private func objectArray(from value: Any?) -> [NSObject] {
@@ -132,16 +146,6 @@ final class MailWatcher {
             return array.compactMap { $0 as? NSObject }
         }
         return []
-    }
-
-    private func firstEmailAddress(_ account: NSObject) -> String? {
-        if let emails = account.value(forKey: "emailAddresses") as? [String], let first = emails.first {
-            return first
-        }
-        if let emails = account.value(forKey: "emailAddresses") as? NSArray {
-            return emails.compactMap({ $0 as? String }).first
-        }
-        return nil
     }
 
     private func recipientAddresses(from value: Any?) -> [String] {
@@ -155,5 +159,39 @@ final class MailWatcher {
             }
             return nil
         }
+    }
+
+    private func messageIdentifier(_ message: NSObject) -> String? {
+        if let messageId = message.value(forKey: "messageId") as? String, !messageId.isEmpty {
+            return messageId
+        }
+        if let messageId = message.value(forKey: "id") as? Int {
+            return String(messageId)
+        }
+        return nil
+    }
+
+    private func bodyText(from value: Any?) -> String {
+        if let text = value as? String {
+            return normalizeWhitespace(text)
+        }
+        if let rich = value as? NSAttributedString {
+            return normalizeWhitespace(rich.string)
+        }
+        if let object = value as? NSObject {
+            if let text = object.value(forKey: "string") as? String {
+                return normalizeWhitespace(text)
+            }
+            return normalizeWhitespace(object.description)
+        }
+        return ""
+    }
+
+    private func normalizeWhitespace(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func truncate(_ text: String, maxLength: Int) -> String {
+        String(text.prefix(maxLength))
     }
 }

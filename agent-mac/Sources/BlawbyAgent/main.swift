@@ -13,6 +13,8 @@ do {
     let localStore = try LocalStore(baseDirectory: baseDir)
     let configStore = try ConfigStore(baseDirectory: baseDir)
     let config = configStore.load()
+    let entityExtractor = EntityExtractor(logger: logger)
+    let mailProcessor = MailProcessor(localStore: localStore, extractor: entityExtractor)
 
     logger.info("starting BlawbyAgent")
 
@@ -22,7 +24,12 @@ do {
         webSocket.enqueue(payload)
     }
 
-    let mailWatcher = MailWatcher(configStore: configStore, localStore: localStore, logger: logger) { payload in
+    let mailWatcher = MailWatcher(
+        configStore: configStore,
+        localStore: localStore,
+        mailProcessor: mailProcessor,
+        logger: logger
+    ) { payload in
         webSocket.enqueue(payload)
     }
 
