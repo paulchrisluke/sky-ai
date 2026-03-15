@@ -69,6 +69,7 @@ final class SyncCoordinator: @unchecked Sendable {
     private var calendarCalendarsTotal = 0
     private var calendarEventsTotal = 0
     private var lastSyncAt: Date?
+    private var bootstrapInProgress = false
     private var onStatusChanged: (@Sendable (SyncStatusSnapshot) -> Void)?
 
     private let config: Config
@@ -160,22 +161,42 @@ final class SyncCoordinator: @unchecked Sendable {
     }
 
     func runInitialBootstrapSyncIfNeeded() async {
-        if !localStore.isBootstrapCompleted(accountId: config.accountId, key: "calendar") {
-            logger.info("[sync] bootstrap calendar backfill starting")
+        let needsCalendar = !localStore.isBootstrapCompleted(accountId: config.accountId, key: "calendar")
+        let needsMail = !localStore.isBootstrapCompleted(accountId: config.accountId, key: "mail")
+        if !needsCalendar && !needsMail {
             stateQueue.sync {
-                bootstrapStatus = "calendar backfill active"
+                bootstrapStatus = "completed"
+                bootstrapInProgress = false
             }
             publishStatus()
-            await runCalendarBackfill()
-            localStore.markBootstrapCompleted(accountId: config.accountId, key: "calendar")
-            logger.info("[sync] bootstrap calendar backfill completed")
-        }
-
-        if !localStore.isBootstrapCompleted(accountId: config.accountId, key: "mail") {
-            await runBootstrapMailBackfill()
+            return
         }
 
         stateQueue.sync {
+            bootstrapInProgress = true
+            bootstrapStatus = "syncing"
+        }
+        publishStatus()
+
+        await withTaskGroup(of: Void.self) { group in
+            if needsCalendar {
+                group.addTask { [self] in
+                    logger.info("[sync] bootstrap calendar backfill starting")
+                    await runCalendarBackfill()
+                    localStore.markBootstrapCompleted(accountId: config.accountId, key: "calendar")
+                    logger.info("[sync] bootstrap calendar backfill completed")
+                }
+            }
+            if needsMail {
+                group.addTask { [self] in
+                    await runBootstrapMailBackfill()
+                }
+            }
+            await group.waitForAll()
+        }
+
+        stateQueue.sync {
+            bootstrapInProgress = false
             bootstrapStatus = "completed"
         }
         publishStatus()
@@ -381,6 +402,13 @@ final class SyncCoordinator: @unchecked Sendable {
     }
 
     func publishRawPayload(type: String, json: String) async {
+        let deferMessages = stateQueue.sync { bootstrapInProgress }
+        if deferMessages && type == "message" {
+            _ = localStore.enqueuePayload(type: type, json: json)
+            publishStatus()
+            return
+        }
+
         do {
             try await webSocketPublisher.send(type: type, payload: json)
         } catch {

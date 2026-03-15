@@ -65,6 +65,22 @@ final class LocalStore {
             }
         }
 
+        migrator.registerMigration("v3_mail_accounts") { db in
+            try db.create(table: "mail_accounts") { t in
+                t.column("account_name", .text).primaryKey()
+                t.column("first_seen_at", .text).notNull()
+                t.column("last_seen_at", .text).notNull()
+            }
+        }
+
+        migrator.registerMigration("v4_calendar_sources") { db in
+            try db.create(table: "calendar_sources") { t in
+                t.column("source_name", .text).primaryKey()
+                t.column("first_seen_at", .text).notNull()
+                t.column("last_seen_at", .text).notNull()
+            }
+        }
+
         try migrator.migrate(dbQueue)
     }
 
@@ -116,6 +132,94 @@ final class LocalStore {
             }
         } catch {
             logError("setCursor", error)
+        }
+    }
+
+    func upsertMailAccounts(_ names: [String]) {
+        let normalized = names
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !normalized.isEmpty else { return }
+
+        let now = iso.string(from: Date())
+        do {
+            try dbQueue.write { db in
+                for name in normalized {
+                    try db.execute(
+                        sql: """
+                        INSERT INTO mail_accounts (account_name, first_seen_at, last_seen_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(account_name) DO UPDATE SET
+                            last_seen_at = excluded.last_seen_at
+                        """,
+                        arguments: [name, now, now]
+                    )
+                }
+            }
+        } catch {
+            logError("upsertMailAccounts", error)
+        }
+    }
+
+    func knownMailAccounts() -> [String] {
+        do {
+            return try dbQueue.read { db in
+                try String.fetchAll(
+                    db,
+                    sql: """
+                    SELECT account_name
+                    FROM mail_accounts
+                    ORDER BY lower(account_name) ASC
+                    """
+                )
+            }
+        } catch {
+            logError("knownMailAccounts", error)
+            return []
+        }
+    }
+
+    func upsertCalendarSources(_ names: [String]) {
+        let normalized = names
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !normalized.isEmpty else { return }
+
+        let now = iso.string(from: Date())
+        do {
+            try dbQueue.write { db in
+                for name in normalized {
+                    try db.execute(
+                        sql: """
+                        INSERT INTO calendar_sources (source_name, first_seen_at, last_seen_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(source_name) DO UPDATE SET
+                            last_seen_at = excluded.last_seen_at
+                        """,
+                        arguments: [name, now, now]
+                    )
+                }
+            }
+        } catch {
+            logError("upsertCalendarSources", error)
+        }
+    }
+
+    func knownCalendarSources() -> [String] {
+        do {
+            return try dbQueue.read { db in
+                try String.fetchAll(
+                    db,
+                    sql: """
+                    SELECT source_name
+                    FROM calendar_sources
+                    ORDER BY lower(source_name) ASC
+                    """
+                )
+            }
+        } catch {
+            logError("knownCalendarSources", error)
+            return []
         }
     }
 
@@ -227,7 +331,15 @@ final class LocalStore {
                     sql: """
                     SELECT id, payload_type, payload_json
                     FROM outbound_queue
-                    ORDER BY created_at ASC
+                    ORDER BY
+                      CASE payload_type
+                        WHEN 'entities' THEN 0
+                        WHEN 'chunks' THEN 1
+                        WHEN 'calendar' THEN 2
+                        WHEN 'message' THEN 3
+                        ELSE 4
+                      END ASC,
+                      created_at ASC
                     LIMIT ?
                     """,
                     arguments: [limit]

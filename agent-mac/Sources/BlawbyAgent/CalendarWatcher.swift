@@ -85,6 +85,21 @@ final class CalendarWatcher: @unchecked Sendable {
         return buildUnsentPayloads(backfill: backfill)
     }
 
+    func calendarSourceNames() async throws -> [String] {
+        try await ensureAccess()
+        let calendars = eventStore.calendars(for: .event)
+        let names = calendars.map { calendar -> String in
+            let source = calendar.source.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = calendar.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if source.isEmpty { return title }
+            if title.isEmpty { return source }
+            return "\(source) / \(title)"
+        }
+        return names
+            .filter { !$0.isEmpty }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     func markPayloadEventsSent(_ payload: CalendarPayload) {
         for event in payload.events {
             localStore.markEventSent(uid: event.uid, calendarId: payload.calendarId)

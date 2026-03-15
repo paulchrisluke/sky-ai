@@ -19,15 +19,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var calendarSynced = 0
     private let iso = ISO8601DateFormatter()
     private var lastSyncDisplay = "-"
-    private var connectionDisplay = "connecting"
-    private var syncDisplay = "idle"
+    private var connectionDisplay = "Connecting"
+    private var syncDisplay = "Idle"
+    private var syncProgressDisplay: Int?
     private var queuePendingDisplay = 0
-    private var bootstrapStatusDisplay = "waiting"
-    private var mailStatusDisplay = "n/a"
-    private var calendarStatusDisplay = "n/a"
-    private var messagesStatusDisplay = "n/a"
+    private var mailStatusDisplay = "Waiting for Mail access"
+    private var calendarStatusDisplay = "Waiting for Calendar access"
+    private var messagesStatusDisplay = "Waiting for Messages access"
     private var mailAccountNames: [String] = []
+    private var knownMailAccountNames: [String] = []
+    private var calendarSourceNames: [String] = []
+    private var knownCalendarSourceNames: [String] = []
+    private var messagesSourceAvailable = false
+    private var messagesSourceConnected = false
     private var messagesTotal = 0
+    private var messageBatchCount = 0
     private var syncActivated = false
     private var syncRuntimeStarted = false
     private var bootstrapTask: Task<Void, Never>?
@@ -44,6 +50,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
             let localStore = try LocalStore(baseDirectory: baseDir)
             self.localStore = localStore
+            knownMailAccountNames = localStore.knownMailAccounts()
+            knownCalendarSourceNames = localStore.knownCalendarSources()
             let configStore = try ConfigStore(baseDirectory: baseDir)
             let fileConfig = configStore.load()
             let prefs = try Preferences.load(config: fileConfig)
@@ -82,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             self.webSocketPublisher = webSocketPublisher
 
             menuBar = MenuBarController(
-                toggleSync: { [weak self] in self?.toggleSync() },
+                setSyncEnabled: { [weak self] enabled in self?.setSyncEnabled(enabled) },
                 preferences: { [weak self] in self?.openPreferences() }
             )
 
@@ -113,9 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                     webSocketPublisher: webSocketPublisher
                 )
             } else {
-                connectionDisplay = "paused"
-                syncDisplay = "inactive (not activated)"
-                bootstrapStatusDisplay = "waiting for activation"
+                connectionDisplay = "Paused"
+                syncDisplay = "Off"
             }
             updateMenu()
 
@@ -144,11 +151,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             calendarSynced: calendarSynced,
             connection: connectionDisplay,
             syncState: syncDisplay,
-            queuePending: queuePendingDisplay,
-            bootstrapStatus: bootstrapStatusDisplay,
+            syncProgress: syncProgressDisplay,
             mailStatus: mailStatusDisplay,
             calendarStatus: calendarStatusDisplay,
             messagesStatus: messagesStatusDisplay,
+            connectedMailAccounts: mailAccountNames,
+            knownMailAccounts: knownMailAccountNames,
+            connectedCalendarSources: calendarSourceNames,
+            knownCalendarSources: knownCalendarSourceNames,
+            messagesSourceConnected: messagesSourceConnected,
+            messagesSourceAvailable: messagesSourceAvailable,
             syncActivated: syncActivated
         )
     }
@@ -159,32 +171,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             lastSyncDisplay = iso.string(from: lastSync)
         }
 
-        if snapshot.mailSyncRunning && snapshot.mailSyncQueued {
-            let mode = snapshot.mailMode ?? "sync"
-            syncDisplay = "active (\(mode), queued)"
-        } else if snapshot.mailSyncRunning {
-            let mode = snapshot.mailMode ?? "sync"
-            syncDisplay = "active (\(mode))"
-        } else if snapshot.calendarSyncRunning {
-            syncDisplay = "active (calendar)"
-        } else {
-            syncDisplay = "inactive"
-        }
-
         queuePendingDisplay = snapshot.pendingPayloads
-        bootstrapStatusDisplay = snapshot.bootstrapStatus
-        let accountLabel = mailAccountNames.isEmpty ? "accounts: loading" : "accounts: \(mailAccountNames.joined(separator: ", "))"
-        let mailWindowLabel: String
+        let connectedAccounts = mailAccountNames.count
+        let availableAccounts = max(knownMailAccountNames.count, connectedAccounts)
+        let mailSyncState: String
         if snapshot.mailBootstrapWindowTotal > 0 {
             let pct = Int((Double(snapshot.mailBootstrapWindowDone) / Double(snapshot.mailBootstrapWindowTotal)) * 100.0)
-            mailWindowLabel = "window \(snapshot.mailBootstrapWindowDone)/\(snapshot.mailBootstrapWindowTotal) (\(max(0, min(100, pct)))%)"
+            let bounded = max(0, min(100, pct))
+            syncProgressDisplay = bounded
+            mailSyncState = bounded >= 100 ? "Synced" : "Syncing"
         } else {
-            mailWindowLabel = "window n/a"
+            syncProgressDisplay = 100
+            mailSyncState = "Synced"
         }
-        mailStatusDisplay =
-            "\(accountLabel) | \(mailWindowLabel) | run p=\(snapshot.lastMailProcessed) e=\(snapshot.lastMailEntities) d=\(snapshot.lastMailDelivery) | total discovered=\(snapshot.mailDiscoveredTotal) processed=\(snapshot.mailProcessedTotal) sent=\(snapshot.mailSentTotal) queued=\(snapshot.mailQueuedTotal)"
-        calendarStatusDisplay =
-            "calendars \(snapshot.calendarCalendarsProcessed)/\(snapshot.calendarCalendarsTotal), run events=\(snapshot.lastCalendarEvents), delivery=\(snapshot.lastCalendarDelivery)"
+        let anyActive = snapshot.mailSyncRunning || snapshot.calendarSyncRunning || (syncProgressDisplay ?? 100) < 100
+        syncDisplay = anyActive ? "Syncing" : "Synced"
+
+        mailStatusDisplay = "Accounts \(connectedAccounts)/\(availableAccounts) | \(mailSyncState) | Processed \(snapshot.mailProcessedTotal)"
+        if queuePendingDisplay > 0 {
+            mailStatusDisplay += " | Queue \(queuePendingDisplay)"
+        }
+        let connectedCalendars = calendarSourceNames.count
+        let availableCalendars = max(knownCalendarSourceNames.count, connectedCalendars)
+        calendarStatusDisplay = "Sources \(connectedCalendars)/\(availableCalendars) | \(syncDisplay) | Events \(snapshot.calendarEventsTotal)"
+
+        let connectedMessageSources = messagesSourceConnected ? 1 : 0
+        let availableMessageSources = messagesSourceAvailable ? 1 : 0
+        messagesStatusDisplay = "Sources \(connectedMessageSources)/\(availableMessageSources) | \(syncDisplay) | Total \(messagesTotal)"
         mailProcessedToday = snapshot.mailProcessedTotal
         calendarSynced = snapshot.calendarEventsTotal
         updateMenu()
@@ -193,33 +206,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     @MainActor
     private func applyConnectionState(_ state: WebSocketConnectionState) {
         if !syncActivated {
-            connectionDisplay = "paused"
+            connectionDisplay = "Paused"
+            syncProgressDisplay = nil
             updateMenu()
             return
         }
         switch state {
         case .disconnected:
-            connectionDisplay = "disconnected"
+            connectionDisplay = "Disconnected"
         case .connecting:
-            connectionDisplay = "connecting"
+            connectionDisplay = "Connecting"
         case .connected:
-            connectionDisplay = "connected"
+            connectionDisplay = "Connected"
         case .reconnecting(let delaySeconds):
-            connectionDisplay = "reconnecting in \(delaySeconds)s"
+            connectionDisplay = "Reconnecting in \(delaySeconds)s"
         }
         updateMenu()
     }
 
     @MainActor
-    private func toggleSync() {
-        syncActivated.toggle()
+    private func setSyncEnabled(_ enabled: Bool) {
+        if syncActivated == enabled {
+            return
+        }
+        syncActivated = enabled
         UserDefaults.standard.set(syncActivated, forKey: Preferences.Keys.syncActivated)
 
         if !syncActivated {
             stopSyncRuntime()
-            connectionDisplay = "paused"
-            syncDisplay = "inactive (paused)"
-            bootstrapStatusDisplay = "paused"
+            connectionDisplay = "Paused"
+            syncDisplay = "Off"
+            syncProgressDisplay = nil
             updateMenu()
             return
         }
@@ -258,6 +275,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     ) {
         guard !syncRuntimeStarted else { return }
         syncRuntimeStarted = true
+        messagesSourceAvailable = FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/Messages/chat.db")
+        messagesSourceConnected = messagesSourceAvailable
 
         webSocketPublisher.connect()
 
@@ -305,8 +324,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             Task { @MainActor in
                 guard let self else { return }
                 self.messagesTotal += progress.messages
-                self.messagesStatusDisplay =
-                    "trigger=\(progress.trigger) batches=\(progress.batches) delta=\(progress.messages) total=\(self.messagesTotal)"
+                self.messageBatchCount += progress.batches
+                let connectedMessageSources = self.messagesSourceConnected ? 1 : 0
+                let availableMessageSources = self.messagesSourceAvailable ? 1 : 0
+                self.messagesStatusDisplay = "Sources \(connectedMessageSources)/\(availableMessageSources) | \(self.syncDisplay) | Total \(self.messagesTotal)"
                 self.updateMenu()
             }
         })
@@ -315,7 +336,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             let names = await mailWatcher.accountNames()
             await MainActor.run {
                 self.mailAccountNames = names
+                self.localStore?.upsertMailAccounts(names)
+                self.knownMailAccountNames = self.localStore?.knownMailAccounts() ?? names
                 self.updateMenu()
+            }
+        }
+
+        Task {
+            do {
+                let names = try await calendarWatcher.calendarSourceNames()
+                await MainActor.run {
+                    self.calendarSourceNames = names
+                    self.localStore?.upsertCalendarSources(names)
+                    self.knownCalendarSourceNames = self.localStore?.knownCalendarSources() ?? names
+                    self.updateMenu()
+                }
+            } catch {
+                await MainActor.run {
+                    self.calendarSourceNames = []
+                    self.calendarStatusDisplay = "Sources 0/\(max(self.knownCalendarSourceNames.count, 0)) | Access denied"
+                    self.updateMenu()
+                }
             }
         }
 
@@ -335,6 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         mailWatcher?.stopObserving()
         calendarWatcher?.stopObserving()
         messagesReader?.stop()
+        messagesSourceConnected = false
         webSocketPublisher?.disconnect()
     }
 
@@ -361,4 +403,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
         logger.info("login item registration skipped (bundle path: \(bundlePath))")
     }
+
 }
