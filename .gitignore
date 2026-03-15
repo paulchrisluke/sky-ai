@@ -14,3 +14,6 @@ agent-mac/.build/
 agent-mac/.swiftpm/
 agent-mac/.DS_Store
 *.xcuserstate
+
+# Xcode user UI state
+*.xcuserstate
