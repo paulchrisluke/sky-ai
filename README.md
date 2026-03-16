@@ -127,6 +127,40 @@ Use the auto-generated Worker domain by default:
 - Mailbox identity vars:
   - `MAILBOX_SKYLERBAIRD_ME_COM` (`SkylerBaird@me.com`)
 
+## macOS Direct Distribution (Signed + Notarized)
+
+Use this when shipping `BlawbyAgent.app` outside the Mac App Store.
+
+Requirements:
+
+- Apple Developer Program membership with Developer ID capability
+- Xcode command line tools
+- `xcrun notarytool` authentication values:
+  - `APPLE_ID`
+  - `APPLE_APP_SPECIFIC_PASSWORD`
+  - `APPLE_TEAM_ID`
+
+Release command (from repo root):
+
+```bash
+APPLE_ID="you@example.com" \
+APPLE_APP_SPECIFIC_PASSWORD="<app-specific-password>" \
+APPLE_TEAM_ID="<team-id>" \
+./scripts/release-macos-direct.sh
+```
+
+What the script does:
+
+- archives and exports a Developer ID signed `BlawbyAgent.app` (Release config)
+- verifies signing with `codesign` and Gatekeeper assessment
+- packages `.zip` and `.dmg` artifacts
+- notarizes both artifacts and staples tickets
+- writes SHA256 checksums in `dist/macos/<version+build>/SHA256SUMS.txt`
+
+Default output location:
+
+- `dist/macos/<CFBundleShortVersionString>+<CFBundleVersion>/`
+
 ## Secrets Clarification
 
 - `wrangler secret put` is encrypted at rest by Cloudflare.
