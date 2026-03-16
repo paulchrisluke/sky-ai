@@ -18,6 +18,7 @@ struct DashboardView: View {
                     .tag(category)
             }
             .listStyle(.sidebar)
+            .navigationTitle("Sources")
             .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 420)
         } detail: {
             if let category = selectedCategory {
@@ -144,71 +145,73 @@ private struct DashboardOverviewView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    Text("Overview")
-                        .font(.title2.weight(.semibold))
-                    Spacer()
-                    if let lastSync {
-                        Text("Last sync \(lastSync, style: .relative)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Global Sync Progress")
-                        .font(.headline)
-                    ProgressView(value: progressValue)
-                        .progressViewStyle(.linear)
-                    Text("\(syncedTotal) of \(estimatedTotal) synced across \(sources.count) sources")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Status Breakdown")
-                        .font(.headline)
-                    ForEach(groupedStatuses, id: \.label) { row in
-                        HStack {
-                            Text(row.label)
-                            Spacer()
-                            Text("\(row.count)")
-                                .font(.caption.monospacedDigit())
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack {
+                        Text("Overview")
+                            .font(.title2.weight(.semibold))
+                        Spacer()
+                        if let lastSync {
+                            Text("Last sync \(lastSync, style: .relative)")
+                                .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                     }
-                }
 
-                Divider()
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Needs Attention")
-                        .font(.headline)
-                    if needsAttention.isEmpty {
-                        Text("All sources are current.")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Global Sync Progress")
+                            .font(.headline)
+                        ProgressView(value: progressValue)
+                            .progressViewStyle(.linear)
+                        Text("\(syncedTotal) of \(estimatedTotal) synced across \(sources.count) sources")
+                            .font(.subheadline)
                             .foregroundColor(.secondary)
-                    } else {
-                        ForEach(needsAttention, id: \.id) { source in
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Status Breakdown")
+                            .font(.headline)
+                        ForEach(groupedStatuses, id: \.label) { row in
                             HStack {
-                                Text(source.sourceName)
-                                    .lineLimit(1)
+                                Text(row.label)
                                 Spacer()
-                                Text(source.status.capitalized)
-                                    .font(.caption)
+                                Text("\(row.count)")
+                                    .font(.caption.monospacedDigit())
                                     .foregroundColor(.secondary)
                             }
                         }
                     }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Needs Attention")
+                            .font(.headline)
+                        if needsAttention.isEmpty {
+                            Text("All sources are current.")
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(needsAttention, id: \.id) { source in
+                                HStack {
+                                    Text(source.sourceName)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(source.status.capitalized)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
                 }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .navigationTitle("Dashboard")
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -235,73 +238,75 @@ private struct CategoryDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    Label(category.title, systemImage: category.iconName)
-                        .font(.title2.weight(.semibold))
-                    Spacer()
-                    Text("\(groups.count) accounts")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.secondary)
-                }
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack {
+                        Label(category.title, systemImage: category.iconName)
+                            .font(.title2.weight(.semibold))
+                        Spacer()
+                        Text("\(groups.count) accounts")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+                    }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Category Sync Progress")
-                        .font(.headline)
-                    ProgressView(value: progressValue)
-                        .progressViewStyle(.linear)
-                    Text("\(synced) of \(total) synced across \(sources.count) sources")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Category Sync Progress")
+                            .font(.headline)
+                        ProgressView(value: progressValue)
+                            .progressViewStyle(.linear)
+                        Text("\(synced) of \(total) synced across \(sources.count) sources")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
 
-                Divider()
+                    Divider()
 
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Accounts")
-                        .font(.headline)
-                    ForEach(groups) { group in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Label(group.accountName, systemImage: "person.crop.circle")
-                                    .font(.subheadline.weight(.semibold))
-                                Spacer()
-                                Text(groupTotalsText(group.sources))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundColor(.secondary)
-                            }
-
-                            ForEach(group.sources, id: \.id) { source in
-                                HStack(spacing: 10) {
-                                    Image(systemName: iconName(for: source.sourceType))
-                                        .foregroundColor(statusColor(for: source.status))
-                                    Text(sourceName(for: source))
-                                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Accounts")
+                            .font(.headline)
+                        ForEach(groups) { group in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Label(group.accountName, systemImage: "person.crop.circle")
+                                        .font(.subheadline.weight(.semibold))
                                     Spacer()
-                                    Text("\(source.totalSynced)/\(max(source.totalEstimated, source.totalSynced))")
+                                    Text(groupTotalsText(group.sources))
                                         .font(.caption.monospacedDigit())
                                         .foregroundColor(.secondary)
                                 }
-                                .padding(.leading, 20)
+
+                                ForEach(group.sources, id: \.id) { source in
+                                    HStack(spacing: 10) {
+                                        Image(systemName: iconName(for: source.sourceType))
+                                            .foregroundColor(statusColor(for: source.status))
+                                        Text(sourceName(for: source))
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text("\(source.totalSynced)/\(max(source.totalEstimated, source.totalSynced))")
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.leading, 20)
+                                }
                             }
                         }
                     }
-                }
 
-                Divider()
+                    Divider()
 
-                HStack {
-                    Text("Last Sync")
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(relativeSyncText)
+                    HStack {
+                        Text("Last Sync")
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(relativeSyncText)
+                    }
+                    .font(.body)
                 }
-                .font(.body)
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle(category.title)
-            .toolbarBackground(.visible, for: .automatic)
-            .toolbarBackground(.thinMaterial, for: .automatic)
         }
     }
 
