@@ -4,73 +4,24 @@ struct DashboardView: View {
     @ObservedObject var sourceManager: SourceManager
     @ObservedObject var state: MenuBarState
 
-    @State private var selection: SidebarSelection?
-    @State private var sourceSearch = ""
-    @State private var expandedCategories: Set<SourceCategory> = Set(SourceCategory.allCases)
-    @State private var expandedAccounts: Set<String> = []
+    @State private var selectedCategory: SourceCategory?
 
     var body: some View {
         NavigationSplitView {
-            List {
-                ForEach(SourceCategory.allCases) { category in
-                    DisclosureGroup(
-                        isExpanded: Binding(
-                            get: { expandedCategories.contains(category) || !sourceSearchQuery.isEmpty },
-                            set: { expanded in
-                                if expanded {
-                                    expandedCategories.insert(category)
-                                } else {
-                                    expandedCategories.remove(category)
-                                }
-                            }
-                        )
-                    ) {
-                        let groups = accountGroups(for: category)
-                        ForEach(groups) { group in
-                            DisclosureGroup(
-                                isExpanded: Binding(
-                                    get: {
-                                        expandedAccounts.contains(accountExpansionKey(category: category, accountId: group.id))
-                                            || !sourceSearchQuery.isEmpty
-                                    },
-                                    set: { expanded in
-                                        let key = accountExpansionKey(category: category, accountId: group.id)
-                                        if expanded {
-                                            expandedAccounts.insert(key)
-                                        } else {
-                                            expandedAccounts.remove(key)
-                                        }
-                                    }
-                                )
-                            ) {
-                                ForEach(group.sources, id: \.id) { source in
-                                    sourceButton(source: source, titleOverride: sourceDisplayName(for: source))
-                                }
-                            } label: {
-                                SidebarAccountLabel(
-                                    title: group.accountName,
-                                    systemImage: "person.crop.circle",
-                                    totalsText: groupTotalsText(group.sources)
-                                )
-                            }
-                        }
-                    } label: {
-                        categoryButtonLabel(category: category)
-                    }
+            List(SourceCategory.allCases, id: \.self, selection: Binding(
+                get: { selectedCategory },
+                set: { category in
+                    selectedCategory = category
                 }
+            )) { category in
+                Label(category.title, systemImage: category.iconName)
+                    .tag(category)
             }
             .listStyle(.sidebar)
             .navigationTitle("Sources")
-            .searchable(text: $sourceSearch, prompt: "Filter sources")
             .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 420)
         } detail: {
-            if let source = selectedSource {
-                SourceDetailView(
-                    source: source,
-                    sourcePath: sourcePath(for: source),
-                    lastSync: state.lastSync
-                )
-            } else if let category = selectedCategory {
+            if let category = selectedCategory {
                 CategoryDetailView(
                     category: category,
                     groups: accountGroups(for: category),
@@ -83,107 +34,12 @@ struct DashboardView: View {
                 )
             }
         }
-        .onAppear {
-            expandedCategories = Set(SourceCategory.allCases)
-            expandedAccounts = allAccountExpansionKeys()
-        }
-        .onChange(of: sourceSearchQuery) { query in
-            if query.isEmpty { return }
-            expandedCategories = Set(SourceCategory.allCases)
-            expandedAccounts = allAccountExpansionKeys()
-        }
-        .onChange(of: filteredSources.map(\.id)) { ids in
-            if case let .source(selectedSourceId)? = selection, ids.contains(selectedSourceId) {
-                return
-            }
-            if case .category = selection {
-                return
-            }
-            selection = nil
-        }
     }
 
-    private func categoryButtonLabel(category: SourceCategory) -> some View {
-        let sources = sources(for: category)
-        return Button {
-            selection = .category(category)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: category.iconName)
-                    .foregroundColor(.secondary)
-                Text(category.title)
-                Spacer()
-                Text("\(sources.count)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(selection == .category(category) ? Color.accentColor.opacity(0.18) : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 4)
-    }
 
-    private func sourceButton(source: ConnectedSource, titleOverride: String? = nil) -> some View {
-        Button {
-            selection = .source(source.id)
-        } label: {
-            SourceSidebarRow(source: source, titleOverride: titleOverride)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(selection == .source(source.id) ? Color.accentColor.opacity(0.18) : .clear)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 4)
-    }
-
-    private func accountExpansionKey(category: SourceCategory, accountId: String) -> String {
-        "\(category.rawValue):\(accountId)"
-    }
-
-    private func allAccountExpansionKeys() -> Set<String> {
-        var keys: Set<String> = []
-        for category in SourceCategory.allCases {
-            for group in accountGroups(for: category) {
-                keys.insert(accountExpansionKey(category: category, accountId: group.id))
-            }
-        }
-        return keys
-    }
-
-    private var sourceSearchQuery: String {
-        sourceSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var filteredSources: [ConnectedSource] {
-        let query = sourceSearchQuery
-        let sources = activeSources
-        guard !query.isEmpty else { return sources }
-
-        return sources.filter { source in
-            source.sourceName.localizedCaseInsensitiveContains(query)
-                || source.sourceType.localizedCaseInsensitiveContains(query)
-                || source.status.localizedCaseInsensitiveContains(query)
-                || source.accountId.localizedCaseInsensitiveContains(query)
-                || mailboxName(for: source).localizedCaseInsensitiveContains(query)
-        }
-    }
-
-    private var selectedSource: ConnectedSource? {
-        guard case let .source(selectedSourceId)? = selection else { return nil }
-        return activeSources.first { $0.id == selectedSourceId }
-    }
-
-    private var selectedCategory: SourceCategory? {
-        guard case let .category(category)? = selection else { return nil }
-        return category
-    }
 
     private func sources(for category: SourceCategory) -> [ConnectedSource] {
-        filteredSources.filter { $0.sourceType == category.sourceType }
+        activeSources.filter { $0.sourceType == category.sourceType }
     }
 
     private func accountGroups(for category: SourceCategory) -> [AccountGroup] {
@@ -239,19 +95,6 @@ struct DashboardView: View {
         let synced = sources.reduce(0) { $0 + max(0, $1.totalSynced) }
         let total = sources.reduce(0) { $0 + max(0, max($1.totalEstimated, $1.totalSynced)) }
         return "\(synced)/\(total)"
-    }
-
-    private func sourcePath(for source: ConnectedSource) -> String {
-        switch source.sourceType {
-        case SourceCategory.mail.sourceType:
-            return "\(SourceCategory.mail.title) > \(source.accountId) > \(mailboxName(for: source))"
-        case SourceCategory.calendar.sourceType:
-            return "\(SourceCategory.calendar.title) > \(source.accountId) > \(source.sourceName)"
-        case SourceCategory.messages.sourceType:
-            return "\(SourceCategory.messages.title) > \(source.accountId)"
-        default:
-            return source.sourceName
-        }
     }
 
     private func sortPriority(_ status: String) -> Int {
@@ -502,11 +345,6 @@ private struct CategoryDetailView: View {
     }
 }
 
-private enum SidebarSelection: Hashable {
-    case category(SourceCategory)
-    case source(String)
-}
-
 private enum SourceCategory: String, CaseIterable, Identifiable, Hashable {
     case mail
     case messages
@@ -545,159 +383,3 @@ private struct AccountGroup: Identifiable {
     let sources: [ConnectedSource]
 }
 
-private struct SidebarAccountLabel: View {
-    let title: String
-    let systemImage: String
-    let totalsText: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundColor(.secondary)
-            Text(title)
-                .lineLimit(1)
-            Spacer()
-            Text(totalsText)
-                .font(.caption.monospacedDigit())
-                .foregroundColor(.secondary)
-        }
-    }
-}
-
-private struct SourceSidebarRow: View {
-    let source: ConnectedSource
-    let titleOverride: String?
-
-    init(source: ConnectedSource, titleOverride: String? = nil) {
-        self.source = source
-        self.titleOverride = titleOverride
-    }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: iconName)
-                .foregroundColor(statusColor)
-            Text(titleOverride ?? source.sourceName)
-                .lineLimit(1)
-            Spacer()
-            Text("\(source.totalSynced)/\(max(source.totalEstimated, source.totalSynced))")
-                .font(.caption.monospacedDigit())
-                .foregroundColor(.secondary)
-        }
-    }
-
-    private var iconName: String {
-        switch source.sourceType {
-        case "mail": return "envelope.fill"
-        case "calendar": return "calendar"
-        case "messages": return "message.fill"
-        default: return "circle.fill"
-        }
-    }
-
-    private var statusColor: Color {
-        switch source.status {
-        case "syncing": return .blue
-        case "current": return .green
-        case "error": return .red
-        default: return .secondary
-        }
-    }
-}
-
-private struct SourceDetailView: View {
-    let source: ConnectedSource
-    let sourcePath: String
-    let lastSync: Date?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text(sourcePath)
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            HStack {
-                Label(source.sourceName, systemImage: iconName)
-                    .font(.title2.weight(.semibold))
-                Spacer()
-                Text(source.status.capitalized)
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(statusColor)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Sync Progress")
-                    .font(.headline)
-                ProgressView(value: progressValue)
-                    .progressViewStyle(.linear)
-                Text("\(source.totalSynced) of \(progressTotal) synced")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-
-            Divider()
-
-            Group {
-                detailRow(label: "Type", value: source.sourceType.capitalized)
-                detailRow(label: "Account", value: source.accountId)
-                detailRow(
-                    label: "Synced",
-                    value: relativeSyncText
-                )
-                if let error = source.lastError, !error.isEmpty {
-                    detailRow(label: "Last Error", value: error, color: .red)
-                }
-            }
-            Spacer()
-        }
-        .padding(24)
-    }
-
-    private var progressTotal: Int {
-        max(source.totalEstimated, source.totalSynced)
-    }
-
-    private var progressValue: Double {
-        guard progressTotal > 0 else { return 0 }
-        return min(1.0, max(0.0, Double(source.totalSynced) / Double(progressTotal)))
-    }
-
-    private var iconName: String {
-        switch source.sourceType {
-        case "mail": return "envelope.fill"
-        case "calendar": return "calendar"
-        case "messages": return "message.fill"
-        default: return "circle.fill"
-        }
-    }
-
-    private var statusColor: Color {
-        switch source.status {
-        case "syncing": return .blue
-        case "current": return .green
-        case "error": return .red
-        default: return .secondary
-        }
-    }
-
-    private var relativeSyncText: String {
-        guard let lastSync else { return "Never" }
-        return lastSync.formatted(
-            .relative(presentation: .named, unitsStyle: .abbreviated)
-        )
-    }
-
-    @ViewBuilder
-    private func detailRow(label: String, value: String, color: Color = .primary) -> some View {
-        HStack(alignment: .top) {
-            Text(label)
-                .frame(width: 110, alignment: .leading)
-                .foregroundColor(.secondary)
-            Text(value)
-                .foregroundColor(color)
-                .textSelection(.enabled)
-            Spacer()
-        }
-        .font(.body)
-    }
-}
