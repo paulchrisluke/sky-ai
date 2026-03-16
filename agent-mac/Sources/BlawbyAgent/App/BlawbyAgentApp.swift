@@ -8,23 +8,16 @@ struct BlawbyAgentApp: App {
     @StateObject private var updates = SparkleUpdateController()
 
     var body: some Scene {
-        MenuBarExtra("Blawby", systemImage: "bolt.horizontal.circle.fill") {
-            MenuBarRootView(session: session)
-        }
-        .menuBarExtraStyle(.window)
-
         Window("Blawby Dashboard", id: "main-dashboard") {
             DashboardRootView(session: session)
+                .frame(minWidth: 960, minHeight: 620)
         }
-        .defaultSize(width: 1200, height: 760)
-        .windowResizability(.contentMinSize)
-
+        
         Window("Blawby Preferences", id: "preferences") {
             PreferencesView(session: session)
+                .frame(minWidth: 760, minHeight: 440)
         }
-        .defaultSize(width: 760, height: 520)
-        .windowResizability(.contentMinSize)
-
+        
         .commands {
             BlawbyCommands(session: session, updates: updates)
         }
