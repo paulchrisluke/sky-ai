@@ -1,112 +1,63 @@
-# Mac Agent Setup (Native `agent-mac`)
+# Mac App Setup (Skyler/Test User)
 
-This is the default Mac setup for Blawby. The app is native Swift/macOS and runs as a background agent.
+This is the current install flow for the native macOS app (`BlawbyAgent.app`).
+The old `install.sh`/launch-agent flow is no longer the primary path.
 
-## Native UI principles
+## 1) Install app bundle
 
-- AppKit is the lifecycle owner (`NSApplication` + `NSApplicationDelegate`).
-- Menu bar popover is intentionally lightweight: status + quick actions only.
-- Persistent/detail workflows open in dedicated macOS windows (Dashboard, Preferences).
-- Heavy sync/detail UI should be implemented in windows, not expanded inside the transient popover.
+1. Download the latest app zip:
+   - `https://downloads.blawby.com/BlawbyAgent-1.0+2.zip` (or newer)
+2. Unzip.
+3. Move `BlawbyAgent.app` into `/Applications`.
+4. Launch once from Finder.
 
-## 1) Prerequisites
+## 2) First-run trust (non-Developer-ID test setup)
 
-```bash
-xcode-select --install
-brew install xcodegen
-```
+If macOS blocks launch:
 
-## 2) Get the project
-
-```bash
-git clone https://github.com/paulchrisluke/sky-ai.git
-cd sky-ai/agent-mac
-```
-
-## 3) Configure local env (dev fallback)
+1. In Finder, right-click `BlawbyAgent.app` and choose `Open`.
+2. If still blocked, run:
 
 ```bash
-cp .env.example .env
+xattr -dr com.apple.quarantine /Applications/BlawbyAgent.app
 ```
 
-Set values in `agent-mac/.env`:
+Then launch again.
 
-- `WORKER_WS_URL`
-- `WORKER_API_KEY`
-- `WORKSPACE_ID`
-- `ACCOUNT_ID`
-- `OPENAI_API_KEY`
+## 3) Configure inside app
 
-Notes:
-- In-app Preferences + Keychain are the source of truth for production.
-- `.env` is for local/dev launch convenience.
+1. Open menu bar app.
+2. Open `Preferences`.
+3. Set worker URL + API key.
+4. Grant requested Mail/Calendar/Contacts permissions.
 
-## 4) Build and run
+## 4) Verify healthy runtime
+
+1. Open `Dashboard` from menu bar.
+2. Confirm sources appear and sync counters move.
+3. Confirm no red startup/runtime errors in UI.
+
+## 5) Updates (Sparkle)
+
+1. From app menu, run `Check for Updates…`.
+2. Feed URL is:
+   - `https://downloads.blawby.com/appcast.xml`
+
+For test users, this works without App Store, but Gatekeeper prompts can still occur because builds are not Developer-ID notarized yet.
+
+## Developer notes (local)
+
+- Local deterministic install:
 
 ```bash
-swift build
-.build/debug/BlawbyAgent
+./agent-mac/dev-install.sh
 ```
 
-## 5) Install as login/background service
+- Sparkle release publishing scripts:
+  - `scripts/macos-app.sh release`
+  - `scripts/macos-app.sh appcast`
+  - `agent-mac/scripts/sparkle-generate-appcast.sh`
 
-```bash
-./install.sh
-```
+## Legacy note
 
-This installs the binary under `~/.blawby/bin` and loads launch agent `com.blawby.agent`.
-
-## 6) Verify
-
-```bash
-tail -n 100 ~/.blawby/logs/agent.log
-launchctl list | grep com.blawby.agent
-```
-
-You should see:
-- websocket connected
-- observer startup logs (mail/calendar/messages)
-- sync logs (`[sync] ...`)
-
-## 7) Uninstall
-
-```bash
-./uninstall.sh
-```
-
-## Xcode workflow (optional)
-
-From `agent-mac/`:
-
-```bash
-xcodegen generate
-open BlawbyAgent.xcodeproj
-```
-
-## Legacy Node agent
-
-The old Node/PM2 flow in `/agent` is legacy compatibility only and is not the target architecture.
-
-## Production Cutover (Skyler Mac Mini)
-
-Status as of March 15, 2026: this is the production blocker.
-
-Required cutover steps:
-
-1. Install and run Swift agent on Skyler Mac Mini.
-2. Confirm launch agent is loaded:
-   - `launchctl list | grep com.blawby.agent`
-3. Confirm runtime logs are healthy:
-   - `tail -n 100 ~/.blawby/logs/agent.log`
-   - Verify websocket connected and sync publish activity.
-4. Confirm Cloudflare ingest health:
-   - `/ingest/entities` receives payloads from Mac Mini.
-   - `/ingest/message-chunks` receives payloads from Mac Mini.
-5. Freeze Node agent:
-   - No new features or fixes in `agent/`.
-   - Keep directory present for rollback-only window.
-
-Retirement policy:
-
-1. Archive `agent/` after 7+ days of stable Swift-only production runtime.
-2. Delete `agent/` only after explicit sign-off and rollback window closure.
+`agent-mac/install.sh` and `agent-mac/uninstall.sh` are legacy and should not be used for the current Skyler/test-user path.
