@@ -33,7 +33,6 @@ private struct MenuBarRootView: View {
             MenuBarPopoverView(
                 sourceManager: sourceManager,
                 state: session.menuState,
-                onClose: {},
                 onToggleSync: { session.toggleSync() },
                 onOpenDashboard: { openWindow(id: "main-dashboard") },
                 onOpenPreferences: { openWindow(id: "preferences") }

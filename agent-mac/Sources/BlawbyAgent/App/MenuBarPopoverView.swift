@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 class MenuBarState: ObservableObject {
     @Published var connection: String = "Connecting"
     @Published var lastSync: String = "-"
@@ -9,7 +10,6 @@ class MenuBarState: ObservableObject {
 struct MenuBarPopoverView: View {
     @ObservedObject var sourceManager: SourceManager
     @ObservedObject var state: MenuBarState
-    let onClose: () -> Void
     let onToggleSync: () -> Void
     let onOpenDashboard: () -> Void
     let onOpenPreferences: () -> Void
@@ -29,13 +29,6 @@ struct MenuBarPopoverView: View {
                 .buttonStyle(PlainButtonStyle())
                 .foregroundColor(.secondary)
                 .help("Preferences")
-
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                }
-                .buttonStyle(PlainButtonStyle())
-                .foregroundColor(.secondary)
-                .padding(.leading, 8)
             }
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
@@ -245,7 +238,6 @@ struct SourceRow: View {
             logger: .none
         ),
         state: MenuBarState(),
-        onClose: { print("Closed") },
         onToggleSync: { print("Sync toggled") },
         onOpenDashboard: { print("Dashboard opened") },
         onOpenPreferences: { print("Preferences opened") }
