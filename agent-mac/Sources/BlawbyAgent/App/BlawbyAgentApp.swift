@@ -33,16 +33,18 @@ struct BlawbyAgentApp: App {
 
 @MainActor
 private func activateAndOpenWindow(_ id: String, openWindow: OpenWindowAction) {
-    NSApplication.shared.activate(ignoringOtherApps: true)
+    NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
     openWindow(id: id)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        for window in NSApplication.shared.windows {
-            configureWindow(window, for: id)
-        }
-        if let target = targetWindow(for: id) {
-            target.orderFrontRegardless()
-            target.makeKeyAndOrderFront(nil)
+    for delay in [0.0, 0.05, 0.15] {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+            for window in NSApplication.shared.windows {
+                configureWindow(window, for: id)
+            }
+            if let target = targetWindow(for: id) {
+                target.orderFrontRegardless()
+                target.makeKeyAndOrderFront(nil)
+            }
         }
     }
 }
@@ -63,6 +65,10 @@ private func targetWindow(for id: String) -> NSWindow? {
 private func configureWindow(_ window: NSWindow, for id: String) {
     window.collectionBehavior.insert(.moveToActiveSpace)
     window.styleMask.insert(.resizable)
+    window.styleMask.remove(.fullSizeContentView)
+    window.titlebarAppearsTransparent = false
+    window.titleVisibility = .visible
+    window.toolbarStyle = .automatic
 
     if id == "main-dashboard", window.title == "Blawby Dashboard" {
         window.minSize = NSSize(width: 960, height: 620)
