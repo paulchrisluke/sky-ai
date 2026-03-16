@@ -18,7 +18,6 @@ struct DashboardView: View {
                     .tag(category)
             }
             .listStyle(.sidebar)
-            .navigationTitle("Sources")
             .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 420)
         } detail: {
             if let category = selectedCategory {
@@ -210,8 +209,11 @@ private struct DashboardOverviewView: View {
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle("Dashboard")
+            .navigationTitle("Overview")
+            .toolbarBackground(.visible, for: .automatic)
+            .toolbarBackground(.thinMaterial, for: .automatic)
         }
+        .navigationTitle("Dashboard")
     }
 }
 
