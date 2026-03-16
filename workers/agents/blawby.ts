@@ -69,13 +69,6 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
         return;
       }
 
-      await this.env.SKY_DB
-        .prepare(
-          `CREATE UNIQUE INDEX IF NOT EXISTS idx_email_entities_upsert_key
-           ON email_entities(workspace_id, account_id, message_id, entity_type)`
-        )
-        .run();
-
       for (const entity of entities) {
         const messageId = typeof entity.messageId === 'string' ? entity.messageId : (typeof entity.message_id === 'string' ? entity.message_id : '');
         const entityType = typeof entity.entityType === 'string' ? entity.entityType : (typeof entity.entity_type === 'string' ? entity.entity_type : '');
@@ -141,11 +134,17 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
     if (type === 'chunks') {
       const result = await ingestMessageChunksCore(this.env, payload);
       console.log(`[blawby] chunks: chunked=${result.chunked} skipped=${result.skipped}`);
-      await this.skillImmediateContext();
+      if (result.chunked > 0) {
+        await this.skillImmediateContext();
+      }
+      return;
+    }
+    if (type === 'message') {
+      // TODO: implement Messages ingestion
       return;
     }
     if (type === 'ping') {
-      connection.send(JSON.stringify({ type: 'pong' }));
+      await connection.send(JSON.stringify({ type: 'pong' }));
       return;
     }
     console.log(`[blawby] unknown message type: ${type || 'unknown'}`);

@@ -23,10 +23,6 @@ struct MenuBarPopoverView: View {
                 Text("Blawby")
                     .font(.headline)
                 Spacer()
-                Button(action: onOpenPreferences) {
-                    Image(systemName: "gearshape")
-                }
-                .help("Preferences")
             }
             .padding()
 
@@ -38,8 +34,18 @@ struct MenuBarPopoverView: View {
                 let totalEstimatedFloat = CGFloat(totalEstimated)
                 let ratio = totalEstimated > 0 ? min(1.0, max(0.0, totalSyncedFloat / totalEstimatedFloat)) : 0.0
 
-                ProgressView(value: ratio)
-                    .progressViewStyle(LinearProgressViewStyle())
+                HStack(spacing: 10) {
+                    Button(action: onToggleSync) {
+                        Image(systemName: state.syncActivated ? "pause.fill" : "play.fill")
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(state.syncActivated ? "Pause Sync" : "Resume Sync")
+                    .accessibilityLabel(state.syncActivated ? "Pause Sync" : "Resume Sync")
+
+                    ProgressView(value: ratio)
+                        .progressViewStyle(LinearProgressViewStyle())
+                }
 
                 Text("\(formatNumber(totalSynced)) of \(formatNumber(totalEstimated))")
                     .font(.caption)
@@ -49,21 +55,12 @@ struct MenuBarPopoverView: View {
 
             Divider()
 
-            // Quick Actions
+            // Menu Actions
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Button(action: onToggleSync) {
-                        Label(state.syncActivated ? "Pause Sync" : "Resume Sync", systemImage: state.syncActivated ? "pause.fill" : "play.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button(action: onOpenDashboard) {
-                        Label("Open Dashboard", systemImage: "rectangle.on.rectangle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                }
+                Button("Show Dashboard", action: onOpenDashboard)
+                    .buttonStyle(.plain)
+                Button("Preferences…", action: onOpenPreferences)
+                    .buttonStyle(.plain)
             }
             .padding()
             
