@@ -16,10 +16,14 @@ struct BlawbyAgentApp: App {
         Window("Blawby Dashboard", id: "main-dashboard") {
             DashboardRootView(session: session)
         }
+        .defaultSize(width: 1200, height: 760)
+        .windowResizability(.contentMinSize)
 
         Window("Blawby Preferences", id: "preferences") {
             PreferencesView(session: session)
         }
+        .defaultSize(width: 760, height: 520)
+        .windowResizability(.contentMinSize)
 
         .commands {
             BlawbyCommands(session: session, updates: updates)
@@ -31,9 +35,39 @@ struct BlawbyAgentApp: App {
 private func activateAndOpenWindow(_ id: String, openWindow: OpenWindowAction) {
     NSApplication.shared.activate(ignoringOtherApps: true)
     openWindow(id: id)
-    for window in NSApplication.shared.windows {
-        window.collectionBehavior.insert(.moveToActiveSpace)
-        window.makeKeyAndOrderFront(nil)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        for window in NSApplication.shared.windows {
+            configureWindow(window, for: id)
+        }
+        if let target = targetWindow(for: id) {
+            target.orderFrontRegardless()
+            target.makeKeyAndOrderFront(nil)
+        }
+    }
+}
+
+@MainActor
+private func targetWindow(for id: String) -> NSWindow? {
+    switch id {
+    case "main-dashboard":
+        return NSApplication.shared.windows.first { $0.title == "Blawby Dashboard" }
+    case "preferences":
+        return NSApplication.shared.windows.first { $0.title == "Blawby Preferences" }
+    default:
+        return NSApplication.shared.windows.first
+    }
+}
+
+@MainActor
+private func configureWindow(_ window: NSWindow, for id: String) {
+    window.collectionBehavior.insert(.moveToActiveSpace)
+    window.styleMask.insert(.resizable)
+
+    if id == "main-dashboard", window.title == "Blawby Dashboard" {
+        window.minSize = NSSize(width: 960, height: 620)
+    } else if id == "preferences", window.title == "Blawby Preferences" {
+        window.minSize = NSSize(width: 680, height: 440)
     }
 }
 
@@ -75,6 +109,7 @@ private struct DashboardRootView: View {
                 onToggleSync: { session.toggleSync() },
                 onOpenPreferences: { activateAndOpenWindow("preferences", openWindow: openWindow) }
             )
+            .frame(minWidth: 960, minHeight: 620)
         } else if let startupError = session.startupError {
             Text("Startup failed: \(startupError)")
                 .foregroundColor(.red)
