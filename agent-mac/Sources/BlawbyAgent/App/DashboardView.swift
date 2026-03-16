@@ -23,7 +23,6 @@ struct DashboardView: View {
             if let source = selectedSource {
                 SourceDetailView(
                     source: source,
-                    connection: state.connection,
                     lastSync: state.lastSync
                 )
             } else {
@@ -111,13 +110,8 @@ private struct SourceSidebarRow: View {
         HStack(spacing: 10) {
             Image(systemName: iconName)
                 .foregroundColor(statusColor)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(source.sourceName)
-                    .lineLimit(1)
-                Text(source.status.capitalized)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+            Text(source.sourceName)
+                .lineLimit(1)
             Spacer()
             Text("\(source.totalSynced)/\(max(source.totalEstimated, source.totalSynced))")
                 .font(.caption.monospacedDigit())
@@ -146,7 +140,6 @@ private struct SourceSidebarRow: View {
 
 private struct SourceDetailView: View {
     let source: ConnectedSource
-    let connection: String
     let lastSync: Date?
 
     var body: some View {
@@ -175,10 +168,9 @@ private struct SourceDetailView: View {
             Group {
                 detailRow(label: "Type", value: source.sourceType.capitalized)
                 detailRow(label: "Account", value: source.accountId)
-                detailRow(label: "Connection", value: connection)
                 detailRow(
-                    label: "Last Sync",
-                    value: lastSync?.formatted(.dateTime.month(.abbreviated).day().hour().minute()) ?? "Never"
+                    label: "Synced",
+                    value: relativeSyncText
                 )
                 if let error = source.lastError, !error.isEmpty {
                     detailRow(label: "Last Error", value: error, color: .red)
@@ -214,6 +206,13 @@ private struct SourceDetailView: View {
         case "error": return .red
         default: return .secondary
         }
+    }
+
+    private var relativeSyncText: String {
+        guard let lastSync else { return "Never" }
+        return lastSync.formatted(
+            .relative(presentation: .named, unitsStyle: .abbreviated)
+        )
     }
 
     @ViewBuilder

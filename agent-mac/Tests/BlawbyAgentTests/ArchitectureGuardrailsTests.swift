@@ -73,6 +73,14 @@ final class ArchitectureGuardrailsTests: XCTestCase {
         let popover = repoRoot.appendingPathComponent("Sources/BlawbyAgent/App/MenuBarPopoverView.swift")
         let popoverText = try String(contentsOf: popover, encoding: .utf8)
         XCTAssertTrue(popoverText.contains("@Published var lastSync: Date?"), "Menu UI state should store Date values.")
+        XCTAssertTrue(popoverText.contains("Text(lastSync, style: .relative)"), "Menu bar should use relative time display.")
+
+        let dashboard = repoRoot.appendingPathComponent("Sources/BlawbyAgent/App/DashboardView.swift")
+        let dashboardText = try String(contentsOf: dashboard, encoding: .utf8)
+        XCTAssertTrue(
+            dashboardText.contains(".relative(presentation: .named, unitsStyle: .abbreviated)"),
+            "Dashboard should display relative sync timestamps."
+        )
     }
 
     func testLegacyLifecycleFilesRemainDeleted() {

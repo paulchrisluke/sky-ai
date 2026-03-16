@@ -33,24 +33,15 @@ struct MenuBarPopoverView: View {
             Divider()
 
             // Progress Section
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Overall progress")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-
+            VStack(alignment: .leading, spacing: 10) {
                 let totalSyncedFloat = CGFloat(totalSynced)
                 let totalEstimatedFloat = CGFloat(totalEstimated)
                 let ratio = totalEstimated > 0 ? min(1.0, max(0.0, totalSyncedFloat / totalEstimatedFloat)) : 0.0
 
-                HStack {
-                    ProgressView(value: ratio)
-                        .progressViewStyle(LinearProgressViewStyle())
-                    Text(totalEstimated == 0 ? "Waiting..." : "\(Int(ratio * 100))%")
-                        .font(.caption)
-                        .frame(width: 40, alignment: .trailing)
-                }
+                ProgressView(value: ratio)
+                    .progressViewStyle(LinearProgressViewStyle())
 
-                Text("\(formatNumber(totalSynced)) / \(formatNumber(totalEstimated)) items synced")
+                Text("\(formatNumber(totalSynced)) of \(formatNumber(totalEstimated))")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -59,11 +50,7 @@ struct MenuBarPopoverView: View {
             Divider()
 
             // Quick Actions
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Quick actions")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Button(action: onToggleSync) {
                         Label(state.syncActivated ? "Pause Sync" : "Resume Sync", systemImage: state.syncActivated ? "pause.fill" : "play.fill")
@@ -77,10 +64,6 @@ struct MenuBarPopoverView: View {
                     }
                     .buttonStyle(.bordered)
                 }
-
-                Text("Active sources now live in the Dashboard window.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
             .padding()
             
@@ -89,7 +72,6 @@ struct MenuBarPopoverView: View {
             // Footer
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Text("Connection:")
                     Circle()
                         .fill(connectionColor)
                         .frame(width: 8, height: 8)
@@ -98,11 +80,14 @@ struct MenuBarPopoverView: View {
                 .font(.caption)
                 
                 if let lastSync = state.lastSync {
-                    Text("Last sync: \(lastSync.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    HStack(spacing: 4) {
+                        Text("Synced")
+                        Text(lastSync, style: .relative)
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 } else {
-                    Text("Last sync: Never")
+                    Text("Never synced")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
