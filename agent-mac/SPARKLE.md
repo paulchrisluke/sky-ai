@@ -68,6 +68,12 @@ Required GitHub repository secrets:
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
 
+To set the signing-certificate secrets automatically from your local keychain:
+
+```bash
+./scripts/setup-macos-ci-signing.sh --p12-password 'choose_a_strong_temp_password'
+```
+
 Trigger:
 
 - Push a tag like `v1.0.2`, or run workflow manually.
