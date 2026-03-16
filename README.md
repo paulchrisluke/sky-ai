@@ -24,7 +24,7 @@ Cloudflare backend + native macOS agent (`agent-mac`) for Sky AI.
 - Entry point is scene-driven SwiftUI (`@main App`), not a web shell.
 - Menu bar is a lightweight status + quick-action hub (`MenuBarExtra`):
   - overall sync progress
-  - connection/last-sync status
+  - connection status
   - pause/resume sync
   - open dashboard
 - Deep workflows live in standard macOS windows via `Window` scenes:
@@ -49,7 +49,6 @@ Current alignment:
 
 Not yet aligned (next targets):
 
-- `MenuBarPopoverView` still contains minor legacy close-control behavior from earlier popover flow that can be simplified for pure `MenuBarExtra`.
 - README-level architecture is now documented, but automated architecture checks (lint/test assertions around thread confinement and UI boundaries) are not in place yet.
 
 ## Structure (Living)
@@ -60,7 +59,6 @@ Not yet aligned (next targets):
 - `workers/api/src/agents/blawby.ts`: Cloudflare Agents SDK memory agent (`BlawbyAgent`)
 - `db/migrations`: D1 schema evolution
 - `agent-mac/`: native macOS app/agent (Swift) for local ingestion and sync
-- `agent/`: legacy Node agent (archive-only after Skyler Mac Mini Swift cutover; do not delete yet)
 
 ## Tools
 
@@ -351,19 +349,9 @@ The script will:
 - run `POST /chat/query`
 - verify `action_events` and `run_search_audits` rows in D1
 
-## Historical Backfill (Controlled)
+## Historical Backfill (Current)
 
-Legacy Node backfill (`agent/backfill.js`) has been retired because `/ingest/mail-thread` now returns `410 deprecated_endpoint`.
-Use `agent-mac` + modern ingest paths only (`/ingest/entities`, `/ingest/message-chunks`).
-
-## Production Migration Checklist
-
-Primary blocker for production migration is Skyler Mac Mini running the Swift app (`agent-mac`) as the active publisher.
-
-Use [docs/prod-migration-checklist.md](/Users/paulchrisluke/Repos 2026/sky-ai/docs/prod-migration-checklist.md) for:
-- Skyler Mac Mini install/verification
-- Node `agent/` retirement staging (archive first, delete later)
-- `sky-ai-prod` D1 migration parity with dev
+Use `agent-mac` + current ingest paths only (`/ingest/entities`, `/ingest/message-chunks`).
 
 ## Railway ChatKit Skeleton
 

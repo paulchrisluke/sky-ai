@@ -1,7 +1,6 @@
 # Mac App Setup (Skyler/Test User)
 
 This is the current install flow for the native macOS app (`BlawbyAgent.app`).
-The old `install.sh`/launch-agent flow is no longer the primary path.
 
 ## 1) Install app bundle
 
@@ -57,7 +56,3 @@ For test users, this works without App Store, but Gatekeeper prompts can still o
   - `scripts/macos-app.sh release`
   - `scripts/macos-app.sh appcast`
   - `agent-mac/scripts/sparkle-generate-appcast.sh`
-
-## Legacy note
-
-`agent-mac/install.sh` and `agent-mac/uninstall.sh` are legacy and should not be used for the current Skyler/test-user path.

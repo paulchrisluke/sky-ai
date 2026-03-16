@@ -370,14 +370,8 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
         logger.info("published payloads for \(processing.rawMessages.count) messages for \(source.sourceName)")
 
         let batchNewestDate = batch.map(\.date).max() ?? activeCursor
-        let newestDate: Date
-        if batchNewestDate <= activeCursor {
-            // Guard against cursor stalls when a source repeatedly returns a boundary-timestamp message.
-            newestDate = activeCursor.addingTimeInterval(1)
-            logger.warning("mail cursor stall detected for \(source.sourceName); forcing cursor advance from \(activeCursor) to \(newestDate)")
-        } else {
-            newestDate = batchNewestDate
-        }
+        // Keep cursor strictly increasing to avoid boundary loops on repeated timestamp matches.
+        let newestDate = max(batchNewestDate, activeCursor).addingTimeInterval(0.001)
         let newSyncedTotal = source.totalSynced + processing.rawMessages.count
 
         localStore.updateConnectedSourceSync(

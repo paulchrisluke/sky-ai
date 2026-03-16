@@ -139,7 +139,8 @@ final class MessagesReader: @unchecked Sendable {
             let dbQueue = try DatabaseQueue(path: dbPath)
             let cursor = localStore.getCursor(accountId: accountId, source: "messages")
             let lastDate = cursor.lastSeenAt ?? Date(timeIntervalSince1970: 0)
-            let lastAppleTime = Int64((lastDate.timeIntervalSince1970 - 978307200.0) * 1_000_000_000.0)
+            let fallbackAppleTime = Int64((lastDate.timeIntervalSince1970 - 978307200.0) * 1_000_000_000.0)
+            let lastAppleTime = Int64(cursor.lastSeenUid ?? "") ?? fallbackAppleTime
 
             let rows = try dbQueue.read { db in
                 try Row.fetchAll(
@@ -159,10 +160,12 @@ final class MessagesReader: @unchecked Sendable {
             if rows.isEmpty { return nil }
 
             var latest = lastDate
+            var latestAppleTime = lastAppleTime
             let items: [MacMessagePayload.Item] = rows.compactMap { row in
                 let rawDate: Int64 = row["date"]
                 let sentAt = Date(timeIntervalSince1970: 978307200.0 + Double(rawDate) / 1_000_000_000.0)
                 if sentAt > latest { latest = sentAt }
+                if rawDate > latestAppleTime { latestAppleTime = rawDate }
                 return MacMessagePayload.Item(
                     id: row["rowid"],
                     text: (row["text"] as String? ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
@@ -172,7 +175,12 @@ final class MessagesReader: @unchecked Sendable {
             }.filter { !$0.text.isEmpty }
 
             if items.isEmpty { return nil }
-            localStore.setCursor(accountId: accountId, source: "messages", lastSeenAt: latest, lastSeenUid: nil)
+            localStore.setCursor(
+                accountId: accountId,
+                source: "messages",
+                lastSeenAt: latest,
+                lastSeenUid: String(latestAppleTime)
+            )
             let payload = MacMessagePayload(type: "message", accountId: accountId, workspaceId: workspaceId, messages: items)
             let data = try JSONEncoder().encode(payload)
             guard let json = String(data: data, encoding: .utf8) else { return nil }

@@ -23,6 +23,10 @@ struct MenuBarPopoverView: View {
                     .foregroundColor(.primary)
                 Text("Blawby")
                     .font(.headline)
+                Circle()
+                    .fill(connectionColor)
+                    .frame(width: 8, height: 8)
+                    .help(state.connection)
                 Spacer()
             }
             .padding()
@@ -69,34 +73,6 @@ struct MenuBarPopoverView: View {
                 })
             }
             .padding()
-            
-            Divider()
-            
-            // Footer
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(connectionColor)
-                        .frame(width: 8, height: 8)
-                    Text(state.connection)
-                }
-                .font(.caption)
-                
-                if let lastSync = state.lastSync {
-                    HStack(spacing: 4) {
-                        Text("Synced")
-                        Text(lastSync, style: .relative)
-                    }
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                } else {
-                    Text("Never synced")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: 320)
     }

@@ -237,6 +237,17 @@ final class LocalStore {
 
         do {
             return try dbQueue.read { db in
+                let legacy = try Row.fetchOne(
+                    db,
+                    sql: """
+                    SELECT last_seen_uid
+                    FROM sync_cursors
+                    WHERE account_id = ? AND source = ?
+                    LIMIT 1
+                    """,
+                    arguments: [accountId, source]
+                )
+
                 guard
                     let row = try Row.fetchOne(
                         db,
@@ -253,7 +264,8 @@ final class LocalStore {
 
                 let lastSeenAtText: String? = row["sync_cursor"]
                 let lastSeenAt = lastSeenAtText.map { iso.date(from: $0) }.flatMap { $0 }
-                return (lastSeenAt, nil)
+                let lastSeenUid: String? = legacy?["last_seen_uid"]
+                return (lastSeenAt, lastSeenUid)
             }
         } catch {
             fputs("LocalStore.getCursor failed: \(error)\n", stderr)
@@ -293,6 +305,19 @@ final class LocalStore {
                         updatedAt,
                         updatedAt
                     ]
+                )
+
+                try db.execute(
+                    sql: """
+                    INSERT INTO sync_cursors (
+                        account_id, source, last_seen_at, last_seen_uid, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(account_id, source) DO UPDATE SET
+                        last_seen_at = excluded.last_seen_at,
+                        last_seen_uid = excluded.last_seen_uid,
+                        updated_at = excluded.updated_at
+                    """,
+                    arguments: [accountId, source, lastSeenAtText, lastSeenUid, updatedAt]
                 )
             }
         } catch {
