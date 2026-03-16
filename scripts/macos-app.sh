@@ -28,6 +28,7 @@ Environment (release):
   APPLE_ID
   APPLE_APP_SPECIFIC_PASSWORD
   APPLE_TEAM_ID
+  APPLE_CODE_SIGN_IDENTITY Optional; defaults to "Developer ID Application"
   OUTPUT_DIR          Optional; defaults to dist/macos/<version+build>
 
 Environment (appcast):
@@ -92,6 +93,7 @@ release() {
   local apple_id="${APPLE_ID:?APPLE_ID is required}"
   local apple_pw="${APPLE_APP_SPECIFIC_PASSWORD:?APPLE_APP_SPECIFIC_PASSWORD is required}"
   local apple_team="${APPLE_TEAM_ID:?APPLE_TEAM_ID is required}"
+  local code_sign_identity="${APPLE_CODE_SIGN_IDENTITY:-Developer ID Application}"
 
   local version="${VERSION:-$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST")}"
   local build_number="${BUILD_NUMBER:-$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$INFO_PLIST")}"
@@ -134,7 +136,9 @@ PLIST
     -configuration Release \
     -archivePath "$archive_path" \
     archive \
-    DEVELOPMENT_TEAM="$apple_team"
+    DEVELOPMENT_TEAM="$apple_team" \
+    CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="$code_sign_identity"
 
   echo "==> Exporting signed app"
   xcodebuild \

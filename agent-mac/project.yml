@@ -12,6 +12,8 @@ settings:
     MACOSX_DEPLOYMENT_TARGET: "13.0"
     CODE_SIGN_STYLE: Automatic
     INFOPLIST_FILE: BlawbyAgent/Info.plist
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "2"
 
 packages:
   GRDB:
@@ -38,6 +40,8 @@ targets:
         NSAppleEventsUsageDescription: "Blawby reads Mail to process your emails"
         CFBundleIdentifier: com.blawby.BlawbyAgent
         CFBundleName: BlawbyAgent
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         SUFeedURL: "https://downloads.blawby.com/appcast.xml"
         SUPublicEDKey: "0IC6N25L3FuF6YeIUQUPXTEx5YA9LGKQvrz8aUkukbw="
         SUEnableAutomaticChecks: true
