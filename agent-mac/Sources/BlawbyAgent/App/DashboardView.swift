@@ -309,6 +309,8 @@ private struct CategoryDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle(category.title)
+            .toolbarBackground(.visible, for: .automatic)
+            .toolbarBackground(.thinMaterial, for: .automatic)
         }
     }
 
