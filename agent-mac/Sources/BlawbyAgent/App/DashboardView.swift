@@ -12,14 +12,14 @@ struct DashboardView: View {
 
     var body: some View {
         NavigationSplitView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    sidebarSectionHeader("Smart Mailboxes")
+            List {
+                Section("Smart Mailboxes") {
                     ForEach(visibleSmartMailboxKinds, id: \.rawValue) { kind in
                         smartMailboxButton(kind: kind)
                     }
+                }
 
-                    sidebarSectionHeader("Mailboxes")
+                Section("Mailboxes") {
                     ForEach(mailAccountGroups) { group in
                         DisclosureGroup(
                             isExpanded: Binding(
@@ -33,23 +33,20 @@ struct DashboardView: View {
                                 }
                             )
                         ) {
-                            VStack(spacing: 2) {
-                                ForEach(group.sources, id: \.id) { source in
-                                    sourceButton(source: source, titleOverride: mailboxName(for: source))
-                                }
+                            ForEach(group.sources, id: \.id) { source in
+                                sourceButton(source: source, titleOverride: mailboxName(for: source))
                             }
-                            .padding(.leading, 12)
                         } label: {
                             SidebarAccountLabel(
                                 title: group.accountName,
                                 systemImage: "person.crop.circle",
                                 totalsText: groupTotalsText(group.sources)
                             )
-                            .padding(.horizontal, 10)
                         }
                     }
+                }
 
-                    sidebarSectionHeader("Calendars")
+                Section("Calendars") {
                     ForEach(calendarAccountGroups) { group in
                         DisclosureGroup(
                             isExpanded: Binding(
@@ -63,23 +60,20 @@ struct DashboardView: View {
                                 }
                             )
                         ) {
-                            VStack(spacing: 2) {
-                                ForEach(group.sources, id: \.id) { source in
-                                    sourceButton(source: source)
-                                }
+                            ForEach(group.sources, id: \.id) { source in
+                                sourceButton(source: source)
                             }
-                            .padding(.leading, 12)
                         } label: {
                             SidebarAccountLabel(
                                 title: group.accountName,
                                 systemImage: "person.crop.circle",
                                 totalsText: groupTotalsText(group.sources)
                             )
-                            .padding(.horizontal, 10)
                         }
                     }
+                }
 
-                    sidebarSectionHeader("Messages")
+                Section("Messages") {
                     ForEach(messageAccountGroups) { group in
                         DisclosureGroup(
                             isExpanded: Binding(
@@ -93,28 +87,23 @@ struct DashboardView: View {
                                 }
                             )
                         ) {
-                            VStack(spacing: 2) {
-                                ForEach(group.sources, id: \.id) { source in
-                                    sourceButton(source: source)
-                                }
+                            ForEach(group.sources, id: \.id) { source in
+                                sourceButton(source: source)
                             }
-                            .padding(.leading, 12)
                         } label: {
                             SidebarAccountLabel(
                                 title: group.accountName,
                                 systemImage: "person.crop.circle",
                                 totalsText: groupTotalsText(group.sources)
                             )
-                            .padding(.horizontal, 10)
                         }
                     }
                 }
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .listStyle(.sidebar)
             .navigationTitle("Sources")
             .searchable(text: $sourceSearch, prompt: "Filter sources")
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 420)
         } detail: {
             if let smartKind = selectedSmartMailboxKind {
                 SmartMailboxDetailView(
@@ -136,13 +125,6 @@ struct DashboardView: View {
             }
         }
         .onAppear {
-            if selection == nil {
-                if visibleSmartMailboxKinds.contains(.allInboxes) {
-                    selection = .smart(SmartMailboxKind.allInboxes.rawValue)
-                } else if let first = filteredSources.first {
-                    selection = .source(first.id)
-                }
-            }
             expandedMailAccounts = Set(mailAccountGroups.map(\.id))
             expandedCalendarAccounts = Set(calendarAccountGroups.map(\.id))
             expandedMessageAccounts = Set(messageAccountGroups.map(\.id))
@@ -158,24 +140,13 @@ struct DashboardView: View {
         .onChange(of: filteredSources.map(\.id)) { ids in
             if case let .source(selectedSourceId)? = selection, ids.contains(selectedSourceId) {
                 // Keep valid source selection.
-            } else if case .smart? = selection {
-                // Keep smart mailbox selection.
-            } else if visibleSmartMailboxKinds.contains(.allInboxes) {
-                selection = .smart(SmartMailboxKind.allInboxes.rawValue)
             } else {
-                selection = ids.first.map(SidebarSelection.source)
+                selection = nil
             }
             expandedMailAccounts = Set(mailAccountGroups.map(\.id))
             expandedCalendarAccounts = Set(calendarAccountGroups.map(\.id))
             expandedMessageAccounts = Set(messageAccountGroups.map(\.id))
         }
-    }
-
-    private func sidebarSectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundColor(.secondary)
-            .padding(.horizontal, 10)
     }
 
     private func smartMailboxButton(kind: SmartMailboxKind) -> some View {
