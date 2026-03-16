@@ -2,7 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$HOME/Library/Developer/Xcode/DerivedData/BlawbyAgent-LocalInstall}"
+DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$HOME/Library/Developer/Xcode/DerivedData/BlawbyAgent-Fixed}"
 
 if [[ ! -f ./.env ]]; then
   echo "Missing ./agent-mac/.env"
