@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @MainActor
 class MenuBarState: ObservableObject {
@@ -61,8 +62,11 @@ struct MenuBarPopoverView: View {
 
             // Menu Actions
             VStack(alignment: .leading, spacing: 8) {
-                MenuActionButton(title: "Show Dashboard", systemImage: "rectangle.grid.2x2", action: onOpenDashboard)
-                MenuActionButton(title: "Preferences…", systemImage: "gearshape", action: onOpenPreferences)
+                MenuTextActionButton(title: "Show Dashboard", action: onOpenDashboard)
+                MenuTextActionButton(title: "Preferences…", action: onOpenPreferences)
+                MenuTextActionButton(title: "Quit Blawby", action: {
+                    NSApplication.shared.terminate(nil)
+                })
             }
             .padding()
             
@@ -123,19 +127,14 @@ struct MenuBarPopoverView: View {
     }
 }
 
-private struct MenuActionButton: View {
+private struct MenuTextActionButton: View {
     let title: String
-    let systemImage: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .frame(width: 16, alignment: .center)
-                    .foregroundColor(.secondary)
+            HStack {
                 Text(title)
-                    .foregroundColor(.primary)
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

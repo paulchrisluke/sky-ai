@@ -17,6 +17,9 @@ packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift.git
     from: 6.0.0
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
 
 targets:
   BlawbyAgent:
@@ -35,9 +38,14 @@ targets:
         NSAppleEventsUsageDescription: "Blawby reads Mail to process your emails"
         CFBundleIdentifier: com.blawby.BlawbyAgent
         CFBundleName: BlawbyAgent
+        SUFeedURL: "https://downloads.blawby.com/appcast.xml"
+        SUPublicEDKey: "BgQknw+i5sx9mxXxTrThSXbXyA7BE1hYTZQV0OWFe38="
+        SUEnableAutomaticChecks: true
     dependencies:
       - package: GRDB
         product: GRDB
+      - package: Sparkle
+        product: Sparkle
     settings:
       base:
         DEVELOPMENT_TEAM: 948S9JG4VL

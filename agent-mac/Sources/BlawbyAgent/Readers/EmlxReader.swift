@@ -276,40 +276,14 @@ final class EmlxReader: @unchecked Sendable {
     }
 
     private func parseRFC822(content: String, accountId: String, mailbox: String, fileURL: URL) -> RawMessage? {
-        let lines = content.components(separatedBy: "\n")
-        var headers: [String: String] = [:]
-        var bodyLines: [String] = []
-        var inHeaders = true
-        var currentHeader: String?
-        
-        for line in lines {
-            let processedLine = line.replacingOccurrences(of: "\r", with: "")
-            if inHeaders {
-                if processedLine.isEmpty {
-                    inHeaders = false
-                    continue
-                }
-                
-                if processedLine.hasPrefix(" ") || processedLine.hasPrefix("\t") {
-                    if let key = currentHeader {
-                        headers[key] = (headers[key] ?? "") + " " + processedLine.trimmingCharacters(in: .whitespacesAndNewlines)
-                    }
-                } else if let colonIndex = processedLine.firstIndex(of: ":") {
-                    let key = String(processedLine[..<colonIndex]).lowercased().trimmingCharacters(in: .whitespaces)
-                    let value = String(processedLine[processedLine.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
-                    headers[key] = value
-                    currentHeader = key
-                }
-            } else {
-                bodyLines.append(processedLine)
-            }
-        }
-        
+        let parsed = splitHeadersAndBody(content: content)
+        let headers = parsed.headers
+        let bodyRaw = parsed.body
         let subject = headers["subject"] ?? ""
         let from = headers["from"] ?? ""
         let dateStr = headers["date"] ?? ""
         let messageId = headers["message-id"] ?? fileURL.lastPathComponent
-        
+
         let dateFormatter = DateFormatter()
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         let formats = [
@@ -332,8 +306,8 @@ final class EmlxReader: @unchecked Sendable {
             logger.warning("emlx: skipping message with no parseable date or file mtime: \(fileURL.path)")
             return nil
         }
-        let body = bodyLines.joined(separator: "\n").prefix(5000)
-        
+        let body = decodeMIMEBody(headers: headers, body: bodyRaw).prefix(3000)
+
         return RawMessage(
             messageId: messageId,
             accountId: accountId,
@@ -344,5 +318,183 @@ final class EmlxReader: @unchecked Sendable {
             bodyText: String(body),
             mailbox: mailbox
         )
+    }
+
+    private func splitHeadersAndBody(content: String) -> (headers: [String: String], body: String) {
+        let normalized = content.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let separator = "\n\n"
+        let headerEnd = normalized.range(of: separator)?.lowerBound ?? normalized.endIndex
+        let headerText = String(normalized[..<headerEnd])
+        let bodyStart = headerEnd < normalized.endIndex ? normalized.index(headerEnd, offsetBy: separator.count) : normalized.endIndex
+        let bodyText = String(normalized[bodyStart...])
+
+        var headers: [String: String] = [:]
+        var currentHeader: String?
+        for line in headerText.components(separatedBy: "\n") {
+            if line.hasPrefix(" ") || line.hasPrefix("\t") {
+                if let key = currentHeader {
+                    headers[key] = (headers[key] ?? "") + " " + line.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                continue
+            }
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let key = String(line[..<colon]).lowercased().trimmingCharacters(in: .whitespaces)
+            let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            headers[key] = value
+            currentHeader = key
+        }
+        return (headers, bodyText)
+    }
+
+    private func decodeMIMEBody(headers: [String: String], body: String) -> String {
+        let contentType = headers["content-type"]?.lowercased() ?? "text/plain"
+        let transferEncoding = headers["content-transfer-encoding"]?.lowercased() ?? ""
+
+        if contentType.contains("multipart/"), let boundary = extractBoundary(from: headers["content-type"] ?? "") {
+            let parts = splitMultipartBody(body: body, boundary: boundary)
+            var htmlFallback: String?
+
+            for part in parts {
+                let parsed = splitHeadersAndBody(content: part)
+                let partType = parsed.headers["content-type"]?.lowercased() ?? "text/plain"
+                let decoded = decodeMIMEBody(headers: parsed.headers, body: parsed.body)
+                if decoded.isEmpty { continue }
+                if partType.contains("text/plain") {
+                    return decoded
+                }
+                if partType.contains("text/html"), htmlFallback == nil {
+                    htmlFallback = decoded
+                }
+            }
+            return cleanBodyText(htmlFallback ?? "")
+        }
+
+        let charset = extractCharset(from: headers["content-type"] ?? "")
+        let transferDecoded = decodeTransferEncoding(body: body, encoding: transferEncoding, charset: charset)
+        let plain = contentType.contains("text/html") ? htmlToPlainText(transferDecoded) : transferDecoded
+        return cleanBodyText(plain)
+    }
+
+    private func decodeTransferEncoding(body: String, encoding: String, charset: String?) -> String {
+        if encoding.contains("base64") {
+            let collapsed = body.replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "\r", with: "")
+            if let data = Data(base64Encoded: collapsed) {
+                return decodeData(data, charset: charset)
+            }
+            return body
+        }
+        if encoding.contains("quoted-printable") {
+            return decodeQuotedPrintable(body, charset: charset)
+        }
+        return body
+    }
+
+    private func decodeQuotedPrintable(_ text: String, charset: String?) -> String {
+        let bytes = Array(text.utf8)
+        var output = Data()
+        var i = 0
+        while i < bytes.count {
+            if bytes[i] == 61 { // "="
+                if i + 2 < bytes.count {
+                    let b1 = bytes[i + 1]
+                    let b2 = bytes[i + 2]
+                    if (b1 == 13 && b2 == 10) || b1 == 10 {
+                        i += (b1 == 13 && b2 == 10) ? 3 : 2
+                        continue
+                    }
+                    let hex = String(bytes: [b1, b2], encoding: .ascii) ?? ""
+                    if let value = UInt8(hex, radix: 16) {
+                        output.append(value)
+                        i += 3
+                        continue
+                    }
+                }
+            }
+            output.append(bytes[i])
+            i += 1
+        }
+        return decodeData(output, charset: charset)
+    }
+
+    private func decodeData(_ data: Data, charset: String?) -> String {
+        if let enc = stringEncoding(for: charset), let text = String(data: data, encoding: enc) {
+            return text
+        }
+        if let text = String(data: data, encoding: .utf8) {
+            return text
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func stringEncoding(for charset: String?) -> String.Encoding? {
+        guard let charset else { return nil }
+        let lower = charset.lowercased()
+        if lower.contains("utf-8") { return .utf8 }
+        if lower.contains("iso-8859-1") || lower.contains("latin1") || lower.contains("latin-1") { return .isoLatin1 }
+        if lower.contains("windows-1252") { return .windowsCP1252 }
+        return nil
+    }
+
+    private func extractBoundary(from contentType: String) -> String? {
+        guard let range = contentType.range(of: "boundary=", options: .caseInsensitive) else { return nil }
+        var boundary = String(contentType[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        if let semicolon = boundary.firstIndex(of: ";") {
+            boundary = String(boundary[..<semicolon]).trimmingCharacters(in: .whitespaces)
+        }
+        boundary = boundary.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        return boundary.isEmpty ? nil : boundary
+    }
+
+    private func extractCharset(from contentType: String) -> String? {
+        guard let range = contentType.range(of: "charset=", options: .caseInsensitive) else { return nil }
+        var charset = String(contentType[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        if let semicolon = charset.firstIndex(of: ";") {
+            charset = String(charset[..<semicolon]).trimmingCharacters(in: .whitespaces)
+        }
+        charset = charset.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        return charset.isEmpty ? nil : charset
+    }
+
+    private func splitMultipartBody(body: String, boundary: String) -> [String] {
+        let normalized = body.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let marker = "--\(boundary)"
+        let closing = "--\(boundary)--"
+        return normalized
+            .components(separatedBy: marker)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0 != "--" && !$0.hasPrefix(closing) }
+    }
+
+    private func htmlToPlainText(_ html: String) -> String {
+        var text = html
+        text = text.replacingOccurrences(of: "(?i)<br\\s*/?>", with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?i)</p>", with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "&amp;", with: "&")
+        text = text.replacingOccurrences(of: "&lt;", with: "<")
+        text = text.replacingOccurrences(of: "&gt;", with: ">")
+        text = text.replacingOccurrences(of: "&nbsp;", with: " ")
+        return text
+    }
+
+    private func cleanBodyText(_ body: String) -> String {
+        let normalized = body.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let lines = normalized.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let headerLike = try? NSRegularExpression(pattern: "^[A-Za-z0-9-]+:\\s+.+$")
+        let cleanedLines = lines.filter { line in
+            guard !line.isEmpty else { return false }
+            if let headerLike {
+                let range = NSRange(location: 0, length: (line as NSString).length)
+                if headerLike.firstMatch(in: line, options: [], range: range) != nil {
+                    return false
+                }
+            }
+            return true
+        }
+        let compact = cleanedLines.joined(separator: "\n")
+            .replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return compact
     }
 }

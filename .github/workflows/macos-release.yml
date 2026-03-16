@@ -1,0 +1,132 @@
+name: macOS Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release-macos:
+    runs-on: macos-14
+    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_BUCKET: sky-ai-artifacts-prod
+      DOWNLOAD_URL_PREFIX: https://downloads.blawby.com/
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          test -n "${APPLE_ID}"
+          test -n "${APPLE_APP_SPECIFIC_PASSWORD}"
+          test -n "${APPLE_TEAM_ID}"
+          test -n "${SPARKLE_PRIVATE_KEY}"
+          test -n "${CLOUDFLARE_API_TOKEN}"
+          test -n "${CLOUDFLARE_ACCOUNT_ID}"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          cd agent-mac
+          xcodegen generate
+
+      - name: Build notarized release artifacts
+        run: |
+          set -euo pipefail
+          ./scripts/macos-app.sh release
+
+      - name: Compute release directory
+        id: rel
+        run: |
+          set -euo pipefail
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" agent-mac/BlawbyAgent/Info.plist)
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" agent-mac/BlawbyAgent/Info.plist)
+          RELEASE_DIR="$PWD/dist/macos/${VERSION}+${BUILD}"
+          test -d "$RELEASE_DIR"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "release_dir=$RELEASE_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Locate Sparkle tools
+        id: sparkle
+        run: |
+          set -euo pipefail
+          TOOLS_DIR=$(find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/SourcePackages/artifacts/sparkle/Sparkle/bin" -type d | head -n 1)
+          test -n "$TOOLS_DIR"
+          test -x "$TOOLS_DIR/generate_appcast"
+          echo "tools_dir=$TOOLS_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Generate signed appcast
+        run: |
+          set -euo pipefail
+          RELEASE_DIR='${{ steps.rel.outputs.release_dir }}'
+          TOOLS_DIR='${{ steps.sparkle.outputs.tools_dir }}'
+          KEY_FILE="$RUNNER_TEMP/sparkle_private_key.txt"
+
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+
+          "$TOOLS_DIR/generate_appcast" \
+            --ed-key-file "$KEY_FILE" \
+            --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
+            "$RELEASE_DIR"
+
+          rg -n "sparkle:edSignature" "$RELEASE_DIR/appcast.xml"
+
+      - name: Upload release files to R2
+        run: |
+          set -euo pipefail
+          RELEASE_DIR='${{ steps.rel.outputs.release_dir }}'
+
+          npx wrangler r2 object put "$R2_BUCKET/appcast.xml" \
+            --file "$RELEASE_DIR/appcast.xml" \
+            --content-type application/xml \
+            --remote
+
+          for file in "$RELEASE_DIR"/*.zip "$RELEASE_DIR"/*.dmg "$RELEASE_DIR"/SHA256SUMS.txt; do
+            npx wrangler r2 object put "$R2_BUCKET/$(basename "$file")" \
+              --file "$file" \
+              --remote
+          done
+
+      - name: Verify public appcast URL
+        run: |
+          set -euo pipefail
+          curl -fsSL https://downloads.blawby.com/appcast.xml > "$RUNNER_TEMP/appcast.xml"
+          rg -n "<title>BlawbyAgent</title>" "$RUNNER_TEMP/appcast.xml"
+          rg -n "sparkle:edSignature" "$RUNNER_TEMP/appcast.xml"
+
+      - name: Upload build artifacts to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: blawby-macos-${{ steps.rel.outputs.version }}+${{ steps.rel.outputs.build }}
+          path: |
+            ${{ steps.rel.outputs.release_dir }}/*.zip
+            ${{ steps.rel.outputs.release_dir }}/*.dmg
+            ${{ steps.rel.outputs.release_dir }}/appcast.xml
+            ${{ steps.rel.outputs.release_dir }}/SHA256SUMS.txt

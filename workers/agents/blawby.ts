@@ -1,5 +1,5 @@
 import { Agent, callable } from 'agents';
-import { ingestCalendarEventsCore, ingestMessageChunksCore, type JsonRecord } from '../shared/ingestCore';
+import { ingestCalendarEventsCore, ingestMacMessagesCore, ingestMessageChunksCore, type JsonRecord } from '../shared/ingestCore';
 
 type BlawbyEnv = Cloudflare.Env & {
   SKY_DB: D1Database;
@@ -185,19 +185,16 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
       return;
     }
     if (type === 'chunks') {
-      try {
-        const result = await ingestMessageChunksCore(this.env, payload);
-        console.log(`[blawby] chunks: chunked=${result.chunked} skipped=${result.skipped}`);
-        if (result.chunked > 0) {
-          await this.skillImmediateContext();
-        }
-      } catch (err) {
-        console.log(`[blawby] chunks error: ${err instanceof Error ? err.stack : String(err)}`);
+      const result = await ingestMessageChunksCore(this.env, payload);
+      console.log(`[blawby] chunks: chunked=${result.chunked} skipped=${result.skipped}`);
+      if (result.chunked > 0) {
+        await this.skillImmediateContext();
       }
       return;
     }
     if (type === 'message') {
-      // TODO: implement Messages ingestion
+      const result = await ingestMacMessagesCore(this.env, payload);
+      console.log(`[blawby] messages: upserted=${result.upserted} skipped=${result.skipped}`);
       return;
     }
     if (type === 'ping') {

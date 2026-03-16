@@ -10,6 +10,7 @@
 		07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */; };
 		289661C0209D41B5319B0657 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C61DC164DE3E5327702F99 /* Config.swift */; };
 		2934EF299DD477179A67C5E5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = BB22FC45049BCFD0751A8C05 /* GRDB */; };
+		2DDB718641C49BBCA0AE4453 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = F774B8F1D3F8FDDD014AFB59 /* Sparkle */; };
 		35107213E4698BF5E5BBB72E /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 587536AF6523B68207BDF79C /* PreferencesView.swift */; };
 		41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D04FFB67431F372BB5AF25 /* Preferences.swift */; };
 		440107DEC999EF6CFC534016 /* ArchitectureGuardrailsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A27C3B2BCC26C16FDBF4D1 /* ArchitectureGuardrailsTests.swift */; };
@@ -93,6 +94,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2934EF299DD477179A67C5E5 /* GRDB in Frameworks */,
+				2DDB718641C49BBCA0AE4453 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -254,6 +256,7 @@
 			name = BlawbyAgent;
 			packageProductDependencies = (
 				BB22FC45049BCFD0751A8C05 /* GRDB */,
+				F774B8F1D3F8FDDD014AFB59 /* Sparkle */,
 			);
 			productName = BlawbyAgent;
 			productReference = FE15D867F583668A8E9ED2AC /* BlawbyAgent.app */;
@@ -306,6 +309,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				F2D60E4CE52D19DA5BA3705D /* XCRemoteSwiftPackageReference "GRDB.swift" */,
+				153BCE3B5996414DDA2F119D /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5DCCF81F84C458B80263CE30 /* Products */;
@@ -609,6 +613,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		153BCE3B5996414DDA2F119D /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.6.0;
+			};
+		};
 		F2D60E4CE52D19DA5BA3705D /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/groue/GRDB.swift.git";
@@ -624,6 +636,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = F2D60E4CE52D19DA5BA3705D /* XCRemoteSwiftPackageReference "GRDB.swift" */;
 			productName = GRDB;
+		};
+		F774B8F1D3F8FDDD014AFB59 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 153BCE3B5996414DDA2F119D /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

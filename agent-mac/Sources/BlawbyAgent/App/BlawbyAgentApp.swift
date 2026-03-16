@@ -1,5 +1,6 @@
 import SwiftUI
 import Sparkle
+import AppKit
 
 @main
 struct BlawbyAgentApp: App {
@@ -26,6 +27,16 @@ struct BlawbyAgentApp: App {
     }
 }
 
+@MainActor
+private func activateAndOpenWindow(_ id: String, openWindow: OpenWindowAction) {
+    NSApplication.shared.activate(ignoringOtherApps: true)
+    openWindow(id: id)
+    for window in NSApplication.shared.windows {
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.makeKeyAndOrderFront(nil)
+    }
+}
+
 private struct MenuBarRootView: View {
     @ObservedObject var session: AppSession
     @Environment(\.openWindow) private var openWindow
@@ -36,8 +47,8 @@ private struct MenuBarRootView: View {
                 sourceManager: sourceManager,
                 state: session.menuState,
                 onToggleSync: { session.toggleSync() },
-                onOpenDashboard: { openWindow(id: "main-dashboard") },
-                onOpenPreferences: { openWindow(id: "preferences") }
+                onOpenDashboard: { activateAndOpenWindow("main-dashboard", openWindow: openWindow) },
+                onOpenPreferences: { activateAndOpenWindow("preferences", openWindow: openWindow) }
             )
         } else if let startupError = session.startupError {
             Text("Startup failed: \(startupError)")
@@ -62,7 +73,7 @@ private struct DashboardRootView: View {
                 sourceManager: sourceManager,
                 state: session.menuState,
                 onToggleSync: { session.toggleSync() },
-                onOpenPreferences: { openWindow(id: "preferences") }
+                onOpenPreferences: { activateAndOpenWindow("preferences", openWindow: openWindow) }
             )
         } else if let startupError = session.startupError {
             Text("Startup failed: \(startupError)")
@@ -83,12 +94,12 @@ private struct BlawbyCommands: Commands {
     var body: some Commands {
         CommandMenu("Blawby") {
             Button("Open Dashboard") {
-                openWindow(id: "main-dashboard")
+                activateAndOpenWindow("main-dashboard", openWindow: openWindow)
             }
             .keyboardShortcut("d")
 
             Button("Preferences…") {
-                openWindow(id: "preferences")
+                activateAndOpenWindow("preferences", openWindow: openWindow)
             }
             .keyboardShortcut(",", modifiers: [.command])
 
@@ -102,6 +113,13 @@ private struct BlawbyCommands: Commands {
                 session.toggleSync()
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
+
+            Divider()
+
+            Button("Quit Blawby") {
+                NSApplication.shared.terminate(nil)
+            }
+            .keyboardShortcut("q", modifiers: [.command])
         }
     }
 }

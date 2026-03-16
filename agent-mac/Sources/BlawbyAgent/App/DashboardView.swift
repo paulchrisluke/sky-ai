@@ -6,7 +6,7 @@ struct DashboardView: View {
     let onToggleSync: () -> Void
     let onOpenPreferences: () -> Void
 
-    @State private var selectedSourceId: String?
+    @State private var selection: SidebarSelection?
     @State private var sourceSearch = ""
     @State private var expandedMailAccounts: Set<String> = []
     @State private var expandedCalendarAccounts: Set<String> = []
@@ -14,8 +14,14 @@ struct DashboardView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selectedSourceId) {
-                Section("Mailboxes") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    sidebarSectionHeader("Smart Mailboxes")
+                    ForEach(visibleSmartMailboxKinds, id: \.rawValue) { kind in
+                        smartMailboxButton(kind: kind)
+                    }
+
+                    sidebarSectionHeader("Mailboxes")
                     ForEach(mailAccountGroups) { group in
                         DisclosureGroup(
                             isExpanded: Binding(
@@ -29,21 +35,23 @@ struct DashboardView: View {
                                 }
                             )
                         ) {
-                            ForEach(group.sources, id: \.id) { source in
-                                SourceSidebarRow(source: source, titleOverride: mailboxName(for: source))
-                                    .tag(source.id)
+                            VStack(spacing: 2) {
+                                ForEach(group.sources, id: \.id) { source in
+                                    sourceButton(source: source, titleOverride: mailboxName(for: source))
+                                }
                             }
+                            .padding(.leading, 12)
                         } label: {
                             SidebarAccountLabel(
                                 title: group.accountName,
                                 systemImage: "person.crop.circle",
                                 totalsText: groupTotalsText(group.sources)
                             )
+                            .padding(.horizontal, 10)
                         }
                     }
-                }
 
-                Section("Calendars") {
+                    sidebarSectionHeader("Calendars")
                     ForEach(calendarAccountGroups) { group in
                         DisclosureGroup(
                             isExpanded: Binding(
@@ -57,21 +65,23 @@ struct DashboardView: View {
                                 }
                             )
                         ) {
-                            ForEach(group.sources, id: \.id) { source in
-                                SourceSidebarRow(source: source)
-                                    .tag(source.id)
+                            VStack(spacing: 2) {
+                                ForEach(group.sources, id: \.id) { source in
+                                    sourceButton(source: source)
+                                }
                             }
+                            .padding(.leading, 12)
                         } label: {
                             SidebarAccountLabel(
                                 title: group.accountName,
                                 systemImage: "person.crop.circle",
                                 totalsText: groupTotalsText(group.sources)
                             )
+                            .padding(.horizontal, 10)
                         }
                     }
-                }
 
-                Section("Messages") {
+                    sidebarSectionHeader("Messages")
                     ForEach(messageAccountGroups) { group in
                         DisclosureGroup(
                             isExpanded: Binding(
@@ -85,24 +95,36 @@ struct DashboardView: View {
                                 }
                             )
                         ) {
-                            ForEach(group.sources, id: \.id) { source in
-                                SourceSidebarRow(source: source)
-                                    .tag(source.id)
+                            VStack(spacing: 2) {
+                                ForEach(group.sources, id: \.id) { source in
+                                    sourceButton(source: source)
+                                }
                             }
+                            .padding(.leading, 12)
                         } label: {
                             SidebarAccountLabel(
                                 title: group.accountName,
                                 systemImage: "person.crop.circle",
                                 totalsText: groupTotalsText(group.sources)
                             )
+                            .padding(.horizontal, 10)
                         }
                     }
                 }
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle("Sources")
             .searchable(text: $sourceSearch, prompt: "Filter sources")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } detail: {
-            if let source = selectedSource {
+            if let smartKind = selectedSmartMailboxKind {
+                SmartMailboxDetailView(
+                    kind: smartKind,
+                    sources: smartMailboxSources(for: smartKind),
+                    lastSync: state.lastSync
+                )
+            } else if let source = selectedSource {
                 SourceDetailView(
                     source: source,
                     sourcePath: sourcePath(for: source),
@@ -123,8 +145,12 @@ struct DashboardView: View {
             }
         }
         .onAppear {
-            if selectedSourceId == nil, let first = filteredSources.first {
-                selectedSourceId = first.id
+            if selection == nil {
+                if visibleSmartMailboxKinds.contains(.allInboxes) {
+                    selection = .smart(SmartMailboxKind.allInboxes.rawValue)
+                } else if let first = filteredSources.first {
+                    selection = .source(first.id)
+                }
             }
             expandedMailAccounts = Set(mailAccountGroups.map(\.id))
             expandedCalendarAccounts = Set(calendarAccountGroups.map(\.id))
@@ -139,10 +165,15 @@ struct DashboardView: View {
             expandedMessageAccounts = Set(messageAccountGroups.map(\.id))
         }
         .onChange(of: filteredSources.map(\.id)) { ids in
-            if let selectedSourceId, ids.contains(selectedSourceId) {
-                return
+            if case let .source(selectedSourceId)? = selection, ids.contains(selectedSourceId) {
+                // Keep valid source selection.
+            } else if case .smart? = selection {
+                // Keep smart mailbox selection.
+            } else if visibleSmartMailboxKinds.contains(.allInboxes) {
+                selection = .smart(SmartMailboxKind.allInboxes.rawValue)
+            } else {
+                selection = ids.first.map(SidebarSelection.source)
             }
-            self.selectedSourceId = ids.first
             expandedMailAccounts = Set(mailAccountGroups.map(\.id))
             expandedCalendarAccounts = Set(calendarAccountGroups.map(\.id))
             expandedMessageAccounts = Set(messageAccountGroups.map(\.id))
@@ -159,6 +190,44 @@ struct DashboardView: View {
                 }
             }
         }
+    }
+
+    private func sidebarSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 10)
+    }
+
+    private func smartMailboxButton(kind: SmartMailboxKind) -> some View {
+        Button {
+            selection = .smart(kind.rawValue)
+        } label: {
+            SmartMailboxSidebarRow(
+                kind: kind,
+                count: smartMailboxSources(for: kind).count
+            )
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(selection == .smart(kind.rawValue) ? Color.accentColor.opacity(0.18) : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
+    }
+
+    private func sourceButton(source: ConnectedSource, titleOverride: String? = nil) -> some View {
+        Button {
+            selection = .source(source.id)
+        } label: {
+            SourceSidebarRow(source: source, titleOverride: titleOverride)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(selection == .source(source.id) ? Color.accentColor.opacity(0.18) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
     }
 
     private var sourceSearchQuery: String {
@@ -180,8 +249,19 @@ struct DashboardView: View {
     }
 
     private var selectedSource: ConnectedSource? {
-        guard let selectedSourceId else { return nil }
+        guard case let .source(selectedSourceId)? = selection else { return nil }
         return activeSources.first { $0.id == selectedSourceId }
+    }
+
+    private var selectedSmartMailboxKind: SmartMailboxKind? {
+        guard case let .smart(rawValue)? = selection else { return nil }
+        return SmartMailboxKind(rawValue: rawValue)
+    }
+
+    private var visibleSmartMailboxKinds: [SmartMailboxKind] {
+        let query = sourceSearchQuery.lowercased()
+        if query.isEmpty { return SmartMailboxKind.allCases }
+        return SmartMailboxKind.allCases.filter { $0.displayName.lowercased().contains(query) }
     }
 
     private var mailAccountGroups: [AccountGroup] {
@@ -253,6 +333,17 @@ struct DashboardView: View {
         }
     }
 
+    private func smartMailboxSources(for kind: SmartMailboxKind) -> [ConnectedSource] {
+        switch kind {
+        case .allInboxes:
+            return activeSources.filter { $0.sourceType == "mail" }
+        case .needsAction:
+            return activeSources.filter { $0.status == "error" || $0.status == "pending" || $0.status == "syncing" }
+        case .errors:
+            return activeSources.filter { $0.status == "error" }
+        }
+    }
+
     private func sortPriority(_ status: String) -> Int {
         switch status {
         case "error": return 0
@@ -260,6 +351,33 @@ struct DashboardView: View {
         case "pending": return 2
         case "current": return 3
         default: return 4
+        }
+    }
+}
+
+private enum SidebarSelection: Hashable {
+    case smart(String)
+    case source(String)
+}
+
+private enum SmartMailboxKind: String, CaseIterable {
+    case allInboxes = "all_inboxes"
+    case needsAction = "needs_action"
+    case errors = "errors"
+
+    var displayName: String {
+        switch self {
+        case .allInboxes: return "All Inboxes"
+        case .needsAction: return "Needs Action"
+        case .errors: return "Errors"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .allInboxes: return "tray.full"
+        case .needsAction: return "exclamationmark.bubble"
+        case .errors: return "xmark.octagon"
         }
     }
 }
@@ -283,6 +401,23 @@ private struct SidebarAccountLabel: View {
                 .lineLimit(1)
             Spacer()
             Text(totalsText)
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+private struct SmartMailboxSidebarRow: View {
+    let kind: SmartMailboxKind
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: kind.iconName)
+                .foregroundColor(.secondary)
+            Text(kind.displayName)
+            Spacer()
+            Text("\(count)")
                 .font(.caption.monospacedDigit())
                 .foregroundColor(.secondary)
         }
@@ -328,6 +463,212 @@ private struct SourceSidebarRow: View {
         default: return .secondary
         }
     }
+}
+
+private struct SmartMailboxDetailView: View {
+    let kind: SmartMailboxKind
+    let sources: [ConnectedSource]
+    let lastSync: Date?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Smart Mailboxes > \(kind.displayName)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack {
+                Label(kind.displayName, systemImage: kind.iconName)
+                    .font(.title2.weight(.semibold))
+                Spacer()
+                Text("\(sources.count) sources")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Aggregate Sync Progress")
+                    .font(.headline)
+                ProgressView(value: aggregateProgressValue)
+                    .progressViewStyle(.linear)
+                Text("\(aggregateSynced) of \(aggregateTotal) synced")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
+            Divider()
+
+            if sources.isEmpty {
+                Text("No sources match this smart mailbox.")
+                    .foregroundColor(.secondary)
+            } else if kind == .allInboxes {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Folder Aggregates")
+                        .font(.headline)
+                    ForEach(allInboxFolderGroups) { folder in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Label(folder.folderName, systemImage: "tray")
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text("\(folder.synced)/\(folder.total)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.bottom, 2)
+
+                            ForEach(folder.accounts) { account in
+                                HStack(spacing: 10) {
+                                    Image(systemName: "person.crop.circle")
+                                        .foregroundColor(.secondary)
+                                    Text(account.accountId)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    Text("\(account.synced)/\(account.total)")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.leading, 20)
+                            }
+                        }
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Included Sources")
+                        .font(.headline)
+                    ForEach(sources, id: \.id) { source in
+                        HStack(spacing: 10) {
+                            Image(systemName: iconName(for: source.sourceType))
+                                .foregroundColor(statusColor(for: source.status))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(source.sourceName)
+                                Text(source.accountId)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Text("\(source.totalSynced)/\(max(source.totalEstimated, source.totalSynced))")
+                                .font(.caption.monospacedDigit())
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+            detailRow(label: "Last Sync", value: relativeSyncText)
+            Spacer()
+        }
+        .padding(24)
+    }
+
+    private var aggregateSynced: Int {
+        sources.reduce(0) { $0 + max(0, $1.totalSynced) }
+    }
+
+    private var aggregateTotal: Int {
+        sources.reduce(0) { $0 + max(0, max($1.totalEstimated, $1.totalSynced)) }
+    }
+
+    private var aggregateProgressValue: Double {
+        guard aggregateTotal > 0 else { return 0 }
+        return min(1.0, max(0.0, Double(aggregateSynced) / Double(aggregateTotal)))
+    }
+
+    private var allInboxFolderGroups: [FolderAggregateGroup] {
+        let mailSources = sources.filter { $0.sourceType == "mail" }
+        let grouped = Dictionary(grouping: mailSources) { source in
+            mailboxName(for: source)
+        }
+
+        var folderResults: [FolderAggregateGroup] = []
+        for (folderName, folderSources) in grouped {
+            let accountGroups = Dictionary(grouping: folderSources, by: \.accountId)
+            var accountRows: [FolderAggregateAccount] = []
+            accountRows.reserveCapacity(accountGroups.count)
+
+            for (accountId, accountSources) in accountGroups {
+                let synced = accountSources.reduce(0) { $0 + max(0, $1.totalSynced) }
+                let total = accountSources.reduce(0) { $0 + max(0, max($1.totalEstimated, $1.totalSynced)) }
+                accountRows.append(FolderAggregateAccount(id: accountId, accountId: accountId, synced: synced, total: total))
+            }
+            accountRows.sort { $0.accountId.localizedCaseInsensitiveCompare($1.accountId) == .orderedAscending }
+
+            let synced = accountRows.reduce(0) { $0 + $1.synced }
+            let total = accountRows.reduce(0) { $0 + $1.total }
+            folderResults.append(
+                FolderAggregateGroup(
+                    id: folderName,
+                    folderName: folderName,
+                    synced: synced,
+                    total: total,
+                    accounts: accountRows
+                )
+            )
+        }
+
+        return folderResults.sorted { $0.folderName.localizedCaseInsensitiveCompare($1.folderName) == .orderedAscending }
+    }
+
+    private func mailboxName(for source: ConnectedSource) -> String {
+        let parts = source.id.split(separator: ":", omittingEmptySubsequences: false)
+        if parts.count >= 3 {
+            return String(parts.dropFirst(2).joined(separator: ":"))
+        }
+        return source.sourceName
+    }
+
+    private var relativeSyncText: String {
+        guard let lastSync else { return "Never" }
+        return lastSync.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+    }
+
+    private func iconName(for sourceType: String) -> String {
+        switch sourceType {
+        case "mail": return "envelope.fill"
+        case "calendar": return "calendar"
+        case "messages": return "message.fill"
+        default: return "circle.fill"
+        }
+    }
+
+    private func statusColor(for status: String) -> Color {
+        switch status {
+        case "syncing": return .blue
+        case "current": return .green
+        case "error": return .red
+        default: return .secondary
+        }
+    }
+
+    @ViewBuilder
+    private func detailRow(label: String, value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .frame(width: 110, alignment: .leading)
+                .foregroundColor(.secondary)
+            Text(value)
+                .textSelection(.enabled)
+            Spacer()
+        }
+        .font(.body)
+    }
+}
+
+private struct FolderAggregateGroup: Identifiable {
+    let id: String
+    let folderName: String
+    let synced: Int
+    let total: Int
+    let accounts: [FolderAggregateAccount]
+}
+
+private struct FolderAggregateAccount: Identifiable {
+    let id: String
+    let accountId: String
+    let synced: Int
+    let total: Int
 }
 
 private struct SourceDetailView: View {

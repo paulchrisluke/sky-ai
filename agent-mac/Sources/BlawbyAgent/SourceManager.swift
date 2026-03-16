@@ -189,12 +189,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
     }
 
     private func nextSourceIdsForCycle() -> [String] {
-        if !dirtySourceIds.isEmpty {
-            let ids = Array(dirtySourceIds).sorted()
-            dirtySourceIds.removeAll()
-            return ids
-        }
-        return localStore.connectedSources()
+        let baselineIds = localStore.connectedSources()
             .filter { source in
                 guard source.enabled else { return false }
                 
@@ -210,6 +205,14 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                 return false
             }
             .map { $0.id }
+        
+        if dirtySourceIds.isEmpty {
+            return baselineIds
+        }
+        
+        let dirtyIds = dirtySourceIds
+        dirtySourceIds.removeAll()
+        return Array(Set(baselineIds).union(dirtyIds)).sorted()
     }
 
     private func isVirtualMailbox(_ name: String) -> Bool {
@@ -366,7 +369,15 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
         try await publishMailPayloads(result: processing, accountId: parsed.accountId)
         logger.info("published payloads for \(processing.rawMessages.count) messages for \(source.sourceName)")
 
-        let newestDate = batch.map(\.date).max() ?? activeCursor
+        let batchNewestDate = batch.map(\.date).max() ?? activeCursor
+        let newestDate: Date
+        if batchNewestDate <= activeCursor {
+            // Guard against cursor stalls when a source repeatedly returns a boundary-timestamp message.
+            newestDate = activeCursor.addingTimeInterval(1)
+            logger.warning("mail cursor stall detected for \(source.sourceName); forcing cursor advance from \(activeCursor) to \(newestDate)")
+        } else {
+            newestDate = batchNewestDate
+        }
         let newSyncedTotal = source.totalSynced + processing.rawMessages.count
 
         localStore.updateConnectedSourceSync(
@@ -396,13 +407,12 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
         let end = Date()
         let events = try await calendarWatcher.fetchEvents(calendarId: calendarId, since: start, until: end)
         if events.isEmpty {
-            let finalStatus = (source.totalSynced >= source.totalEstimated && source.totalEstimated > 0) ? "current" : "pending"
             localStore.updateConnectedSourceSync(
                 id: source.id,
-                syncCursor: source.syncCursor,
+                syncCursor: end,
                 totalEstimated: source.totalEstimated,
                 totalSynced: source.totalSynced,
-                status: finalStatus,
+                status: "current",
                 lastError: nil
             )
             return
@@ -434,12 +444,13 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             }
         }
 
+        let nextEstimated = max(source.totalEstimated, source.totalSynced + sentCount)
         localStore.updateConnectedSourceSync(
             id: source.id,
             syncCursor: newestDate,
-            totalEstimated: source.totalEstimated,
+            totalEstimated: nextEstimated,
             totalSynced: source.totalSynced + sentCount,
-            status: "syncing",
+            status: "current",
             lastError: nil
         )
     }
@@ -480,10 +491,6 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
         )
 
         try await webSocketPublisher.send(type: "chunks", payload: try encodeJSON(chunksPayload))
-
-        for messageId in Set(rawMessages.map(\.messageId)) {
-            localStore.markMessageSent(messageId)
-        }
     }
 
     private func parseMailSourceId(_ id: String) -> (accountId: String, mailbox: String)? {

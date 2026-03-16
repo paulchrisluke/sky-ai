@@ -118,6 +118,61 @@ export async function ingestCalendarEventsCore(
   return { upserted, skipped };
 }
 
+export async function ingestMacMessagesCore(
+  env: IngestCoreEnv,
+  payload: JsonRecord
+): Promise<{ upserted: number; skipped: number }> {
+  const workspaceId = stringOr(payload.workspaceId) || 'default';
+  const accountId = stringOr(payload.accountId)?.toLowerCase();
+  const messages = Array.isArray(payload.messages) ? (payload.messages as JsonRecord[]) : [];
+
+  if (!accountId) throw new Error('accountId is required');
+  if (messages.length === 0) return { upserted: 0, skipped: 0 };
+
+  await ensureWorkspace(env, workspaceId);
+
+  let upserted = 0;
+  let skipped = 0;
+  for (const item of messages.slice(0, 1000)) {
+    const sourceRowId = numberOr(item.id);
+    const text = stringOr(item.text);
+    const sender = stringOr(item.sender);
+    const sentAt = stringOr(item.sentAt);
+
+    if (!sourceRowId || !text || !sentAt) {
+      skipped += 1;
+      continue;
+    }
+
+    await env.SKY_DB
+      .prepare(
+        `INSERT INTO imessage_messages
+         (id, workspace_id, account_id, source_row_id, sender, body_text, sent_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT(workspace_id, account_id, source_row_id)
+         DO UPDATE SET
+           sender = excluded.sender,
+           body_text = excluded.body_text,
+           sent_at = excluded.sent_at,
+           updated_at = CURRENT_TIMESTAMP`
+      )
+      .bind(
+        crypto.randomUUID(),
+        workspaceId,
+        accountId,
+        sourceRowId,
+        sender,
+        text,
+        sentAt
+      )
+      .run();
+
+    upserted += 1;
+  }
+
+  return { upserted, skipped };
+}
+
 export async function ingestMailThreadCore(
   env: IngestCoreEnv,
   payload: JsonRecord

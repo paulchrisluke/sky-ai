@@ -2,11 +2,28 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$HOME/Library/Developer/Xcode/DerivedData/BlawbyAgent-LocalInstall}"
+
+if [[ ! -f ./.env ]]; then
+  echo "Missing ./agent-mac/.env"
+  echo "Copy .env.example to .env."
+  exit 1
+fi
+
+set -a
+# shellcheck disable=SC1091
+source ./.env
+set +a
 
 xcodegen generate
-xcodebuild -project BlawbyAgent.xcodeproj -scheme BlawbyAgent -configuration Debug build
+xcodebuild \
+  -project BlawbyAgent.xcodeproj \
+  -scheme BlawbyAgent \
+  -configuration Debug \
+  -derivedDataPath "$DERIVED_DATA_PATH" \
+  build
 
-APP="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Debug/BlawbyAgent.app" -type d | tail -n 1)"
+APP="$DERIVED_DATA_PATH/Build/Products/Debug/BlawbyAgent.app"
 if [[ -z "${APP}" || ! -d "${APP}" ]]; then
   echo "Could not find built BlawbyAgent.app in DerivedData"
   exit 1
