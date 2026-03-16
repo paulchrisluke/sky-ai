@@ -111,9 +111,7 @@ private struct DashboardRootView: View {
         if let sourceManager = session.sourceManager {
             DashboardView(
                 sourceManager: sourceManager,
-                state: session.menuState,
-                onToggleSync: { session.toggleSync() },
-                onOpenPreferences: { activateAndOpenWindow("preferences", openWindow: openWindow) }
+                state: session.menuState
             )
             .frame(minWidth: 960, minHeight: 620)
         } else if let startupError = session.startupError {

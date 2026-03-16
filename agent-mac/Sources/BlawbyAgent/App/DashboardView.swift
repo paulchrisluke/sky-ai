@@ -3,8 +3,6 @@ import SwiftUI
 struct DashboardView: View {
     @ObservedObject var sourceManager: SourceManager
     @ObservedObject var state: MenuBarState
-    let onToggleSync: () -> Void
-    let onOpenPreferences: () -> Void
 
     @State private var selection: SidebarSelection?
     @State private var sourceSearch = ""
@@ -131,17 +129,10 @@ struct DashboardView: View {
                     lastSync: state.lastSync
                 )
             } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "tray")
-                        .font(.system(size: 30))
-                        .foregroundColor(.secondary)
-                    Text("Select a Source")
-                        .font(.headline)
-                    Text("Choose a source from the sidebar to inspect status and sync progress.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                DashboardOverviewView(
+                    sources: activeSources,
+                    lastSync: state.lastSync
+                )
             }
         }
         .onAppear {
@@ -177,18 +168,6 @@ struct DashboardView: View {
             expandedMailAccounts = Set(mailAccountGroups.map(\.id))
             expandedCalendarAccounts = Set(calendarAccountGroups.map(\.id))
             expandedMessageAccounts = Set(messageAccountGroups.map(\.id))
-        }
-        .toolbar {
-            ToolbarItemGroup {
-                Button(state.syncActivated ? "Pause Sync" : "Resume Sync") {
-                    onToggleSync()
-                }
-                .labelStyle(.titleAndIcon)
-
-                Button("Preferences") {
-                    onOpenPreferences()
-                }
-            }
         }
     }
 
@@ -352,6 +331,111 @@ struct DashboardView: View {
         case "current": return 3
         default: return 4
         }
+    }
+}
+
+private struct DashboardOverviewView: View {
+    let sources: [ConnectedSource]
+    let lastSync: Date?
+
+    private var syncedTotal: Int {
+        sources.reduce(0) { $0 + max(0, $1.totalSynced) }
+    }
+
+    private var estimatedTotal: Int {
+        sources.reduce(0) { $0 + max(0, max($1.totalEstimated, $1.totalSynced)) }
+    }
+
+    private var progressValue: Double {
+        guard estimatedTotal > 0 else { return 0 }
+        return min(1, max(0, Double(syncedTotal) / Double(estimatedTotal)))
+    }
+
+    private var groupedStatuses: [(label: String, count: Int)] {
+        let labels = ["error", "syncing", "pending", "current"]
+        return labels.map { label in
+            (label.capitalized, sources.filter { $0.status == label }.count)
+        }
+    }
+
+    private var needsAttention: [ConnectedSource] {
+        sources
+            .filter { $0.status != "current" }
+            .sorted { lhs, rhs in
+                let left = max(0, max(lhs.totalEstimated, lhs.totalSynced) - lhs.totalSynced)
+                let right = max(0, max(rhs.totalEstimated, rhs.totalSynced) - rhs.totalSynced)
+                return left > right
+            }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    Text("Overview")
+                        .font(.title2.weight(.semibold))
+                    Spacer()
+                    if let lastSync {
+                        Text("Last sync \(lastSync, style: .relative)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Global Sync Progress")
+                        .font(.headline)
+                    ProgressView(value: progressValue)
+                        .progressViewStyle(.linear)
+                    Text("\(syncedTotal) of \(estimatedTotal) synced across \(sources.count) sources")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Status Breakdown")
+                        .font(.headline)
+                    ForEach(groupedStatuses, id: \.label) { row in
+                        HStack {
+                            Text(row.label)
+                            Spacer()
+                            Text("\(row.count)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Needs Attention")
+                        .font(.headline)
+                    if needsAttention.isEmpty {
+                        Text("All sources are current.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(needsAttention, id: \.id) { source in
+                            HStack {
+                                Text(source.sourceName)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text(source.status.capitalized)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
