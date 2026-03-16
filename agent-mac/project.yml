@@ -39,7 +39,7 @@ targets:
         CFBundleIdentifier: com.blawby.BlawbyAgent
         CFBundleName: BlawbyAgent
         SUFeedURL: "https://downloads.blawby.com/appcast.xml"
-        SUPublicEDKey: "BgQknw+i5sx9mxXxTrThSXbXyA7BE1hYTZQV0OWFe38="
+        SUPublicEDKey: "0IC6N25L3FuF6YeIUQUPXTEx5YA9LGKQvrz8aUkukbw="
         SUEnableAutomaticChecks: true
     dependencies:
       - package: GRDB
