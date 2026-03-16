@@ -161,6 +161,26 @@ Default output location:
 
 - `dist/macos/<CFBundleShortVersionString>+<CFBundleVersion>/`
 
+### Sparkle Auto-Updates (Direct Distribution)
+
+`agent-mac` now includes Sparkle and exposes `Check for Updates…` in the `Blawby` command menu.
+
+Before shipping auto-updates:
+
+1. Host release artifacts (`.zip`/`.dmg`) at a stable downloads URL.
+2. Generate Sparkle appcast from your release folder:
+
+```bash
+RELEASE_DIR="dist/macos/1.0+1" \
+DOWNLOAD_URL_PREFIX="https://downloads.blawby.com/releases" \
+SPARKLE_PRIVATE_KEY="$HOME/.config/blawby/sparkle_private_ed25519.pem" \
+./scripts/generate-sparkle-appcast.sh
+```
+
+3. Publish generated `appcast.xml` to your feed URL (default in app plist):
+   - `https://downloads.blawby.com/appcast.xml`
+4. Keep `SUFeedURL` in `agent-mac/BlawbyAgent/Info.plist` aligned with your hosted appcast URL.
+
 ## Secrets Clarification
 
 - `wrangler secret put` is encrypted at rest by Cloudflare.

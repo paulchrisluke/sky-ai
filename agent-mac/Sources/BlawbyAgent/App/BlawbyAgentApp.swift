@@ -1,8 +1,10 @@
 import SwiftUI
+import Sparkle
 
 @main
 struct BlawbyAgentApp: App {
     @StateObject private var session = AppSession()
+    @StateObject private var updates = SparkleUpdateController()
 
     var body: some Scene {
         MenuBarExtra("Blawby", systemImage: "bolt.horizontal.circle.fill") {
@@ -19,7 +21,7 @@ struct BlawbyAgentApp: App {
         }
 
         .commands {
-            BlawbyCommands(session: session)
+            BlawbyCommands(session: session, updates: updates)
         }
     }
 }
@@ -75,6 +77,7 @@ private struct DashboardRootView: View {
 
 private struct BlawbyCommands: Commands {
     @ObservedObject var session: AppSession
+    @ObservedObject var updates: SparkleUpdateController
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
@@ -89,6 +92,10 @@ private struct BlawbyCommands: Commands {
             }
             .keyboardShortcut(",", modifiers: [.command])
 
+            Button("Check for Updates…") {
+                updates.checkForUpdates()
+            }
+
             Divider()
 
             Button(session.menuState.syncActivated ? "Pause Sync" : "Resume Sync") {
@@ -96,5 +103,22 @@ private struct BlawbyCommands: Commands {
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
         }
+    }
+}
+
+@MainActor
+final class SparkleUpdateController: ObservableObject {
+    private let updaterController: SPUStandardUpdaterController
+
+    init() {
+        self.updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
+    }
+
+    func checkForUpdates() {
+        updaterController.checkForUpdates(nil)
     }
 }

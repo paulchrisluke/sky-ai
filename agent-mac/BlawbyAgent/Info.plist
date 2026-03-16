@@ -26,5 +26,9 @@
 	<string>Blawby reads your calendar to keep your schedule current</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Blawby uses Contacts to enrich email data</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://downloads.blawby.com/appcast.xml</string>
 </dict>
 </plist>

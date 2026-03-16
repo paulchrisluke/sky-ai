@@ -10,13 +10,15 @@ let package = Package(
         .executable(name: "BlawbyAgent", targets: ["BlawbyAgent"])
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.0.0")
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.0.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
     ],
     targets: [
         .executableTarget(
             name: "BlawbyAgent",
             dependencies: [
-                .product(name: "GRDB", package: "GRDB.swift")
+                .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "Sparkle", package: "Sparkle")
             ],
             path: "Sources/BlawbyAgent",
             linkerSettings: [
