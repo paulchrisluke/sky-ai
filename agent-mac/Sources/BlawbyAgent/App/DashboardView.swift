@@ -3,6 +3,8 @@ import SwiftUI
 struct DashboardView: View {
     @ObservedObject var sourceManager: SourceManager
     @ObservedObject var state: MenuBarState
+    let onToggleSync: () -> Void
+    let onOpenPreferences: () -> Void
 
     @State private var selectedSourceId: String?
     @State private var sourceSearch = ""
@@ -48,6 +50,18 @@ struct DashboardView: View {
                 return
             }
             self.selectedSourceId = ids.first
+        }
+        .toolbar {
+            ToolbarItemGroup {
+                Button(state.syncActivated ? "Pause Sync" : "Resume Sync") {
+                    onToggleSync()
+                }
+                .labelStyle(.titleAndIcon)
+
+                Button("Preferences") {
+                    onOpenPreferences()
+                }
+            }
         }
     }
 
@@ -141,7 +155,9 @@ private struct SourceDetailView: View {
                 Label(source.sourceName, systemImage: iconName)
                     .font(.title2.weight(.semibold))
                 Spacer()
-                StatusBadge(status: source.status)
+                Text(source.status.capitalized)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(statusColor)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -188,6 +204,15 @@ private struct SourceDetailView: View {
         }
     }
 
+    private var statusColor: Color {
+        switch source.status {
+        case "syncing": return .blue
+        case "current": return .green
+        case "error": return .red
+        default: return .secondary
+        }
+    }
+
     @ViewBuilder
     private func detailRow(label: String, value: String, color: Color = .primary) -> some View {
         HStack(alignment: .top) {
@@ -200,28 +225,5 @@ private struct SourceDetailView: View {
             Spacer()
         }
         .font(.body)
-    }
-}
-
-private struct StatusBadge: View {
-    let status: String
-
-    var body: some View {
-        Text(status.capitalized)
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(backgroundColor.opacity(0.18))
-            .foregroundColor(backgroundColor)
-            .clipShape(Capsule())
-    }
-
-    private var backgroundColor: Color {
-        switch status {
-        case "syncing": return .blue
-        case "current": return .green
-        case "error": return .red
-        default: return .secondary
-        }
     }
 }

@@ -52,10 +52,16 @@ private struct MenuBarRootView: View {
 
 private struct DashboardRootView: View {
     @ObservedObject var session: AppSession
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         if let sourceManager = session.sourceManager {
-            DashboardView(sourceManager: sourceManager, state: session.menuState)
+            DashboardView(
+                sourceManager: sourceManager,
+                state: session.menuState,
+                onToggleSync: { session.toggleSync() },
+                onOpenPreferences: { openWindow(id: "preferences") }
+            )
         } else if let startupError = session.startupError {
             Text("Startup failed: \(startupError)")
                 .foregroundColor(.red)

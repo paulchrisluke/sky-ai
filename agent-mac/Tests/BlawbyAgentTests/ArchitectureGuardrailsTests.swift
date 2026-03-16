@@ -54,6 +54,14 @@ final class ArchitectureGuardrailsTests: XCTestCase {
         }
     }
 
+    func testDashboardUsesSystemToolbarAndAvoidsCustomBackgroundChrome() throws {
+        let file = repoRoot.appendingPathComponent("Sources/BlawbyAgent/App/DashboardView.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(text.contains(".toolbar"), "Dashboard should expose actions via native toolbar APIs.")
+        XCTAssertTrue(text.contains(".searchable("), "Dashboard should keep native searchable placement.")
+        XCTAssertFalse(text.contains(".background("), "Dashboard should avoid custom background chrome overlays.")
+    }
+
     func testLegacyLifecycleFilesRemainDeleted() {
         let deletedPaths = [
             "Sources/BlawbyAgent/main.swift",
