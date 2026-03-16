@@ -66,8 +66,8 @@ private func configureWindow(_ window: NSWindow, for id: String) {
     window.collectionBehavior.insert(.moveToActiveSpace)
     window.styleMask.insert(.resizable)
     window.styleMask.remove(.fullSizeContentView)
-    window.titlebarAppearsTransparent = false
-    window.titleVisibility = .visible
+    window.titlebarAppearsTransparent = true
+    window.titleVisibility = .hidden
     window.toolbarStyle = .automatic
 
     if id == "main-dashboard", window.title == "Blawby Dashboard" {
