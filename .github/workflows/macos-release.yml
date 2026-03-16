@@ -3,11 +3,153 @@ name: macOS Release
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "main"
     tags:
       - "v*"
 
 jobs:
+  publish-test-update:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-14
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    env:
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_BUCKET: sky-ai-artifacts-prod
+      DOWNLOAD_URL_PREFIX: https://downloads.blawby.com/
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          test -n "${SPARKLE_PRIVATE_KEY}"
+          test -n "${CLOUDFLARE_API_TOKEN}"
+          test -n "${CLOUDFLARE_ACCOUNT_ID}"
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          set -euo pipefail
+          cd agent-mac
+          xcodegen generate
+
+      - name: Build unsigned app bundle
+        run: |
+          set -euo pipefail
+          DERIVED_DATA="$RUNNER_TEMP/DerivedData-BlawbyAgent"
+          BUILD_NUMBER="${GITHUB_RUN_NUMBER}"
+
+          xcodebuild \
+            -project agent-mac/BlawbyAgent.xcodeproj \
+            -scheme BlawbyAgent \
+            -configuration Debug \
+            -derivedDataPath "$DERIVED_DATA" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+          APP_PATH="$DERIVED_DATA/Build/Products/Debug/BlawbyAgent.app"
+          test -d "$APP_PATH"
+
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")
+          RELEASE_DIR="$PWD/dist/macos/${VERSION}+${BUILD}"
+          ZIP_NAME="BlawbyAgent-${VERSION}+${BUILD}.zip"
+
+          mkdir -p "$RELEASE_DIR"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$RELEASE_DIR/$ZIP_NAME"
+
+          echo "derived_data=$DERIVED_DATA" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "release_dir=$RELEASE_DIR" >> "$GITHUB_OUTPUT"
+          echo "zip_name=$ZIP_NAME" >> "$GITHUB_OUTPUT"
+        id: build
+
+      - name: Locate Sparkle tools
+        id: sparkle
+        run: |
+          set -euo pipefail
+          DERIVED_DATA='${{ steps.build.outputs.derived_data }}'
+          TOOLS_DIR=$(find "$DERIVED_DATA" -path "*/SourcePackages/artifacts/sparkle/Sparkle/bin" -type d | head -n 1)
+          test -n "$TOOLS_DIR"
+          test -x "$TOOLS_DIR/generate_appcast"
+          echo "tools_dir=$TOOLS_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Generate signed appcast
+        run: |
+          set -euo pipefail
+          RELEASE_DIR='${{ steps.build.outputs.release_dir }}'
+          TOOLS_DIR='${{ steps.sparkle.outputs.tools_dir }}'
+          KEY_FILE="$RUNNER_TEMP/sparkle_private_key.txt"
+
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+
+          "$TOOLS_DIR/generate_appcast" \
+            --ed-key-file "$KEY_FILE" \
+            --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
+            "$RELEASE_DIR"
+
+          rg -n "sparkle:edSignature" "$RELEASE_DIR/appcast.xml"
+
+      - name: Upload release files to R2
+        run: |
+          set -euo pipefail
+          RELEASE_DIR='${{ steps.build.outputs.release_dir }}'
+          ZIP_NAME='${{ steps.build.outputs.zip_name }}'
+
+          npx wrangler r2 object put "$R2_BUCKET/appcast.xml" \
+            --file "$RELEASE_DIR/appcast.xml" \
+            --content-type application/xml \
+            --remote
+
+          npx wrangler r2 object put "$R2_BUCKET/$ZIP_NAME" \
+            --file "$RELEASE_DIR/$ZIP_NAME" \
+            --remote
+
+      - name: Verify public appcast URL
+        run: |
+          set -euo pipefail
+          curl -fsSL https://downloads.blawby.com/appcast.xml > "$RUNNER_TEMP/appcast.xml"
+          rg -n "<title>BlawbyAgent</title>" "$RUNNER_TEMP/appcast.xml"
+          rg -n "sparkle:edSignature" "$RUNNER_TEMP/appcast.xml"
+
+      - name: Upload build artifacts to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: blawby-macos-test-${{ steps.build.outputs.version }}+${{ steps.build.outputs.build }}
+          path: |
+            ${{ steps.build.outputs.release_dir }}/*.zip
+            ${{ steps.build.outputs.release_dir }}/appcast.xml
+
   release-macos:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-14
     timeout-minutes: 90
     permissions:
