@@ -484,6 +484,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             }
         )
 
+        logger.info("chunks payload sample: subject='\(chunksPayload.messages.first?.subject ?? "nil")' bodyLen=\(chunksPayload.messages.first?.bodyText.count ?? 0)")
         try await webSocketPublisher.send(type: "chunks", payload: try encodeJSON(chunksPayload))
     }
 

@@ -307,6 +307,8 @@ final class EmlxReader: @unchecked Sendable {
             return nil
         }
         let body = decodeMIMEBody(headers: headers, body: bodyRaw).prefix(3000)
+        let bodyText = String(body)
+        logger.info("emlx parsed: subject='\(subject)' bodyLen=\(bodyText.count) messageId='\(messageId)'")
 
         return RawMessage(
             messageId: messageId,
@@ -315,7 +317,7 @@ final class EmlxReader: @unchecked Sendable {
             from: from,
             to: [],
             date: finalDate,
-            bodyText: String(body),
+            bodyText: bodyText,
             mailbox: mailbox
         )
     }

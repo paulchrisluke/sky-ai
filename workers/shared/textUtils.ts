@@ -27,7 +27,7 @@ export function cleanEmailBody(raw: string): string {
       /^(Return-Path|Received|MIME-Version|Content-Type|Content-Transfer-Encoding|X-[\w-]+|Message-ID|Date|From|To|Cc|Bcc|Subject|Reply-To|Delivered-To|Authentication-Results|DKIM-Signature|ARC-[\w-]+):.*$/gim,
       ''
     )
-    .replace(/^>.*$/gm, '')
+    .replace(/^>\s?/gm, '')
     .replace(/^-{3,}.*Forwarded.*-{3,}$/gim, '')
     .replace(/^(unsubscribe|this email was sent|you are receiving|view in browser|privacy policy).*/gim, '')
     .replace(/^(sent from my|get outlook for|this email and any attachments).*/gim, '')
