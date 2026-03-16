@@ -285,21 +285,7 @@ export async function ingestMessageChunksCore(
     const mailbox = stringOr(message.mailbox);
     const sentAt = stringOr(message.sentAt);
 
-    if (!messageId || !bodyText.trim()) {
-      skipped += 1;
-      continue;
-    }
-
-    const existingChunk = await env.SKY_DB
-      .prepare(
-        `SELECT id
-         FROM memory_chunks
-         WHERE json_extract(metadata_json, '$.messageId') = ?
-         LIMIT 1`
-      )
-      .bind(messageId)
-      .first<{ id: string }>();
-    if (existingChunk?.id) {
+    if (!messageId) {
       skipped += 1;
       continue;
     }
@@ -348,6 +334,20 @@ export async function ingestMessageChunksCore(
           direction
         )
         .run();
+    }
+
+    const existingChunk = await env.SKY_DB
+      .prepare(
+        `SELECT id
+         FROM memory_chunks
+         WHERE json_extract(metadata_json, '$.messageId') = ?
+         LIMIT 1`
+      )
+      .bind(messageId)
+      .first<{ id: string }>();
+    if (existingChunk?.id) {
+      skipped += 1;
+      continue;
     }
 
     let sourceRecord = await env.SKY_DB

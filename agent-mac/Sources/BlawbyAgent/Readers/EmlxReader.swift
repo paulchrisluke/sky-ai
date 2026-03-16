@@ -326,7 +326,12 @@ final class EmlxReader: @unchecked Sendable {
             }
         }
         
-        let finalDate = date ?? (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date()
+        guard let finalDate = date
+            ?? (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        else {
+            logger.warning("emlx: skipping message with no parseable date or file mtime: \(fileURL.path)")
+            return nil
+        }
         let body = bodyLines.joined(separator: "\n").prefix(5000)
         
         return RawMessage(

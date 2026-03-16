@@ -455,19 +455,16 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             return
         }
 
-        if entities.isEmpty {
-            for message in rawMessages {
-                localStore.markMessageSent(message.messageId)
-            }
-            return
+        if !entities.isEmpty {
+            let entitiesPayload = SourceEntitiesPayload(
+                type: "entities",
+                workspaceId: config.workspaceId,
+                accountId: accountId,
+                entities: entities
+            )
+            try await webSocketPublisher.send(type: "entities", payload: try encodeJSON(entitiesPayload))
         }
 
-        let entitiesPayload = SourceEntitiesPayload(
-            type: "entities",
-            workspaceId: config.workspaceId,
-            accountId: accountId,
-            entities: entities
-        )
         let chunksPayload = SourceChunksPayload(
             type: "chunks",
             workspaceId: config.workspaceId,
@@ -485,7 +482,6 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             }
         )
 
-        try await webSocketPublisher.send(type: "entities", payload: try encodeJSON(entitiesPayload))
         try await webSocketPublisher.send(type: "chunks", payload: try encodeJSON(chunksPayload))
 
         for messageId in Set(rawMessages.map(\.messageId)) {
