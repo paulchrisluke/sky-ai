@@ -13,6 +13,10 @@ final class ArchitectureGuardrailsTests: XCTestCase {
         let text = try String(contentsOf: file, encoding: .utf8)
         XCTAssertFalse(text.contains("onClose"), "MenuBarExtra should not carry legacy popover close handlers.")
         XCTAssertFalse(text.contains("systemName: \"xmark\""), "Close button should be removed in MenuBarExtra flow.")
+        XCTAssertFalse(
+            text.contains("controlBackgroundColor"),
+            "MenuBarPopoverView should avoid custom control backgrounds so system material can render naturally."
+        )
     }
 
     func testMainUIStateIsMainActorIsolated() throws {

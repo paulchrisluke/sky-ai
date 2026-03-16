@@ -26,12 +26,9 @@ struct MenuBarPopoverView: View {
                 Button(action: onOpenPreferences) {
                     Image(systemName: "gearshape")
                 }
-                .buttonStyle(PlainButtonStyle())
-                .foregroundColor(.secondary)
                 .help("Preferences")
             }
             .padding()
-            .background(Color(NSColor.controlBackgroundColor))
 
             Divider()
 
@@ -106,7 +103,6 @@ struct MenuBarPopoverView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(NSColor.controlBackgroundColor))
         }
         .frame(width: 320)
     }
