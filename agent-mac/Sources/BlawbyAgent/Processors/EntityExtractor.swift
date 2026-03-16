@@ -29,6 +29,10 @@ struct ExtractedEntity: Codable, Sendable {
     let actionDescription: String?
     let riskLevel: String
     let confidence: Double
+    let sentAt: String
+    let subject: String
+    let fromEmail: String
+    let mailbox: String
 }
 
 private struct OpenAIChatRequest: Encodable {
@@ -216,7 +220,11 @@ final class EntityExtractor: EntityExtracting {
                 actionRequired: row.actionRequired ?? row.action_required ?? false,
                 actionDescription: row.actionDescription ?? row.action_description,
                 riskLevel: risk,
-                confidence: confidence
+                confidence: confidence,
+                sentAt: iso.string(from: source.date),
+                subject: source.subject,
+                fromEmail: source.from,
+                mailbox: source.mailbox
             )
         }
     }

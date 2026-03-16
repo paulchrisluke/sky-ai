@@ -63,7 +63,7 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
     const type = typeof payload.type === 'string' ? payload.type : '';
     if (type === 'entities') {
       const workspaceId = typeof payload.workspaceId === 'string' && payload.workspaceId ? payload.workspaceId : 'default';
-      const accountId = typeof payload.accountId === 'string' ? payload.accountId : '';
+      const accountId = typeof payload.accountId === 'string' ? payload.accountId.toLowerCase() : '';
       const entities = Array.isArray(payload.entities) ? payload.entities as JsonRecord[] : [];
       if (!accountId || entities.length === 0) {
         return;
@@ -73,6 +73,59 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
         const messageId = typeof entity.messageId === 'string' ? entity.messageId : (typeof entity.message_id === 'string' ? entity.message_id : '');
         const entityType = typeof entity.entityType === 'string' ? entity.entityType : (typeof entity.entity_type === 'string' ? entity.entity_type : '');
         if (!messageId || !entityType) continue;
+
+        const sentAt = typeof entity.sentAt === 'string' ? entity.sentAt : null;
+        const subject = typeof entity.subject === 'string' ? entity.subject : null;
+        const fromEmail = typeof entity.fromEmail === 'string' ? entity.fromEmail : '';
+        const mailbox = typeof entity.mailbox === 'string' ? entity.mailbox : 'INBOX';
+        const direction = typeof entity.direction === 'string' && (entity.direction === 'inbound' || entity.direction === 'outbound') ? entity.direction : 'inbound';
+        const threadId = `thread_${messageId}`;
+        const sourceKey = `mac_${accountId}_${messageId}`;
+
+        await this.env.SKY_DB
+          .prepare(
+            `INSERT OR IGNORE INTO email_threads
+             (id, workspace_id, account_id, account_email, mailbox, thread_external_id,
+              subject, first_message_at, last_message_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+          )
+          .bind(
+            threadId,
+            workspaceId,
+            accountId,
+            accountId,
+            mailbox,
+            threadId,
+            subject,
+            sentAt,
+            sentAt
+          )
+          .run();
+
+        await this.env.SKY_DB
+          .prepare(
+            `INSERT OR IGNORE INTO email_messages
+             (id, workspace_id, thread_id, account_id, account_email, mailbox,
+              source_message_key, subject, sent_at, from_json, to_json,
+              snippet, direction, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+          )
+          .bind(
+            messageId,
+            workspaceId,
+            threadId,
+            accountId,
+            accountId,
+            mailbox,
+            sourceKey,
+            subject,
+            sentAt,
+            JSON.stringify([{ email: fromEmail, name: null }]),
+            JSON.stringify([]),
+            subject,
+            direction
+          )
+          .run();
 
         await this.env.SKY_DB
           .prepare(
@@ -132,10 +185,14 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
       return;
     }
     if (type === 'chunks') {
-      const result = await ingestMessageChunksCore(this.env, payload);
-      console.log(`[blawby] chunks: chunked=${result.chunked} skipped=${result.skipped}`);
-      if (result.chunked > 0) {
-        await this.skillImmediateContext();
+      try {
+        const result = await ingestMessageChunksCore(this.env, payload);
+        console.log(`[blawby] chunks: chunked=${result.chunked} skipped=${result.skipped}`);
+        if (result.chunked > 0) {
+          await this.skillImmediateContext();
+        }
+      } catch (err) {
+        console.log(`[blawby] chunks error: ${err instanceof Error ? err.stack : String(err)}`);
       }
       return;
     }

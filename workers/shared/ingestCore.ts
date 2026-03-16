@@ -301,39 +301,8 @@ export async function ingestMessageChunksCore(
       .first<{ id: string }>();
 
     if (!emailMessage?.id) {
-      // Provide a basic message record since the mac agent skips the legacy mail-thread endpoint
-      // and directly sends chunks + entities.
-      const fromJson = JSON.stringify([{ email: fromEmail || '', name: null }]);
-      const toJson = JSON.stringify(toEmails.map(email => ({ email, name: null })));
-      const snippet = bodyText.substring(0, 500);
-      
-      const accountLower = accountId.toLowerCase();
-      const direction = (fromEmail || '').toLowerCase() === accountLower ? 'outbound' : 'inbound';
-      const dummyThreadId = `dummy_${messageId}`;
-      const dummySourceKey = `dummy_sk_${messageId}`;
-
-      await env.SKY_DB
-        .prepare(
-          `INSERT OR IGNORE INTO email_messages
-           (id, workspace_id, thread_id, source_message_key, account_id, account_email, mailbox, subject, sent_at, from_json, to_json, snippet, direction, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-        )
-        .bind(
-          messageId,
-          workspaceId,
-          dummyThreadId,
-          dummySourceKey,
-          accountId,
-          accountId,
-          mailbox,
-          subject || null,
-          sentAt || null,
-          fromJson,
-          toJson,
-          snippet,
-          direction
-        )
-        .run();
+      skipped += 1;
+      continue;
     }
 
     const existingChunk = await env.SKY_DB

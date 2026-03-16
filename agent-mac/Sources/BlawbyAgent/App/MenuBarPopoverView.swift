@@ -34,6 +34,10 @@ struct MenuBarPopoverView: View {
                 let totalEstimatedFloat = CGFloat(totalEstimated)
                 let ratio = totalEstimated > 0 ? min(1.0, max(0.0, totalSyncedFloat / totalEstimatedFloat)) : 0.0
 
+                Text("Overall Sync Progress")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+
                 HStack(spacing: 10) {
                     Button(action: onToggleSync) {
                         Image(systemName: state.syncActivated ? "pause.fill" : "play.fill")
@@ -57,10 +61,8 @@ struct MenuBarPopoverView: View {
 
             // Menu Actions
             VStack(alignment: .leading, spacing: 8) {
-                Button("Show Dashboard", action: onOpenDashboard)
-                    .buttonStyle(.plain)
-                Button("Preferences…", action: onOpenPreferences)
-                    .buttonStyle(.plain)
+                MenuActionButton(title: "Show Dashboard", systemImage: "rectangle.grid.2x2", action: onOpenDashboard)
+                MenuActionButton(title: "Preferences…", systemImage: "gearshape", action: onOpenPreferences)
             }
             .padding()
             
@@ -118,6 +120,28 @@ struct MenuBarPopoverView: View {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+}
+
+private struct MenuActionButton: View {
+    let title: String
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .frame(width: 16, alignment: .center)
+                    .foregroundColor(.secondary)
+                Text(title)
+                    .foregroundColor(.primary)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

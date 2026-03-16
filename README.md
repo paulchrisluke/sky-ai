@@ -131,6 +131,11 @@ Use the auto-generated Worker domain by default:
 
 Use this when shipping `BlawbyAgent.app` outside the Mac App Store.
 
+Use a single script for all macOS app workflows:
+- `./scripts/macos-app.sh dev-install`
+- `./scripts/macos-app.sh release`
+- `./scripts/macos-app.sh appcast`
+
 Requirements:
 
 - Apple Developer Program membership with Developer ID capability
@@ -146,7 +151,7 @@ Release command (from repo root):
 APPLE_ID="you@example.com" \
 APPLE_APP_SPECIFIC_PASSWORD="<app-specific-password>" \
 APPLE_TEAM_ID="<team-id>" \
-./scripts/release-macos-direct.sh
+./scripts/macos-app.sh release
 ```
 
 What the script does:
@@ -174,7 +179,7 @@ Before shipping auto-updates:
 RELEASE_DIR="dist/macos/1.0+1" \
 DOWNLOAD_URL_PREFIX="https://downloads.blawby.com/releases" \
 SPARKLE_PRIVATE_KEY="$HOME/.config/blawby/sparkle_private_ed25519.pem" \
-./scripts/generate-sparkle-appcast.sh
+./scripts/macos-app.sh appcast
 ```
 
 3. Publish generated `appcast.xml` to your feed URL (default in app plist):

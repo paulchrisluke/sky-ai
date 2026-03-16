@@ -8,13 +8,95 @@ struct DashboardView: View {
 
     @State private var selectedSourceId: String?
     @State private var sourceSearch = ""
+    @State private var expandedMailAccounts: Set<String> = []
+    @State private var expandedCalendarAccounts: Set<String> = []
+    @State private var expandedMessageAccounts: Set<String> = []
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selectedSourceId) {
-                ForEach(filteredSources, id: \.id) { source in
-                    SourceSidebarRow(source: source)
-                        .tag(source.id)
+                Section("Mailboxes") {
+                    ForEach(mailAccountGroups) { group in
+                        DisclosureGroup(
+                            isExpanded: Binding(
+                                get: { expandedMailAccounts.contains(group.id) || sourceSearchQuery.isEmpty == false },
+                                set: { expanded in
+                                    if expanded {
+                                        expandedMailAccounts.insert(group.id)
+                                    } else {
+                                        expandedMailAccounts.remove(group.id)
+                                    }
+                                }
+                            )
+                        ) {
+                            ForEach(group.sources, id: \.id) { source in
+                                SourceSidebarRow(source: source, titleOverride: mailboxName(for: source))
+                                    .tag(source.id)
+                            }
+                        } label: {
+                            SidebarAccountLabel(
+                                title: group.accountName,
+                                systemImage: "person.crop.circle",
+                                totalsText: groupTotalsText(group.sources)
+                            )
+                        }
+                    }
+                }
+
+                Section("Calendars") {
+                    ForEach(calendarAccountGroups) { group in
+                        DisclosureGroup(
+                            isExpanded: Binding(
+                                get: { expandedCalendarAccounts.contains(group.id) || sourceSearchQuery.isEmpty == false },
+                                set: { expanded in
+                                    if expanded {
+                                        expandedCalendarAccounts.insert(group.id)
+                                    } else {
+                                        expandedCalendarAccounts.remove(group.id)
+                                    }
+                                }
+                            )
+                        ) {
+                            ForEach(group.sources, id: \.id) { source in
+                                SourceSidebarRow(source: source)
+                                    .tag(source.id)
+                            }
+                        } label: {
+                            SidebarAccountLabel(
+                                title: group.accountName,
+                                systemImage: "person.crop.circle",
+                                totalsText: groupTotalsText(group.sources)
+                            )
+                        }
+                    }
+                }
+
+                Section("Messages") {
+                    ForEach(messageAccountGroups) { group in
+                        DisclosureGroup(
+                            isExpanded: Binding(
+                                get: { expandedMessageAccounts.contains(group.id) || sourceSearchQuery.isEmpty == false },
+                                set: { expanded in
+                                    if expanded {
+                                        expandedMessageAccounts.insert(group.id)
+                                    } else {
+                                        expandedMessageAccounts.remove(group.id)
+                                    }
+                                }
+                            )
+                        ) {
+                            ForEach(group.sources, id: \.id) { source in
+                                SourceSidebarRow(source: source)
+                                    .tag(source.id)
+                            }
+                        } label: {
+                            SidebarAccountLabel(
+                                title: group.accountName,
+                                systemImage: "person.crop.circle",
+                                totalsText: groupTotalsText(group.sources)
+                            )
+                        }
+                    }
                 }
             }
             .navigationTitle("Sources")
@@ -23,6 +105,7 @@ struct DashboardView: View {
             if let source = selectedSource {
                 SourceDetailView(
                     source: source,
+                    sourcePath: sourcePath(for: source),
                     lastSync: state.lastSync
                 )
             } else {
@@ -40,15 +123,29 @@ struct DashboardView: View {
             }
         }
         .onAppear {
-            if selectedSourceId == nil {
-                selectedSourceId = filteredSources.first?.id
+            if selectedSourceId == nil, let first = filteredSources.first {
+                selectedSourceId = first.id
             }
+            expandedMailAccounts = Set(mailAccountGroups.map(\.id))
+            expandedCalendarAccounts = Set(calendarAccountGroups.map(\.id))
+            expandedMessageAccounts = Set(messageAccountGroups.map(\.id))
+        }
+        .onChange(of: sourceSearchQuery) { query in
+            if query.isEmpty {
+                return
+            }
+            expandedMailAccounts = Set(mailAccountGroups.map(\.id))
+            expandedCalendarAccounts = Set(calendarAccountGroups.map(\.id))
+            expandedMessageAccounts = Set(messageAccountGroups.map(\.id))
         }
         .onChange(of: filteredSources.map(\.id)) { ids in
             if let selectedSourceId, ids.contains(selectedSourceId) {
                 return
             }
             self.selectedSourceId = ids.first
+            expandedMailAccounts = Set(mailAccountGroups.map(\.id))
+            expandedCalendarAccounts = Set(calendarAccountGroups.map(\.id))
+            expandedMessageAccounts = Set(messageAccountGroups.map(\.id))
         }
         .toolbar {
             ToolbarItemGroup {
@@ -64,8 +161,12 @@ struct DashboardView: View {
         }
     }
 
+    private var sourceSearchQuery: String {
+        sourceSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var filteredSources: [ConnectedSource] {
-        let query = sourceSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = sourceSearchQuery
         let sources = activeSources
         guard !query.isEmpty else { return sources }
 
@@ -73,12 +174,26 @@ struct DashboardView: View {
             source.sourceName.localizedCaseInsensitiveContains(query)
                 || source.sourceType.localizedCaseInsensitiveContains(query)
                 || source.status.localizedCaseInsensitiveContains(query)
+                || source.accountId.localizedCaseInsensitiveContains(query)
+                || mailboxName(for: source).localizedCaseInsensitiveContains(query)
         }
     }
 
     private var selectedSource: ConnectedSource? {
         guard let selectedSourceId else { return nil }
         return activeSources.first { $0.id == selectedSourceId }
+    }
+
+    private var mailAccountGroups: [AccountGroup] {
+        groupedAccounts(from: filteredSources.filter { $0.sourceType == "mail" }, sortByMailbox: true)
+    }
+
+    private var calendarAccountGroups: [AccountGroup] {
+        groupedAccounts(from: filteredSources.filter { $0.sourceType == "calendar" }, sortByMailbox: false)
+    }
+
+    private var messageAccountGroups: [AccountGroup] {
+        groupedAccounts(from: filteredSources.filter { $0.sourceType == "messages" }, sortByMailbox: false)
     }
 
     private var activeSources: [ConnectedSource] {
@@ -92,6 +207,52 @@ struct DashboardView: View {
             }
     }
 
+    private func groupedAccounts(from sources: [ConnectedSource], sortByMailbox: Bool) -> [AccountGroup] {
+        let groups = Dictionary(grouping: sources, by: \.accountId)
+        return groups.map { accountId, accountSources in
+            let sortedSources: [ConnectedSource]
+            if sortByMailbox {
+                sortedSources = accountSources.sorted {
+                    mailboxName(for: $0).localizedCaseInsensitiveCompare(mailboxName(for: $1)) == .orderedAscending
+                }
+            } else {
+                sortedSources = accountSources.sorted {
+                    $0.sourceName.localizedCaseInsensitiveCompare($1.sourceName) == .orderedAscending
+                }
+            }
+            return AccountGroup(id: accountId, accountName: accountId, sources: sortedSources)
+        }
+        .sorted { $0.accountName.localizedCaseInsensitiveCompare($1.accountName) == .orderedAscending }
+    }
+
+    private func mailboxName(for source: ConnectedSource) -> String {
+        guard source.sourceType == "mail" else { return source.sourceName }
+        let parts = source.id.split(separator: ":", omittingEmptySubsequences: false)
+        if parts.count >= 3 {
+            return String(parts.dropFirst(2).joined(separator: ":"))
+        }
+        return source.sourceName
+    }
+
+    private func groupTotalsText(_ sources: [ConnectedSource]) -> String {
+        let synced = sources.reduce(0) { $0 + max(0, $1.totalSynced) }
+        let total = sources.reduce(0) { $0 + max(0, max($1.totalEstimated, $1.totalSynced)) }
+        return "\(synced)/\(total)"
+    }
+
+    private func sourcePath(for source: ConnectedSource) -> String {
+        switch source.sourceType {
+        case "mail":
+            return "\(source.accountId) > \(mailboxName(for: source))"
+        case "calendar":
+            return "\(source.accountId) > \(source.sourceName)"
+        case "messages":
+            return "\(source.accountId) > Messages"
+        default:
+            return source.sourceName
+        }
+    }
+
     private func sortPriority(_ status: String) -> Int {
         switch status {
         case "error": return 0
@@ -103,14 +264,45 @@ struct DashboardView: View {
     }
 }
 
+private struct AccountGroup: Identifiable {
+    let id: String
+    let accountName: String
+    let sources: [ConnectedSource]
+}
+
+private struct SidebarAccountLabel: View {
+    let title: String
+    let systemImage: String
+    let totalsText: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundColor(.secondary)
+            Text(title)
+                .lineLimit(1)
+            Spacer()
+            Text(totalsText)
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
 private struct SourceSidebarRow: View {
     let source: ConnectedSource
+    let titleOverride: String?
+
+    init(source: ConnectedSource, titleOverride: String? = nil) {
+        self.source = source
+        self.titleOverride = titleOverride
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: iconName)
                 .foregroundColor(statusColor)
-            Text(source.sourceName)
+            Text(titleOverride ?? source.sourceName)
                 .lineLimit(1)
             Spacer()
             Text("\(source.totalSynced)/\(max(source.totalEstimated, source.totalSynced))")
@@ -140,10 +332,15 @@ private struct SourceSidebarRow: View {
 
 private struct SourceDetailView: View {
     let source: ConnectedSource
+    let sourcePath: String
     let lastSync: Date?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
+            Text(sourcePath)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
             HStack {
                 Label(source.sourceName, systemImage: iconName)
                     .font(.title2.weight(.semibold))

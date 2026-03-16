@@ -361,10 +361,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
 
         logger.info("processing batch of \(batch.count) messages for \(source.sourceName)")
         let isBackfill = source.totalSynced < estimated
-        let processing = try await mailProcessor.process(messages: batch, workspaceId: config.workspaceId, skipExtraction: isBackfill)
-        if isBackfill {
-            logger.info("[sync] backfill mode: skipping local extraction for \(source.sourceName)")
-        }
+        let processing = try await mailProcessor.process(messages: batch, workspaceId: config.workspaceId, skipExtraction: false)
         logger.info("extraction complete for \(processing.rawMessages.count) messages, \(processing.entities.count) entities for \(source.sourceName)")
         try await publishMailPayloads(result: processing, accountId: parsed.accountId)
         logger.info("published payloads for \(processing.rawMessages.count) messages for \(source.sourceName)")
