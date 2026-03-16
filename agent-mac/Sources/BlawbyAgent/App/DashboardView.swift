@@ -210,8 +210,7 @@ private struct DashboardOverviewView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle("Overview")
-            .toolbarBackground(.visible, for: .automatic)
-            .toolbarBackground(.thinMaterial, for: .automatic)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 0))
         }
         .navigationTitle("Dashboard")
     }
@@ -309,8 +308,7 @@ private struct CategoryDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .navigationTitle(category.title)
-            .toolbarBackground(.visible, for: .automatic)
-            .toolbarBackground(.thinMaterial, for: .automatic)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 0))
         }
     }
 
