@@ -17,6 +17,10 @@ final class ArchitectureGuardrailsTests: XCTestCase {
             text.contains("controlBackgroundColor"),
             "MenuBarPopoverView should avoid custom control backgrounds so system material can render naturally."
         )
+        XCTAssertFalse(
+            text.contains("PlainButtonStyle"),
+            "MenuBarPopoverView should avoid forcing plain button chrome over system styling."
+        )
     }
 
     func testMainUIStateIsMainActorIsolated() throws {

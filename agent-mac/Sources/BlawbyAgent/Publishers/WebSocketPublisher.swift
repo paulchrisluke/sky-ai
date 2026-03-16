@@ -12,6 +12,12 @@ enum WebSocketConnectionState: Equatable {
     case reconnecting(delaySeconds: Int)
 }
 
+private enum WebSocketLifecycleState: Equatable {
+    case disconnected
+    case connecting
+    case connected
+}
+
 final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
     private var onConnected: (@Sendable () -> Void)?
     private var onConnectionStateChanged: (@Sendable (WebSocketConnectionState) -> Void)?
@@ -27,7 +33,10 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
     private var reconnectAttempt = 0
     private var reconnectTask: DispatchWorkItem?
     private var pingTimer: DispatchSourceTimer?
+    private var pongTimeoutTask: DispatchWorkItem?
+    private var awaitingPong = false
     private var allowReconnect = true
+    private var lifecycleState: WebSocketLifecycleState = .disconnected
 
     init(config: Config, logger: Logger) {
         self.config = config
@@ -58,8 +67,10 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
             self.allowReconnect = false
             self.reconnectTask?.cancel()
             self.reconnectTask = nil
-            self.stopPingTimer()
+            self.stopHeartbeatTimers()
             self.connected = false
+            self.disconnectHandled = true
+            self.lifecycleState = .disconnected
             self.publishConnectionState(.disconnected)
             self.socketTask?.cancel(with: .normalClosure, reason: nil)
             self.socketTask = nil
@@ -115,18 +126,25 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
     }
 
     private func startConnection() {
+        guard allowReconnect else { return }
+        if lifecycleState == .connecting || lifecycleState == .connected {
+            return
+        }
         reconnectTask?.cancel()
         reconnectTask = nil
         disconnectHandled = false
+        lifecycleState = .connecting
+        awaitingPong = false
+        stopHeartbeatTimers()
         publishConnectionState(.connecting)
 
-        let endpoint = "\(config.workerUrl)/agents/blawby-agent/primary?token=\(config.apiKey)"
-        guard let url = URL(string: endpoint) else {
-            logger.error("websocket invalid URL: \(endpoint)")
+        guard let url = makeWebSocketURL() else {
+            logger.error("websocket invalid URL for workerUrl=\(config.workerUrl)")
+            lifecycleState = .disconnected
             return
         }
 
-        logger.info("websocket connecting to \(endpoint)")
+        logger.info("websocket connecting to \(url.absoluteString)")
         session?.invalidateAndCancel()
         session = nil
 
@@ -140,6 +158,20 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
 
         logger.info("websocket connecting")
         task.resume()
+    }
+
+    private func makeWebSocketURL() -> URL? {
+        guard var components = URLComponents(string: config.workerUrl) else {
+            return nil
+        }
+        let normalizedPath = components.path.hasSuffix("/")
+            ? String(components.path.dropLast())
+            : components.path
+        components.path = "\(normalizedPath)/agents/blawby-agent/primary"
+        var items = components.queryItems ?? []
+        items.append(URLQueryItem(name: "token", value: config.apiKey))
+        components.queryItems = items
+        return components.url
     }
 
     private func startReceiveLoop(for task: URLSessionWebSocketTask) {
@@ -173,6 +205,9 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
                 return
             }
             if type == "pong" {
+                awaitingPong = false
+                pongTimeoutTask?.cancel()
+                pongTimeoutTask = nil
                 logger.info("websocket pong")
             }
         case let .data(data):
@@ -181,6 +216,9 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
                 return
             }
             if type == "pong" {
+                awaitingPong = false
+                pongTimeoutTask?.cancel()
+                pongTimeoutTask = nil
                 logger.info("websocket pong")
             }
         @unknown default:
@@ -190,6 +228,8 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
 
     private func startPingTimer() {
         pingTimer?.cancel()
+        pongTimeoutTask?.cancel()
+        pongTimeoutTask = nil
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 30, repeating: 30)
         timer.setEventHandler { [weak self] in
@@ -199,22 +239,43 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
         timer.resume()
     }
 
-    private func stopPingTimer() {
+    private func stopHeartbeatTimers() {
         pingTimer?.cancel()
         pingTimer = nil
+        pongTimeoutTask?.cancel()
+        pongTimeoutTask = nil
+        awaitingPong = false
     }
 
     private func sendPing() {
         guard connected, let task = socketTask else { return }
+        if awaitingPong {
+            handleDisconnect(logMessage: "websocket pong timeout before next ping tick")
+            return
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: ["type": "ping"]),
               let json = String(data: data, encoding: .utf8) else {
             return
         }
+        awaitingPong = true
+        schedulePongTimeout(for: task)
         task.send(.string(json)) { [self] error in
             if let error {
                 self.handlePingSendFailure(error, task: task)
             }
         }
+    }
+
+    private func schedulePongTimeout(for task: URLSessionWebSocketTask) {
+        pongTimeoutTask?.cancel()
+        let timeoutTask = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard task === self.socketTask else { return }
+            guard self.awaitingPong else { return }
+            self.handleDisconnect(logMessage: "websocket pong timeout")
+        }
+        pongTimeoutTask = timeoutTask
+        queue.asyncAfter(deadline: .now() + 15, execute: timeoutTask)
     }
 
     private func handlePingSendFailure(_ error: Error, task: URLSessionWebSocketTask) {
@@ -229,9 +290,12 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
     private func scheduleReconnect() {
         guard allowReconnect else { return }
         reconnectAttempt += 1
-        let delay = min(pow(2.0, Double(reconnectAttempt - 1)) * 5.0, 60.0)
+        let baseDelay = min(pow(2.0, Double(reconnectAttempt - 1)) * 5.0, 60.0)
+        let jitterFactor = Double.random(in: 0.85...1.15)
+        let delay = max(1.0, min(baseDelay * jitterFactor, 60.0))
         logger.info("websocket reconnect in \(Int(delay))s")
         publishConnectionState(.reconnecting(delaySeconds: Int(delay)))
+        lifecycleState = .disconnected
 
         let task = DispatchWorkItem { [weak self] in
             self?.startConnection()
@@ -244,10 +308,14 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
         guard !disconnectHandled else { return }
         disconnectHandled = true
 
+        let wasConnected = connected || lifecycleState == .connecting
         connected = false
+        lifecycleState = .disconnected
         publishConnectionState(.disconnected)
-        stopPingTimer()
-        logger.error(logMessage)
+        stopHeartbeatTimers()
+        if wasConnected {
+            logger.error(logMessage)
+        }
 
         socketTask?.cancel(with: .goingAway, reason: nil)
         socketTask = nil
@@ -262,8 +330,10 @@ final class WebSocketPublisher: NSObject, URLSessionWebSocketDelegate, @unchecke
             guard webSocketTask === self.socketTask else {
                 return
             }
+            guard self.allowReconnect else { return }
             self.disconnectHandled = false
             self.connected = true
+            self.lifecycleState = .connected
             self.publishConnectionState(.connected)
             self.reconnectAttempt = 0
             self.logger.info("websocket connected")
