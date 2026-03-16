@@ -3,7 +3,7 @@ import SwiftUI
 @MainActor
 class MenuBarState: ObservableObject {
     @Published var connection: String = "Connecting"
-    @Published var lastSync: String = "-"
+    @Published var lastSync: Date?
     @Published var syncActivated: Bool = true
 }
 
@@ -97,9 +97,15 @@ struct MenuBarPopoverView: View {
                 }
                 .font(.caption)
                 
-                Text("Last sync: \(state.lastSync)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if let lastSync = state.lastSync {
+                    Text("Last sync: \(lastSync.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Last sync: Never")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)

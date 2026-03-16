@@ -62,6 +62,19 @@ final class ArchitectureGuardrailsTests: XCTestCase {
         XCTAssertFalse(text.contains(".background("), "Dashboard should avoid custom background chrome overlays.")
     }
 
+    func testUIDateDisplayUsesDateValuesInsteadOfRawISOStrings() throws {
+        let appSession = repoRoot.appendingPathComponent("Sources/BlawbyAgent/App/AppSession.swift")
+        let appSessionText = try String(contentsOf: appSession, encoding: .utf8)
+        XCTAssertFalse(
+            appSessionText.contains("ISO8601DateFormatter()"),
+            "AppSession should avoid formatting UI timestamps as raw ISO strings."
+        )
+
+        let popover = repoRoot.appendingPathComponent("Sources/BlawbyAgent/App/MenuBarPopoverView.swift")
+        let popoverText = try String(contentsOf: popover, encoding: .utf8)
+        XCTAssertTrue(popoverText.contains("@Published var lastSync: Date?"), "Menu UI state should store Date values.")
+    }
+
     func testLegacyLifecycleFilesRemainDeleted() {
         let deletedPaths = [
             "Sources/BlawbyAgent/main.swift",

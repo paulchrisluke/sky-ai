@@ -14,11 +14,9 @@ final class AppSession: ObservableObject {
     private var syncCoordinator: SyncCoordinator?
     private var runtimeController: SyncRuntimeController?
     private var contactsReader: ContactsReader?
-    private let iso = ISO8601DateFormatter()
     private nonisolated(unsafe) var terminationObserver: NSObjectProtocol?
 
     init() {
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         bootstrap()
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -112,9 +110,7 @@ final class AppSession: ObservableObject {
 
             startup.syncCoordinator.setOnStatusChanged { [weak self] snapshot in
                 Task { @MainActor in
-                    if let lastSync = snapshot.lastSyncAt {
-                        self?.menuState.lastSync = self?.iso.string(from: lastSync) ?? "-"
-                    }
+                    self?.menuState.lastSync = snapshot.lastSyncAt
                 }
             }
             startup.webSocketPublisher.setOnConnected { [weak self] in

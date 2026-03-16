@@ -147,7 +147,7 @@ private struct SourceSidebarRow: View {
 private struct SourceDetailView: View {
     let source: ConnectedSource
     let connection: String
-    let lastSync: String
+    let lastSync: Date?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -176,7 +176,10 @@ private struct SourceDetailView: View {
                 detailRow(label: "Type", value: source.sourceType.capitalized)
                 detailRow(label: "Account", value: source.accountId)
                 detailRow(label: "Connection", value: connection)
-                detailRow(label: "Last Sync", value: lastSync)
+                detailRow(
+                    label: "Last Sync",
+                    value: lastSync?.formatted(.dateTime.month(.abbreviated).day().hour().minute()) ?? "Never"
+                )
                 if let error = source.lastError, !error.isEmpty {
                     detailRow(label: "Last Error", value: error, color: .red)
                 }
