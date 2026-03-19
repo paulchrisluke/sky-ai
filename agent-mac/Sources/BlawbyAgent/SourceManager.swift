@@ -423,6 +423,11 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             
             // Send chunks immediately
             if !chunksProcessing.rawMessages.isEmpty {
+                // Mark messages as processed in local database
+                for message in chunksProcessing.rawMessages {
+                    localStore.markMessageProcessed(message.messageId, accountId: parsed.accountId, entityCount: 0)
+                }
+                
                 let chunksPayload = SourceChunksPayload(
                     type: "chunks",
                     workspaceId: config.workspaceId,
@@ -450,6 +455,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                 logger.info("background entity extraction starting for \(batch.count) messages")
                 do {
                     let entitiesProcessing = try await self.mailProcessor.process(messages: batch, workspaceId: self.config.workspaceId, skipExtraction: false)
+                    logger.info("background entity extraction completed: \(entitiesProcessing.entities.count) entities extracted")
                     if !entitiesProcessing.entities.isEmpty {
                         let entitiesPayload = SourceEntitiesPayload(
                             type: "entities",
@@ -459,6 +465,13 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                         )
                         try await self.webSocketPublisher.send(type: "entities", payload: self.encodeJSON(entitiesPayload))
                         logger.info("published entities for \(entitiesProcessing.entities.count) entities for \(parsed.accountId)")
+                        
+                        // Update entity counts in local database
+                        let entityCounts = Dictionary(grouping: entitiesProcessing.entities, by: { $0.messageId })
+                            .mapValues { $0.count }
+                        for (messageId, count) in entityCounts {
+                            self.localStore.markMessageProcessed(messageId, accountId: parsed.accountId, entityCount: count)
+                        }
                     } else {
                         logger.info("no entities extracted from \(batch.count) messages for \(parsed.accountId)")
                     }

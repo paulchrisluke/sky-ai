@@ -119,6 +119,7 @@ final class EntityExtractor: EntityExtracting {
     }
 
     func extract(messages: [RawMessage], workspaceId: String) async throws -> [ExtractedEntity] {
+        logger.info("EntityExtractor.extract called with \(messages.count) messages")
         if messages.isEmpty {
             return []
         }
@@ -127,17 +128,22 @@ final class EntityExtractor: EntityExtracting {
             throw EntityExtractorError.missingOpenAIKey
         }
 
-        let batches = messages.chunked(into: 5)
+        let batches = messages.chunked(into: 10) // Increase batch size for better performance
         var all: [ExtractedEntity] = []
         for (index, batch) in batches.enumerated() {
-            let batchEntities = try await extractBatch(messages: batch, workspaceId: workspaceId, apiKey: apiKey)
-            all.append(contentsOf: batchEntities)
-
-            if index < (batches.count - 1) {
-                try await Task.sleep(nanoseconds: 500_000_000)
+            logger.info("EntityExtractor processing batch \(index + 1)/\(batches.count) with \(batch.count) messages")
+            do {
+                let batchEntities = try await extractBatch(messages: batch, workspaceId: workspaceId, apiKey: apiKey)
+                logger.info("EntityExtractor batch \(index + 1) completed with \(batchEntities.count) entities")
+                all.append(contentsOf: batchEntities)
+            } catch {
+                logger.error("EntityExtractor batch \(index + 1) failed, continuing without entities: \(error.localizedDescription)")
+                // Continue processing other batches even if one fails
             }
         }
-
+        
+        logger.info("EntityExtractor.extract completed: total \(all.count) entities from \(messages.count) messages")
+        logger.info("EntityExtractor.extract about to return \(all.count) entities")
         return all
     }
 
@@ -330,7 +336,9 @@ final class EntityExtractor: EntityExtracting {
         let decoder = JSONDecoder()
         
         // Try to fix incomplete JSON by ensuring it ends properly
+        logger.info("EntityExtractor attempting to fix incomplete JSON, raw content length: \(rawContent.count)")
         let cleanedContent = fixIncompleteJSON(rawContent)
+        logger.info("EntityExtractor fixed JSON length: \(cleanedContent.count)")
         let payload = Data(cleanedContent.utf8)
 
         if let rows = try? decoder.decode([ExtractedEntityWire].self, from: payload) {

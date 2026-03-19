@@ -42,7 +42,7 @@ final class AppStartupComposer {
 
         let contactsReader = ContactsReader(localStore: localStore, logger: logger)
         let extractor = EntityExtractor(apiKey: config.openaiApiKey, contactsReader: contactsReader, logger: logger)
-        let mailProcessor = MailProcessor(extractor: extractor)
+        let mailProcessor = MailProcessor(extractor: extractor, logger: logger)
         let mailWatcher = MailWatcher(configStore: configStore, logger: logger)
         let calendarWatcher = CalendarWatcher(config: config, logger: logger)
         let webSocketPublisher = WebSocketPublisher(config: config, logger: logger)

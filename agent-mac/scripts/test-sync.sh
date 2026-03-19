@@ -24,7 +24,7 @@ swift build 2>/dev/null && echo "✓ Build complete" || { echo "✗ Build failed
 .build/debug/BlawbyAgent >> "$LOG" 2>&1 &
 PID=$!
 echo "✓ Started PID=$PID"
-sleep 120
+sleep 240
 kill $PID 2>/dev/null || true
 
 # Analyze
