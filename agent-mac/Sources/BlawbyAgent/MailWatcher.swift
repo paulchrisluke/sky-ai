@@ -21,6 +21,11 @@ final class MailWatcher: @unchecked Sendable {
     private let emlxReader: EmlxReader
     private var distributedObserver: NSObjectProtocol?
     private var safetyTimer: DispatchSourceTimer?
+    
+    // Cache for discovered accounts and mailboxes to avoid re-discovery on every fetch
+    private var cachedAccounts: [EmlxAccount]?
+    private var cachedMailboxes: [String: [EmlxMailbox]] = [:] // accountId -> mailboxes
+    private var lastCacheUpdate: Date = .distantPast
 
     init(
         configStore: ConfigStore,
@@ -145,24 +150,27 @@ final class MailWatcher: @unchecked Sendable {
 
     private func discoverSourcesSync() -> [MailSourceDescriptor] {
         if emlxReader.isAvailable() {
-            let accounts = emlxReader.discoverAccounts()
-            var out: [MailSourceDescriptor] = []
-            for account in accounts {
-                let mailboxes = emlxReader.discoverMailboxes(account: account)
-                for mailbox in mailboxes {
-                    logger.info("emlx: found mailbox '\(mailbox.name)' in account '\(account.displayName)' (path: \(mailbox.path.path))")
-                    out.append(
-                        MailSourceDescriptor(
-                            id: "mail:\(account.displayName):\(mailbox.name)",
-                            accountId: account.displayName,
-                            mailbox: mailbox.name,
-                            sourceName: "\(account.displayName) - \(mailbox.name)"
+            updateCacheIfNeeded()
+            
+            if let accounts = cachedAccounts {
+                var out: [MailSourceDescriptor] = []
+                for account in accounts {
+                    let mailboxes = cachedMailboxes[account.displayName] ?? []
+                    for mailbox in mailboxes {
+                        logger.info("emlx: found mailbox '\(mailbox.name)' in account '\(account.displayName)' (path: \(mailbox.path.path))")
+                        out.append(
+                            MailSourceDescriptor(
+                                id: "mail:\(account.displayName):\(mailbox.name)",
+                                accountId: account.displayName,
+                                mailbox: mailbox.name,
+                                sourceName: "\(account.displayName) - \(mailbox.name)"
+                            )
                         )
-                    )
+                    }
                 }
-            }
-            if !out.isEmpty {
-                return out.sorted { $0.sourceName.localizedCaseInsensitiveCompare($1.sourceName) == .orderedAscending }
+                if !out.isEmpty {
+                    return out.sorted { $0.sourceName.localizedCaseInsensitiveCompare($1.sourceName) == .orderedAscending }
+                }
             }
         }
 
@@ -249,14 +257,37 @@ final class MailWatcher: @unchecked Sendable {
         return messages.count
     }
 
+    private func updateCacheIfNeeded() {
+        let now = Date()
+        // Update cache every 5 minutes or if cache is empty
+        if cachedAccounts == nil || now.timeIntervalSince(lastCacheUpdate) > 300 {
+            logger.info("emlx: starting account discovery scan")
+            let accounts = emlxReader.discoverAccounts()
+            cachedAccounts = accounts
+            
+            // Clear and rebuild mailbox cache
+            cachedMailboxes.removeAll()
+            for account in accounts {
+                let mailboxes = emlxReader.discoverMailboxes(account: account)
+                cachedMailboxes[account.displayName] = mailboxes
+            }
+            lastCacheUpdate = now
+            logger.info("emlx: cache updated - \(accounts.count) accounts, \(cachedMailboxes.values.map { $0.count }.reduce(0, +)) total mailboxes")
+        }
+    }
+    
     private func fetchMessagesSync(accountId: String, mailbox: String, since: Date, limit: Int) -> [RawMessage] {
         logger.info("fetchMessagesSync: account=\(accountId) mailbox=\(mailbox) since=\(since) limit=\(limit)")
         
+        // For Gmail, INBOX maps to All Mail on disk
+        let effectiveMailbox = (mailbox == "INBOX" && accountId.contains("gmail")) ? "All Mail" : mailbox
+        
         if emlxReader.isAvailable() {
-            let accounts = emlxReader.discoverAccounts()
-            if let account = accounts.first(where: { $0.displayName == accountId }) {
-                let mailboxes = emlxReader.discoverMailboxes(account: account)
-                if let target = mailboxes.first(where: { $0.name == mailbox }) {
+            updateCacheIfNeeded()
+            
+            if let account = cachedAccounts?.first(where: { $0.displayName == accountId }) {
+                let mailboxes = cachedMailboxes[accountId] ?? []
+                if let target = mailboxes.first(where: { $0.name == effectiveMailbox }) {
                     let results = emlxReader.readMessages(mailbox: target, since: since, limit: limit)
                     if !results.isEmpty {
                         logger.info("emlx: fetched \(results.count) messages via direct filesystem")

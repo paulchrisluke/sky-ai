@@ -328,18 +328,59 @@ final class EntityExtractor: EntityExtracting {
 
     private func decodeWireEntities(from rawContent: String) throws -> [ExtractedEntityWire] {
         let decoder = JSONDecoder()
-        let payload = Data(stripJsonCodeFence(rawContent).utf8)
+        
+        // Try to fix incomplete JSON by ensuring it ends properly
+        let cleanedContent = fixIncompleteJSON(rawContent)
+        let payload = Data(cleanedContent.utf8)
 
         if let rows = try? decoder.decode([ExtractedEntityWire].self, from: payload) {
+            logger.info("EntityExtractor decoded as array format: \(rows.count) entities")
             return rows
         }
         if let wrapped = try? decoder.decode(ExtractedEntityEnvelope.self, from: payload) {
+            logger.info("EntityExtractor decoded as envelope format: \(wrapped.entities.count) entities")
             return wrapped.entities
         }
         if let one = try? decoder.decode(ExtractedEntityWire.self, from: payload) {
+            logger.info("EntityExtractor decoded as single entity format")
             return [one]
         }
+        
+        logger.warning("EntityExtractor failed to decode any format. Raw content: \(rawContent.prefix(1000))")
         throw EntityExtractorError.invalidOpenAIResponse
+    }
+    
+    private func fixIncompleteJSON(_ content: String) -> String {
+        // Find the last complete JSON object before any incomplete trailing data
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // If content doesn't end with complete JSON structure, try to fix it
+        if trimmed.hasSuffix("}") {
+            return trimmed
+        }
+        
+        // Find the position of the last complete object
+        var braceCount = 0
+        var lastCompletePos = -1
+        
+        for (index, char) in trimmed.enumerated() {
+            if char == "{" {
+                braceCount += 1
+            } else if char == "}" {
+                braceCount -= 1
+                if braceCount == 0 {
+                    lastCompletePos = index
+                }
+            }
+        }
+        
+        if lastCompletePos > 0 && lastCompletePos < trimmed.count - 1 {
+            // Return content up to the last complete object
+            let endIndex = trimmed.index(trimmed.startIndex, offsetBy: lastCompletePos + 1)
+            return String(trimmed[..<endIndex]) + "]"
+        }
+        
+        return content
     }
 
     private func normalizeStatus(_ value: String) -> String {

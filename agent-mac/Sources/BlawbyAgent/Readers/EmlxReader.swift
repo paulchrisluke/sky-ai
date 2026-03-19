@@ -155,7 +155,6 @@ final class EmlxReader: @unchecked Sendable {
                     var mailbox = mailboxMap[mboxURL] ?? EmlxMailbox(accountId: account.displayName, name: name, path: mboxURL)
                     mailbox.messageCount += countEmlx(in: url)
                     mailboxMap[mboxURL] = mailbox
-                    logger.info("emlx:   found messages in '\(name)' (current total: \(mailbox.messageCount))")
                 }
             }
         }
@@ -189,6 +188,7 @@ final class EmlxReader: @unchecked Sendable {
         
         var parsedCount = 0
         while let fileURL = enumerator?.nextObject() as? URL {
+            guard !fileURL.lastPathComponent.contains(".partial.") else { continue }
             if fileURL.pathExtension == "emlx" {
                 if let msg = parseEmlx(at: fileURL, accountId: mailbox.accountId, mailboxName: mailbox.name) {
                     if let since = since {
@@ -219,23 +219,23 @@ final class EmlxReader: @unchecked Sendable {
     private func parseEmlx(at url: URL, accountId: String, mailboxName: String) -> RawMessage? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         
-        // EMLX format: [length]\n[xml plist][rfc822 message]
-        // The first line is the length of the plist string.
-        let dataString = String(decoding: data.prefix(100), as: UTF8.self)
-        let parts = dataString.split(separator: "\n", maxSplits: 1)
-        guard parts.count >= 1, let plistLength = Int(parts[0].trimmingCharacters(in: .whitespaces)) else {
-            return nil
-        }
+        // Find first newline - length prefix ends here
+        guard let newlineIndex = data.firstIndex(of: UInt8(ascii: "\n")) else { return nil }
         
-        // Find actual start of plist (after the first \n)
-        guard let firstNewlineIndex = data.firstIndex(of: 10) else { return nil }
-        let plistStart = firstNewlineIndex + 1
-        let messageStart = plistStart + plistLength
+        // Parse length value
+        let lengthData = data[data.startIndex..<newlineIndex]
+        guard let lengthStr = String(data: lengthData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let rfc822Length = Int(lengthStr) else { return nil }
         
-        guard messageStart < data.count else { return nil }
+        // RFC822 content starts after newline
+        let rfc822Start = data.index(after: newlineIndex)
+        let rfc822End = min(data.index(rfc822Start, offsetBy: rfc822Length), data.endIndex)
         
-        let rfc822Data = data.subdata(in: messageStart..<data.count)
-        let rfc822String = String(decoding: rfc822Data, as: UTF8.self)
+        guard rfc822Start < data.endIndex else { return nil }
+        
+        let rfc822Data = data[rfc822Start..<rfc822End]
+        guard let rfc822String = String(data: rfc822Data, encoding: .utf8) 
+            ?? String(data: rfc822Data, encoding: .isoLatin1) else { return nil }
         
         return parseRFC822(content: rfc822String, accountId: accountId, mailbox: mailboxName, fileURL: url)
     }
@@ -308,6 +308,12 @@ final class EmlxReader: @unchecked Sendable {
         }
         let body = decodeMIMEBody(headers: headers, body: bodyRaw).prefix(3000)
         let bodyText = String(body)
+        
+        if subject.isEmpty && bodyText.isEmpty {
+            logger.warning("emlx: empty parse result for \(fileURL.lastPathComponent)")
+            return nil
+        }
+        
         logger.info("emlx parsed: subject='\(subject)' bodyLen=\(bodyText.count) messageId='\(messageId)'")
 
         return RawMessage(
