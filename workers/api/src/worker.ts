@@ -85,8 +85,9 @@ type UsageContext = {
   workspaceId?: string;
   accountId?: string;
   runId?: string;
+  operation?: string;
   endpoint?: string;
-  operation: string;
+  chunkId?: string;
 };
 
 type UsageEntry = {
@@ -182,6 +183,14 @@ export default {
 
     if (request.method === 'GET' && url.pathname === '/ops/usage-stats') {
       return getUsageStats(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/ops/chunking-stats') {
+      return getChunkingStats(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/ops/embedding-stats') {
+      return getEmbeddingStats(request, env);
     }
 
     if (request.method === 'GET' && url.pathname === '/ops/provider-health') {
@@ -1597,7 +1606,7 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
   if (!permission.ok) return permission.response;
 
-  const [messages, threads, chunks, embeddings, tasksOpen, followupsOpen, decisionsRecent] = await Promise.all([
+  const [messages, threads, chunks, embeddings, tasksOpen, followupsOpen, decisionsRecent, chunkingMetrics, embeddingMetrics] = await Promise.all([
     env.SKY_DB
       .prepare('SELECT COUNT(*) AS c FROM email_messages WHERE workspace_id = ? AND account_id = ?')
       .bind(workspaceId, accountId)
@@ -1611,28 +1620,58 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
-      .prepare(
-        `SELECT
-            SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
-            SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) AS retry,
-            SUM(CASE WHEN status = 'indexed' THEN 1 ELSE 0 END) AS indexed
-         FROM embedding_jobs
-         WHERE workspace_id = ? AND account_id = ?`
-      )
+      .prepare(`SELECT
+         SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
+         SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) AS retry,
+         SUM(CASE WHEN status = 'indexed' THEN 1 ELSE 0 END) AS indexed
+       FROM embedding_jobs
+       WHERE workspace_id = ? AND account_id = ?`)
       .bind(workspaceId, accountId)
-      .first<{ queued: number | null; retry: number | null; indexed: number | null }>(),
+      .first<{ queued: number; retry: number; indexed: number }>(),
     env.SKY_DB
-      .prepare("SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND account_id = ? AND status IN ('ready','needs_review')")
+      .prepare('SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND account_id = ? AND status = \'open\'')
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
-      .prepare("SELECT COUNT(*) AS c FROM followups WHERE workspace_id = ? AND account_id = ? AND status IN ('ready','needs_review')")
+      .prepare('SELECT COUNT(*) AS c FROM followups WHERE workspace_id = ? AND account_id = ? AND status = \'open\'')
       .bind(workspaceId, accountId)
       .first<{ c: number }>(),
     env.SKY_DB
       .prepare("SELECT COUNT(*) AS c FROM decisions WHERE workspace_id = ? AND account_id = ? AND date(created_at) >= date('now','utc','-7 days')")
       .bind(workspaceId, accountId)
-      .first<{ c: number }>()
+      .first<{ c: number }>(),
+    env.SKY_DB
+      .prepare(`SELECT 
+         COUNT(*) AS documents_processed,
+         SUM(original_length) AS total_original_length,
+         SUM(chunk_count) AS total_chunks,
+         ROUND(AVG(avg_chunk_length), 2) AS avg_chunk_length,
+         ROUND(AVG(processing_time_ms), 2) AS avg_processing_time_ms
+       FROM chunking_metrics
+       WHERE workspace_id = ? AND account_id = ?`)
+      .bind(workspaceId, accountId)
+      .first<{ 
+        documents_processed: number; 
+        total_original_length: number; 
+        total_chunks: number; 
+        avg_chunk_length: number; 
+        avg_processing_time_ms: number; 
+      }>(),
+    env.SKY_DB
+      .prepare(`SELECT
+         COUNT(*) AS total_embeddings,
+         SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS successful_embeddings,
+         ROUND(AVG(embedding_latency_ms), 2) AS avg_latency_ms,
+         SUM(embedding_cost_usd) AS total_cost_usd
+       FROM embedding_metrics
+       WHERE workspace_id = ? AND account_id = ?`)
+      .bind(workspaceId, accountId)
+      .first<{ 
+        total_embeddings: number; 
+        successful_embeddings: number; 
+        avg_latency_ms: number; 
+        total_cost_usd: number; 
+      }>()
   ]);
 
   return json({
@@ -1651,6 +1690,21 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
       queued: Number(embeddings?.queued || 0),
       retry: Number(embeddings?.retry || 0),
       indexed: Number(embeddings?.indexed || 0)
+    },
+    chunking: {
+      documentsProcessed: Number(chunkingMetrics?.documents_processed || 0),
+      totalOriginalLength: Number(chunkingMetrics?.total_original_length || 0),
+      totalChunks: Number(chunkingMetrics?.total_chunks || 0),
+      avgChunkLength: Number(chunkingMetrics?.avg_chunk_length || 0),
+      avgProcessingTimeMs: Number(chunkingMetrics?.avg_processing_time_ms || 0)
+    },
+    embeddingPerformance: {
+      totalEmbeddings: Number(embeddingMetrics?.total_embeddings || 0),
+      successfulEmbeddings: Number(embeddingMetrics?.successful_embeddings || 0),
+      successRate: embeddingMetrics?.total_embeddings > 0 ? 
+        Number(((Number(embeddingMetrics?.successful_embeddings || 0) / Number(embeddingMetrics?.total_embeddings)) * 100).toFixed(2)) : 0,
+      avgLatencyMs: Number(embeddingMetrics?.avg_latency_ms || 0),
+      totalCostUsd: Number(Number(embeddingMetrics?.total_cost_usd || 0).toFixed(6))
     },
     generatedAt: new Date().toISOString()
   });
@@ -1955,6 +2009,205 @@ async function getProviderHealth(request: Request, env: Env): Promise<Response> 
       totalErrors: Number(recentErrors?.total_errors || 0),
       insufficientQuotaErrors: Number(recentErrors?.insufficient_quota_errors || 0)
     },
+    generatedAt: new Date().toISOString()
+  });
+}
+
+async function getChunkingStats(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+  
+  const workspaceId = url.searchParams.get('workspaceId') || 'default';
+  const accountId = (url.searchParams.get('accountId') || '').trim() || null;
+  if (accountId) {
+    const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+    if (!permission.ok) return permission.response;
+  } else {
+    const permission = await assertWorkspacePermission(env, auth.principal, workspaceId);
+    if (!permission.ok) return permission.response;
+  }
+
+  const daysRaw = Number(url.searchParams.get('days') || '7');
+  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(90, Math.trunc(daysRaw)) : 7;
+
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT document_type,
+              COUNT(*) AS documents_processed,
+              SUM(original_length) AS total_original_length,
+              SUM(chunk_count) AS total_chunks,
+              ROUND(AVG(avg_chunk_length), 2) AS avg_chunk_length,
+              ROUND(MIN(min_chunk_length), 2) AS min_chunk_length_seen,
+              ROUND(MAX(max_chunk_length), 2) AS max_chunk_length_seen,
+              ROUND(AVG(overlap_ratio), 4) AS avg_overlap_ratio,
+              ROUND(AVG(processing_time_ms), 2) AS avg_processing_time_ms,
+              chunking_strategy
+       FROM chunking_metrics
+       WHERE workspace_id = ?
+         AND (? IS NULL OR COALESCE(account_id, '') = ?)
+         AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-' || ? || ' days')
+       GROUP BY document_type, chunking_strategy
+       ORDER BY documents_processed DESC`
+    )
+    .bind(workspaceId, accountId, accountId, String(days))
+    .all<{
+      document_type: string;
+      documents_processed: number | string;
+      total_original_length: number | string;
+      total_chunks: number | string;
+      avg_chunk_length: number | string;
+      min_chunk_length_seen: number | string;
+      max_chunk_length_seen: number | string;
+      avg_overlap_ratio: number | string;
+      avg_processing_time_ms: number | string;
+      chunking_strategy: string;
+    }>();
+
+  const totals = (rows.results || []).reduce(
+    (acc, row) => {
+      acc.documentsProcessed += Number(row.documents_processed || 0);
+      acc.totalOriginalLength += Number(row.total_original_length || 0);
+      acc.totalChunks += Number(row.total_chunks || 0);
+      acc.totalProcessingTimeMs += Number(row.avg_processing_time_ms || 0) * Number(row.documents_processed || 0);
+      return acc;
+    },
+    { documentsProcessed: 0, totalOriginalLength: 0, totalChunks: 0, totalProcessingTimeMs: 0 }
+  );
+
+  const overallAvgChunkLength = totals.totalChunks > 0 ? totals.totalOriginalLength / totals.totalChunks : 0;
+  const overallAvgProcessingTime = totals.documentsProcessed > 0 ? totals.totalProcessingTimeMs / totals.documentsProcessed : 0;
+
+  return json({
+    ok: true,
+    workspaceId,
+    accountId,
+    windowDays: days,
+    totals: {
+      documentsProcessed: totals.documentsProcessed,
+      totalOriginalLength: totals.totalOriginalLength,
+      totalChunks: totals.totalChunks,
+      avgChunkLength: Number(overallAvgChunkLength.toFixed(2)),
+      avgProcessingTimeMs: Number(overallAvgProcessingTime.toFixed(2)),
+      compressionRatio: totals.totalChunks > 0 ? Number((totals.totalOriginalLength / totals.totalChunks).toFixed(2)) : 0
+    },
+    breakdown: (rows.results || []).map((row) => ({
+      documentType: row.document_type || 'unknown',
+      chunkingStrategy: row.chunking_strategy || 'default',
+      documentsProcessed: Number(row.documents_processed || 0),
+      totalOriginalLength: Number(row.total_original_length || 0),
+      totalChunks: Number(row.total_chunks || 0),
+      avgChunkLength: Number(row.avg_chunk_length || 0),
+      minChunkLengthSeen: Number(row.min_chunk_length_seen || 0),
+      maxChunkLengthSeen: Number(row.max_chunk_length_seen || 0),
+      avgOverlapRatio: Number(row.avg_overlap_ratio || 0),
+      avgProcessingTimeMs: Number(row.avg_processing_time_ms || 0)
+    })),
+    generatedAt: new Date().toISOString()
+  });
+}
+
+async function getEmbeddingStats(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const auth = await authorizeHttpRequest(request, env);
+  if (!auth.ok) return auth.response;
+  
+  const workspaceId = url.searchParams.get('workspaceId') || 'default';
+  const accountId = (url.searchParams.get('accountId') || '').trim() || null;
+  if (accountId) {
+    const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
+    if (!permission.ok) return permission.response;
+  } else {
+    const permission = await assertWorkspacePermission(env, auth.principal, workspaceId);
+    if (!permission.ok) return permission.response;
+  }
+
+  const daysRaw = Number(url.searchParams.get('days') || '7');
+  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(90, Math.trunc(daysRaw)) : 7;
+
+  const rows = await env.SKY_DB
+    .prepare(
+      `SELECT provider,
+              model,
+              COUNT(*) AS total_embeddings,
+              SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS successful_embeddings,
+              SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS failed_embeddings,
+              ROUND(AVG(embedding_latency_ms), 2) AS avg_latency_ms,
+              ROUND(MIN(embedding_latency_ms), 2) AS min_latency_ms,
+              ROUND(MAX(embedding_latency_ms), 2) AS max_latency_ms,
+              AVG(vector_dimensions) AS avg_vector_dimensions,
+              SUM(token_count) AS total_tokens,
+              SUM(embedding_cost_usd) AS total_cost_usd,
+              AVG(batch_size) AS avg_batch_size
+       FROM embedding_metrics
+       WHERE workspace_id = ?
+         AND (? IS NULL OR COALESCE(account_id, '') = ?)
+         AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-' || ? || ' days')
+       GROUP BY provider, model
+       ORDER BY total_embeddings DESC`
+    )
+    .bind(workspaceId, accountId, accountId, String(days))
+    .all<{
+      provider: string;
+      model: string;
+      total_embeddings: number | string;
+      successful_embeddings: number | string;
+      failed_embeddings: number | string;
+      avg_latency_ms: number | string;
+      min_latency_ms: number | string;
+      max_latency_ms: number | string;
+      avg_vector_dimensions: number | string;
+      total_tokens: number | string;
+      total_cost_usd: number | string;
+      avg_batch_size: number | string;
+    }>();
+
+  const totals = (rows.results || []).reduce(
+    (acc, row) => {
+      acc.totalEmbeddings += Number(row.total_embeddings || 0);
+      acc.successfulEmbeddings += Number(row.successful_embeddings || 0);
+      acc.failedEmbeddings += Number(row.failed_embeddings || 0);
+      acc.totalTokens += Number(row.total_tokens || 0);
+      acc.totalCostUsd += Number(row.total_cost_usd || 0);
+      acc.totalLatencyMs += Number(row.avg_latency_ms || 0) * Number(row.total_embeddings || 0);
+      return acc;
+    },
+    { totalEmbeddings: 0, successfulEmbeddings: 0, failedEmbeddings: 0, totalTokens: 0, totalCostUsd: 0, totalLatencyMs: 0 }
+  );
+
+  const overallAvgLatency = totals.totalEmbeddings > 0 ? totals.totalLatencyMs / totals.totalEmbeddings : 0;
+  const overallSuccessRate = totals.totalEmbeddings > 0 ? (totals.successfulEmbeddings / totals.totalEmbeddings) * 100 : 0;
+
+  return json({
+    ok: true,
+    workspaceId,
+    accountId,
+    windowDays: days,
+    totals: {
+      totalEmbeddings: totals.totalEmbeddings,
+      successfulEmbeddings: totals.successfulEmbeddings,
+      failedEmbeddings: totals.failedEmbeddings,
+      successRate: Number(overallSuccessRate.toFixed(2)),
+      totalTokens: totals.totalTokens,
+      totalCostUsd: Number(totals.totalCostUsd.toFixed(6)),
+      avgLatencyMs: Number(overallAvgLatency.toFixed(2)),
+      avgTokensPerEmbedding: totals.totalEmbeddings > 0 ? Number((totals.totalTokens / totals.totalEmbeddings).toFixed(2)) : 0
+    },
+    breakdown: (rows.results || []).map((row) => ({
+      provider: row.provider,
+      model: row.model,
+      totalEmbeddings: Number(row.total_embeddings || 0),
+      successfulEmbeddings: Number(row.successful_embeddings || 0),
+      failedEmbeddings: Number(row.failed_embeddings || 0),
+      successRate: Number(row.total_embeddings > 0 ? ((Number(row.successful_embeddings || 0) / Number(row.total_embeddings)) * 100).toFixed(2) : 0),
+      avgLatencyMs: Number(row.avg_latency_ms || 0),
+      minLatencyMs: Number(row.min_latency_ms || 0),
+      maxLatencyMs: Number(row.max_latency_ms || 0),
+      avgVectorDimensions: Number(row.avg_vector_dimensions || 0),
+      totalTokens: Number(row.total_tokens || 0),
+      totalCostUsd: Number(Number(row.total_cost_usd || 0).toFixed(6)),
+      avgBatchSize: Number(row.avg_batch_size || 0)
+    })),
     generatedAt: new Date().toISOString()
   });
 }
@@ -3230,6 +3483,98 @@ async function recordUsageEvent(env: Env, entry: UsageEntry & { workspaceId?: st
   }
 }
 
+async function recordChunkingMetrics(
+  env: Env,
+  metrics: {
+    workspaceId: string;
+    accountId?: string;
+    sourceRecordId: string;
+    documentType?: string;
+    originalLength: number;
+    chunkCount: number;
+    avgChunkLength: number;
+    minChunkLength: number;
+    maxChunkLength: number;
+    overlapRatio?: number;
+    chunkingStrategy?: string;
+    processingTimeMs?: number;
+  }
+): Promise<void> {
+  try {
+    const id = crypto.randomUUID();
+    await env.SKY_DB
+      .prepare(
+        `INSERT INTO chunking_metrics
+           (id, workspace_id, account_id, source_record_id, document_type, original_length, chunk_count, avg_chunk_length, min_chunk_length, max_chunk_length, overlap_ratio, chunking_strategy, processing_time_ms, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+      )
+      .bind(
+        id,
+        metrics.workspaceId,
+        metrics.accountId || null,
+        metrics.sourceRecordId,
+        metrics.documentType || null,
+        metrics.originalLength,
+        metrics.chunkCount,
+        metrics.avgChunkLength,
+        metrics.minChunkLength,
+        metrics.maxChunkLength,
+        metrics.overlapRatio || 0,
+        metrics.chunkingStrategy || 'default',
+        metrics.processingTimeMs || null
+      )
+      .run();
+  } catch {
+    // metrics telemetry must never break primary request paths
+  }
+}
+
+async function recordEmbeddingMetrics(
+  env: Env,
+  metrics: {
+    workspaceId: string;
+    accountId?: string;
+    chunkId: string;
+    provider: string;
+    model: string;
+    embeddingLatencyMs?: number;
+    vectorDimensions?: number;
+    batchSize?: number;
+    tokenCount?: number;
+    embeddingCostUsd?: number;
+    status?: string;
+    errorCode?: string;
+  }
+): Promise<void> {
+  try {
+    const id = crypto.randomUUID();
+    await env.SKY_DB
+      .prepare(
+        `INSERT INTO embedding_metrics
+           (id, workspace_id, account_id, chunk_id, provider, model, embedding_latency_ms, vector_dimensions, batch_size, token_count, embedding_cost_usd, status, error_code, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+      )
+      .bind(
+        id,
+        metrics.workspaceId,
+        metrics.accountId || null,
+        metrics.chunkId,
+        metrics.provider,
+        metrics.model,
+        metrics.embeddingLatencyMs || null,
+        metrics.vectorDimensions || null,
+        metrics.batchSize || 1,
+        metrics.tokenCount || null,
+        metrics.embeddingCostUsd || null,
+        metrics.status || 'success',
+        metrics.errorCode || null
+      )
+      .run();
+  } catch {
+    // metrics telemetry must never break primary request paths
+  }
+}
+
 function estimateTextUnits(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
@@ -3387,6 +3732,8 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
   };
   if (env.CF_AIG_AUTH_TOKEN) headers['cf-aig-authorization'] = `Bearer ${env.CF_AIG_AUTH_TOKEN}`;
 
+  const startTime = Date.now();
+
   const response = await fetch(gatewayUrl, {
     method: 'POST',
     headers,
@@ -3395,6 +3742,9 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
       input: query
     })
   });
+
+  const latency = Date.now() - startTime;
+
   if (!response.ok) {
     const text = await response.text();
     const gatewayError = classifyGatewayError(response.status, text);
@@ -3410,17 +3760,16 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
       errorCode: gatewayError.providerErrorCode || gatewayError.classificationCode,
       metadata: { preview: text.slice(0, 200) }
     });
-    if (gatewayError.disableReason) {
-      await disableProviderTemporarily(env.SKY_DB, 'openai', {
-        minutes:
-          gatewayError.disableReason === 'insufficient_quota'
-            ? getOpenAiQuotaCooldownMinutes(env)
-            : getOpenAiRateLimitCooldownMinutes(env),
-        classificationCode: gatewayError.classificationCode,
-        providerErrorCode: gatewayError.providerErrorCode,
-        lastError: text.slice(0, 1000)
-      });
-    }
+    await recordEmbeddingMetrics(env, {
+      workspaceId: usageContext?.workspaceId || 'default',
+      accountId: usageContext?.accountId,
+      chunkId: usageContext?.chunkId || 'search-query',
+      provider: 'openai',
+      model: env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
+      embeddingLatencyMs: latency,
+      status: 'error',
+      errorCode: gatewayError.providerErrorCode || gatewayError.classificationCode
+    });
     throw new Error(`search_embedding_failed_${response.status}:${text.slice(0, 300)}`);
   }
   const body = (await response.json()) as {
@@ -3430,6 +3779,8 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
   const vector = body.data?.[0]?.embedding || [];
   if (!Array.isArray(vector) || vector.length === 0) throw new Error('search_embedding_invalid_response');
   const requestUnits = Number(body.usage?.prompt_tokens ?? body.usage?.total_tokens ?? 0);
+  const estimatedCost = estimateUsageCostUsd('openai', env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small', requestUnits, 0, env);
+  
   await recordUsageEvent(env, {
     workspaceId: usageContext?.workspaceId,
     accountId: usageContext?.accountId,
@@ -3440,8 +3791,20 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
     endpoint: usageContext?.endpoint || '/search',
     requestUnits,
     responseUnits: 0,
-    estimatedCostUsd: estimateUsageCostUsd('openai', env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small', requestUnits, 0, env),
+    estimatedCostUsd: estimatedCost,
     status: 'ok'
+  });
+  await recordEmbeddingMetrics(env, {
+    workspaceId: usageContext?.workspaceId || 'default',
+    accountId: usageContext?.accountId,
+    chunkId: usageContext?.chunkId || 'search-query',
+    provider: 'openai',
+    model: env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
+    embeddingLatencyMs: latency,
+    vectorDimensions: vector.length,
+    tokenCount: requestUnits,
+    embeddingCostUsd: estimatedCost || undefined,
+    status: 'success'
   });
   await markProviderHealthy(env.SKY_DB, 'openai');
   return vector;
@@ -3449,11 +3812,27 @@ async function embedQueryViaGateway(env: Env, query: string, usageContext?: Usag
 
 async function embedQueryViaWorkersAi(env: Env, query: string, usageContext?: UsageContext): Promise<number[]> {
   const model = env.WORKERS_AI_EMBEDDING_MODEL || '@cf/baai/bge-base-en-v1.5';
+  const startTime = Date.now();
+  
   const result = (await env.AI!.run(model, { text: [query] }, workersAiGatewayOptions(env))) as {
     data?: number[] | number[][];
     shape?: number[];
   };
+  
+  const latency = Date.now() - startTime;
   const approxUnits = estimateTextUnits(query);
+  
+  await recordEmbeddingMetrics(env, {
+    workspaceId: usageContext?.workspaceId || 'default',
+    accountId: usageContext?.accountId,
+    chunkId: usageContext?.chunkId || 'search-query',
+    provider: 'workers_ai',
+    model,
+    embeddingLatencyMs: latency,
+    tokenCount: approxUnits,
+    status: 'success'
+  });
+  
   await recordUsageEvent(env, {
     workspaceId: usageContext?.workspaceId,
     accountId: usageContext?.accountId,
@@ -3468,13 +3847,20 @@ async function embedQueryViaWorkersAi(env: Env, query: string, usageContext?: Us
     status: 'ok'
   });
 
-  if (Array.isArray(result?.shape) && result.shape.length === 2 && Array.isArray(result.data) && typeof result.data[0] === 'number') {
-    const dims = Number(result.shape[1] || 0);
-    const flat = result.data as number[];
-    if (dims > 0 && flat.length >= dims) return flat.slice(0, dims);
-  }
   if (Array.isArray(result?.data) && Array.isArray(result.data[0])) {
-    return (result.data as number[][])[0] || [];
+    const vector = (result.data as number[][])[0] || [];
+    await recordEmbeddingMetrics(env, {
+      workspaceId: usageContext?.workspaceId || 'default',
+      accountId: usageContext?.accountId,
+      chunkId: usageContext?.chunkId || 'search-query',
+      provider: 'workers_ai',
+      model,
+      embeddingLatencyMs: latency,
+      vectorDimensions: vector.length,
+      tokenCount: approxUnits,
+      status: 'success'
+    });
+    return vector;
   }
   throw new Error('workers_ai_search_embedding_invalid_response');
 }
