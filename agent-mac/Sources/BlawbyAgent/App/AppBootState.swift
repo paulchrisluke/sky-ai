@@ -44,8 +44,9 @@ enum SourceActivationStatus: Equatable {
     case degraded(reason: String)
 }
 
-struct SourceCapability: Identifiable {
-    let id: String
+struct SourceCapability: Equatable, Identifiable {
+    var id: String { kind.rawValue }
+    
     let kind: SourceKind
     let displayName: String
     let availability: SourceAvailability
@@ -54,8 +55,15 @@ struct SourceCapability: Identifiable {
     let isRequiredForCoreValue: Bool
     let canDefer: Bool
     
-    init(kind: SourceKind, displayName: String, availability: SourceAvailability, authorization: SourceAuthorizationStatus, activation: SourceActivationStatus, isRequiredForCoreValue: Bool, canDefer: Bool) {
-        self.id = kind.rawValue
+    init(
+        kind: SourceKind,
+        displayName: String,
+        availability: SourceAvailability,
+        authorization: SourceAuthorizationStatus,
+        activation: SourceActivationStatus,
+        isRequiredForCoreValue: Bool,
+        canDefer: Bool
+    ) {
         self.kind = kind
         self.displayName = displayName
         self.availability = availability
@@ -66,27 +74,7 @@ struct SourceCapability: Identifiable {
     }
 }
 
-// MARK: - Error Models
-enum StartupIssue: Identifiable {
-    case sourceUnavailable(SourceKind, reason: String)
-    case authorizationDenied(SourceKind)
-    case activationFailed(SourceKind, reason: String)
-    case partialDependencyFailure(component: String, reason: String)
-    
-    var id: String {
-        switch self {
-        case .sourceUnavailable(let kind, let reason):
-            return "source_unavailable_\(kind.rawValue)_\(reason.hashValue)"
-        case .authorizationDenied(let kind):
-            return "auth_denied_\(kind.rawValue)"
-        case .activationFailed(let kind, let reason):
-            return "activation_failed_\(kind.rawValue)_\(reason.hashValue)"
-        case .partialDependencyFailure(let component, let reason):
-            return "dependency_failed_\(component)_\(reason.hashValue)"
-        }
-    }
-}
-
+// MARK: - Fatal Error Models
 enum FatalStartupIssue: Identifiable {
     case storageInitializationFailed(String)
     case configurationLoadFailed(String)
@@ -100,6 +88,17 @@ enum FatalStartupIssue: Identifiable {
             return "config_failed_\(reason.hashValue)"
         case .loggerInitializationFailed(let reason):
             return "logger_failed_\(reason.hashValue)"
+        }
+    }
+    
+    var localizedDescription: String {
+        switch self {
+        case .storageInitializationFailed(let reason):
+            return "Storage initialization failed: \(reason)"
+        case .configurationLoadFailed(let reason):
+            return "Configuration load failed: \(reason)"
+        case .loggerInitializationFailed(let reason):
+            return "Logger initialization failed: \(reason)"
         }
     }
 }

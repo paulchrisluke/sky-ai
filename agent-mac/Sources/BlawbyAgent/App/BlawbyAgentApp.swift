@@ -2,6 +2,16 @@ import SwiftUI
 import Sparkle
 import AppKit
 
+// MARK: - Commands
+struct BlawbyCommands: Commands {
+    let session: AppSession
+    let updates: SparkleUpdateController
+    
+    var body: some Commands {
+        EmptyCommands()
+    }
+}
+
 @main
 struct BlawbyAgentApp: App {
     @StateObject private var session = AppSession()
@@ -143,12 +153,35 @@ private struct MenuBarRootView: View {
             }
             .padding()
             .frame(width: 320)
+            
+        case .ready(let context, let activeSources):
+            ReadyMenuBarView(
+                context: context,
+                activeSources: activeSources,
+                session: session,
+                onOpenDashboard: { activateAndOpenWindow("main-dashboard", openWindow: openWindow) },
+                onOpenPreferences: { activateAndOpenWindow("preferences", openWindow: openWindow) }
+            )
+            .frame(width: 320)
+            
+        case .degraded(let context, let activeSources, let issues):
+            DegradedMenuBarView(
+                context: context,
+                activeSources: activeSources,
+                issues: issues,
+                session: session,
+                onOpenDashboard: { activateAndOpenWindow("main-dashboard", openWindow: openWindow) },
+                onOpenPreferences: { activateAndOpenWindow("preferences", openWindow: openWindow) }
+            )
+            .frame(width: 320)
         }
     }
 }
 
 // MARK: - Ready Menu Bar View
 private struct ReadyMenuBarView: View {
+    let context: BootstrapContext
+    let activeSources: [SourceKind: ActiveSource]
     @ObservedObject var session: AppSession
     let onOpenDashboard: () -> Void
     let onOpenPreferences: () -> Void
@@ -174,24 +207,10 @@ private struct ReadyMenuBarView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 
-                HStack(spacing: 8) {
-                    Button("Preferences") {
-                        onOpenPreferences()
-                    }
-                    .buttonStyle(.bordered)
-                    
-                    if session.legacyMenuState.syncActivated {
-                        Button("Pause") {
-                            session.toggleSync()
-                        }
-                        .buttonStyle(.bordered)
-                    } else {
-                        Button("Resume") {
-                            session.toggleSync()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
+                Button("Preferences") {
+                    onOpenPreferences()
                 }
+                .buttonStyle(.bordered)
             }
         }
         .padding()
@@ -201,6 +220,9 @@ private struct ReadyMenuBarView: View {
 
 // MARK: - Degraded Menu Bar View
 private struct DegradedMenuBarView: View {
+    let context: BootstrapContext
+    let activeSources: [SourceKind: ActiveSource]
+    let issues: [SourceIssue]
     @ObservedObject var session: AppSession
     let onOpenDashboard: () -> Void
     let onOpenPreferences: () -> Void
@@ -211,10 +233,10 @@ private struct DegradedMenuBarView: View {
                 .font(.title2)
                 .foregroundColor(.orange)
             
-            Text("Some Issues")
+            Text("Attention Needed")
                 .font(.headline)
             
-            Text("One or more sources need attention")
+            Text("Some sources need attention")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -238,43 +260,6 @@ private struct DegradedMenuBarView: View {
     }
 }
 
-// MARK: - Fatal Menu Bar View
-private struct FatalMenuBarView: View {
-    @ObservedObject var session: AppSession
-    let onOpenPreferences: () -> Void
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bolt.horizontal.circle.fill")
-                .font(.title2)
-                .foregroundColor(.red)
-            
-            Text("Startup Failed")
-                .font(.headline)
-            
-            Text("Blawby encountered an error")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            
-            Divider()
-            
-            VStack(spacing: 8) {
-                Button("Preferences") {
-                    onOpenPreferences()
-                }
-                .buttonStyle(.borderedProminent)
-                
-                Button("Quit") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-        .padding()
-        .frame(width: 320)
-    }
-}
 
 private struct DashboardRootView: View {
     @ObservedObject var session: AppSession
@@ -297,8 +282,22 @@ private struct DashboardRootView: View {
             .frame(minWidth: 960, minHeight: 620)
             
         case .fatal(let fatalIssue):
-            FatalErrorView(
-                fatalIssue: fatalIssue,
+            FatalErrorView(fatalIssue: fatalIssue.localizedDescription)
+            .frame(minWidth: 960, minHeight: 620)
+            
+        case .ready(let context, let activeSources):
+            ReadyDashboardView(
+                context: context,
+                activeSources: activeSources,
+                session: session
+            )
+            .frame(minWidth: 960, minHeight: 620)
+            
+        case .degraded(let context, let activeSources, let issues):
+            DegradedDashboardView(
+                context: context,
+                activeSources: activeSources,
+                issues: issues,
                 session: session
             )
             .frame(minWidth: 960, minHeight: 620)
@@ -402,242 +401,134 @@ private struct IssueCardView: View {
     }
 }
 
-// MARK: - Source Card View (Legacy - for backward compatibility)
-private struct SourceCardView: View {
-    let capability: SourceCapability
-    @ObservedObject var session: AppSession
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: capability.kind.systemImage)
-                    .font(.title2)
-                    .foregroundColor(statusColor)
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(capability.displayName)
-                        .font(.headline)
-                    
-                    Text(statusText)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-                
-                if capability.activation.isActive {
-                    Button("Disable") {
-                        Task {
-                            await session.disableSource(capability.kind)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                } else if capability.authorization == .denied || capability.authorization == .restricted {
-                    Button("Open Settings") {
-                        PlatformHelper.openSystemSettings(for: capability.kind)
-                    }
-                    .buttonStyle(.borderedProminent)
-                } else {
-                    Button("Enable") {
-                        Task {
-                            await session.enableSource(capability.kind)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canEnable)
-                }
-            }
-            
-            // Authorization status
-            if capability.authorization != .notRequired {
-                HStack {
-                    Image(systemName: authStatusIcon)
-                        .foregroundColor(authStatusColor)
-                    Text(authStatusText)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            // Availability status
-            if case .unavailable(let reason) = capability.availability {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundColor(.orange)
-                    Text("Unavailable: \(reason)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
+
+// MARK: - Sparkle Update Controller
+@MainActor
+final class SparkleUpdateController: ObservableObject {
+    private let updaterController: SPUStandardUpdaterController
+    
+    init() {
+        self.updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
     }
     
-    private var statusColor: Color {
-        switch capability.activation {
-        case .active: return .green
-        case .activating: return .orange
-        case .inactive: return .gray
-        case .degraded: return .red
-        }
-    }
-    
-    private var statusText: String {
-        switch capability.activation {
-        case .active: return "Active"
-        case .activating: return "Activating..."
-        case .inactive: return "Inactive"
-        case .degraded(let reason): return "Degraded: \(reason)"
-        }
-    }
-    
-    private var canEnable: Bool {
-        return capability.availability.isAvailable && 
-               capability.authorization != .denied &&
-               capability.authorization != .restricted
-    }
-    
-    private var authStatusIcon: String {
-        switch capability.authorization {
-        case .authorized: return "checkmark.shield"
-        case .denied: return "xmark.shield"
-        case .restricted: return "minus.shield"
-        case .notDetermined: return "questionmark.shield"
-        case .notRequired: return "shield"
-        }
-    }
-    
-    private var authStatusColor: Color {
-        switch capability.authorization {
-        case .authorized: return .green
-        case .denied: return .red
-        case .restricted: return .orange
-        case .notDetermined: return .gray
-        case .notRequired: return .blue
-        }
-    }
-    
-    private var authStatusText: String {
-        switch capability.authorization {
-        case .authorized: return "Authorized"
-        case .denied: return "Access denied"
-        case .restricted: return "Access restricted"
-        case .notDetermined: return "Not requested"
-        case .notRequired: return "Not required"
-        }
+    func checkForUpdates() {
+        updaterController.checkForUpdates(nil)
     }
 }
 
-// MARK: - Ready Dashboard View
+// MARK: - Dashboard Views
 private struct ReadyDashboardView: View {
-    let runtime: AppRuntime
+    let context: BootstrapContext
+    let activeSources: [SourceKind: ActiveSource]
     @ObservedObject var session: AppSession
-
-    var body: some View {
-        VStack {
-            Text("Blawby is Ready")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-            Text("Your sources are connected and syncing")
-                .font(.title2)
-                .foregroundColor(.secondary)
-        }
-        .padding()
-    }
-}
-
-// MARK: - Degraded Dashboard View
-private struct DegradedDashboardView: View {
-    let runtime: AppRuntime
-    let issues: [StartupIssue]
-    @ObservedObject var session: AppSession
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
-                Text("Some sources need attention")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
+                // Primary headline
+                VStack(spacing: 8) {
+                    Text("Blawby is ready")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                    Text("Your sources are active and syncing")
+                        .font(.title3)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 32)
                 
+                // Active sources
                 LazyVStack(spacing: 16) {
-                    ForEach(issues) { issue in
-                        IssueCardView(issue: issue)
+                    ForEach(Array(activeSources.keys).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
+                        EnhancedSourceCardView(
+                            capability: SourceCapability(
+                                kind: kind,
+                                displayName: kind.displayName,
+                                availability: .available,
+                                authorization: .authorized,
+                                activation: .active,
+                                isRequiredForCoreValue: kind == .mail,
+                                canDefer: false
+                            ),
+                            issues: [],
+                            session: session
+                        )
                     }
                 }
-                
-                Button("Continue with available sources") {
-                    // Continue with what works
-                }
-                .buttonStyle(.borderedProminent)
             }
-            .padding()
+            .padding(.horizontal, 32)
         }
     }
 }
 
-// MARK: - Issue Card View
-private struct IssueCardView: View {
-    let issue: StartupIssue
-
-    var body: some View {
-        HStack {
-            Image(systemName: "exclamationmark.triangle")
-                .foregroundColor(.orange)
-            
-            VStack(alignment: .leading) {
-                Text(issueTitle)
-                    .font(.headline)
-                Text(issueDescription)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Spacer()
-            
-            Button("Fix") {
-                // TODO: Implement repair actions
-            }
-        }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
-    }
-    
-    private var issueTitle: String {
-        switch issue {
-        case .sourceUnavailable(let kind, _):
-            return "\(kind.displayName) unavailable"
-        case .authorizationDenied(let kind):
-            return "\(kind.displayName) access denied"
-        case .activationFailed(let kind, _):
-            return "\(kind.displayName) activation failed"
-        case .partialDependencyFailure(let component, _):
-            return "Component issue: \(component)"
-        }
-    }
-    
-    private var issueDescription: String {
-        switch issue {
-        case .sourceUnavailable(_, let reason):
-            return reason
-        case .authorizationDenied:
-            return "Open System Settings to grant access"
-        case .activationFailed(_, let reason):
-            return reason
-        case .partialDependencyFailure(_, let reason):
-            return reason
-        }
-    }
-}
-
-// MARK: - Fatal Error View
-private struct FatalErrorView: View {
-    let fatalIssue: FatalStartupIssue
+private struct DegradedDashboardView: View {
+    let context: BootstrapContext
+    let activeSources: [SourceKind: ActiveSource]
+    let issues: [SourceIssue]
     @ObservedObject var session: AppSession
     @Environment(\.openWindow) private var openWindow
 
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                // Primary headline
+                VStack(spacing: 8) {
+                    Text("Some sources need attention")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                    Text("Fix the issues below to restore full functionality")
+                        .font(.title3)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 32)
+                
+                // Active sources with issues
+                LazyVStack(spacing: 16) {
+                    ForEach(Array(activeSources.keys).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
+                        let sourceIssues = issues.filter { $0.kind == kind }
+                        EnhancedSourceCardView(
+                            capability: SourceCapability(
+                                kind: kind,
+                                displayName: kind.displayName,
+                                availability: .available,
+                                authorization: .authorized,
+                                activation: .active,
+                                isRequiredForCoreValue: kind == .mail,
+                                canDefer: false
+                            ),
+                            issues: sourceIssues,
+                            session: session
+                        )
+                    }
+                }
+                
+                // Issues section
+                if !issues.isEmpty {
+                    VStack(spacing: 16) {
+                        Text("Additional Issues")
+                            .font(.headline)
+                        
+                        LazyVStack(spacing: 12) {
+                            ForEach(issues) { issue in
+                                IssueCardView(issue: issue)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 32)
+        }
+    }
+}
+
+private struct FatalErrorView: View {
+    let fatalIssue: String
+    
     var body: some View {
         VStack(spacing: 24) {
             Image(systemName: "exclamationmark.octagon")
@@ -648,90 +539,12 @@ private struct FatalErrorView: View {
                 .font(.largeTitle)
                 .fontWeight(.bold)
             
-            Text(errorDescription)
+            Text(fatalIssue)
                 .font(.body)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 600)
-            
-            VStack(spacing: 16) {
-                Button("Open Preferences") {
-                    activateAndOpenWindow("preferences", openWindow: openWindow)
-                }
-                .buttonStyle(.borderedProminent)
-                
-                Button("View Logs") {
-                    // TODO: Implement log viewing
-                }
-                .buttonStyle(.bordered)
-            }
         }
-        .padding()
-    }
-    
-    private var errorDescription: String {
-        switch fatalIssue {
-        case .storageInitializationFailed(let reason):
-            return "Blawby couldn't initialize its storage. This might be due to disk space or permissions issues."
-        case .configurationLoadFailed(let reason):
-            return "Blawby's configuration is corrupted or unreadable."
-        case .loggerInitializationFailed(let reason):
-            return "Blawby couldn't start its logging system."
-        }
-    }
-}
-
-private struct BlawbyCommands: Commands {
-    @ObservedObject var session: AppSession
-    @ObservedObject var updates: SparkleUpdateController
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some Commands {
-        CommandMenu("Blawby") {
-            Button("Open Dashboard") {
-                activateAndOpenWindow("main-dashboard", openWindow: openWindow)
-            }
-            .keyboardShortcut("d")
-
-            Button("Preferences…") {
-                activateAndOpenWindow("preferences", openWindow: openWindow)
-            }
-            .keyboardShortcut(",", modifiers: [.command])
-
-            Button("Check for Updates…") {
-                updates.checkForUpdates()
-            }
-
-            Divider()
-
-            Button(session.menuState.syncActivated ? "Pause Sync" : "Resume Sync") {
-                session.toggleSync()
-            }
-            .keyboardShortcut("p", modifiers: [.command, .shift])
-
-            Divider()
-
-            Button("Quit Blawby") {
-                NSApplication.shared.terminate(nil)
-            }
-            .keyboardShortcut("q", modifiers: [.command])
-        }
-    }
-}
-
-@MainActor
-final class SparkleUpdateController: ObservableObject {
-    private let updaterController: SPUStandardUpdaterController
-
-    init() {
-        self.updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
-            updaterDelegate: nil,
-            userDriverDelegate: nil
-        )
-    }
-
-    func checkForUpdates() {
-        updaterController.checkForUpdates(nil)
+        .padding(32)
+        .frame(maxWidth: 400)
     }
 }

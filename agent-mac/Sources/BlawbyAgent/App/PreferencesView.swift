@@ -12,8 +12,6 @@ struct PreferencesView: View {
 
     var body: some View {
         TabView {
-            sourcesTab
-                .tabItem { Label("Sources", systemImage: "tray.full") }
             connectionTab
                 .tabItem { Label("Connection", systemImage: "link") }
         }
@@ -21,44 +19,35 @@ struct PreferencesView: View {
         .onAppear(perform: loadFromSession)
     }
 
-    @ViewBuilder
-    private var sourcesTab: some View {
-        if let sourceManager = session.sourceManager {
-            SourcesView(sourceManager: sourceManager)
-                .padding()
-        } else if let startupError = session.startupError {
-            Text("Startup failed: \(startupError)")
-                .foregroundColor(.red)
-                .padding()
-        } else {
-            ProgressView("Loading sources…")
-                .padding()
-        }
-    }
-
     private var connectionTab: some View {
         Form {
-            TextField("Worker URL", text: $workerUrl)
-            TextField("Workspace ID", text: $workspaceId)
-            TextField("Account ID", text: $accountId)
-            SecureField("API Key", text: $apiKey)
-            SecureField("OpenAI API Key", text: $openaiApiKey)
-
-            HStack {
-                Spacer()
-                Button("Save") {
+            Section("Worker Configuration") {
+                TextField("Worker URL", text: $workerUrl)
+                TextField("API Key", text: $apiKey)
+                TextField("Workspace ID", text: $workspaceId)
+                TextField("Account ID", text: $accountId)
+            }
+            
+            Section("OpenAI Configuration") {
+                TextField("OpenAI API Key", text: $openaiApiKey)
+            }
+            
+            Section {
+                Button("Save Configuration") {
                     save()
                 }
-                .keyboardShortcut(.defaultAction)
-            }
-
-            if let saveMessage {
-                Text(saveMessage)
-                    .foregroundColor(.green)
-            }
-            if let saveError {
-                Text(saveError)
-                    .foregroundColor(.red)
+                
+                if let saveMessage = saveMessage {
+                    Text(saveMessage)
+                        .foregroundColor(.green)
+                        .padding()
+                }
+                
+                if let saveError = saveError {
+                    Text(saveError)
+                        .foregroundColor(.red)
+                        .padding()
+                }
             }
         }
         .padding(20)
@@ -66,27 +55,33 @@ struct PreferencesView: View {
 
     private func loadFromSession() {
         guard let config = session.config else { return }
-        workerUrl = config.workerUrl
-        workspaceId = config.workspaceId
-        accountId = config.accountId
-        apiKey = config.apiKey
+        workerUrl = config.workerUrl ?? ""
+        workspaceId = config.workspaceId ?? ""
+        accountId = config.accountId ?? ""
+        apiKey = config.apiKey ?? ""
         openaiApiKey = config.openaiApiKey ?? ""
     }
 
     private func save() {
         saveMessage = nil
         saveError = nil
-        do {
-            try session.saveConnectionSettings(
-                workerUrl: workerUrl,
-                workspaceId: workspaceId,
-                accountId: accountId,
-                apiKey: apiKey,
-                openaiApiKey: openaiApiKey
-            )
-            saveMessage = "Saved. Restart app to apply new transport credentials."
-        } catch {
-            saveError = error.localizedDescription
+        Task {
+            do {
+                try await session.saveConnectionSettings(
+                    workerUrl: workerUrl,
+                    workspaceId: workspaceId,
+                    accountId: accountId,
+                    apiKey: apiKey,
+                    openaiApiKey: openaiApiKey
+                )
+                await MainActor.run {
+                    saveMessage = "Saved. Restart app to apply new transport credentials."
+                }
+            } catch {
+                await MainActor.run {
+                    saveError = error.localizedDescription
+                }
+            }
         }
     }
 }

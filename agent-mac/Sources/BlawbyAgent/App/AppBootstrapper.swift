@@ -27,10 +27,10 @@ final class AppBootstrapper {
         let (activeSources, activationIssues) = try await activateEnabledSources(context: context, capabilities: discoveredCapabilities, registry: sourceRegistry)
         
         // Layer D: Merge runtime activation state for UI (after activation)
-        let mergedCapabilities = mergeActivationState(capabilities: discoveredCapabilities, registry: sourceRegistry)
+        let mergedCapabilities = await mergeActivationState(capabilities: discoveredCapabilities, registry: sourceRegistry)
         
         // Layer E: Compute boot state from actual runtime plus issues
-        let bootState = computeBootState(context: context, capabilities: mergedCapabilities, activeSources: activeSources, issues: activationIssues, registry: sourceRegistry)
+        let bootState = await computeBootState(context: context, capabilities: mergedCapabilities, activeSources: activeSources, issues: activationIssues, registry: sourceRegistry)
         
         return bootState
     }
@@ -79,6 +79,7 @@ final class AppBootstrapper {
     }
     
     // MARK: - Layer B: Source Discovery
+    @MainActor
     private func discoverSources(context: BootstrapContext, registry: SourceRegistry) async -> [SourceCapability] {
         var capabilities: [SourceCapability] = []
         
@@ -92,13 +93,15 @@ final class AppBootstrapper {
     }
     
     // MARK: - Merge Runtime Activation State
+    @MainActor
     private func mergeActivationState(
         capabilities: [SourceCapability],
         registry: SourceRegistry
-    ) -> [SourceCapability] {
-        capabilities.map { capability in
-            let activation: SourceActivationStatus = registry.isActive(capability.kind) ? .active : .inactive
-            return SourceCapability(
+    ) async -> [SourceCapability] {
+        var mergedCapabilities: [SourceCapability] = []
+        for capability in capabilities {
+            let activation: SourceActivationStatus = await registry.isActive(capability.kind) ? .active : .inactive
+            mergedCapabilities.append(SourceCapability(
                 kind: capability.kind,
                 displayName: capability.displayName,
                 availability: capability.availability,
@@ -106,11 +109,13 @@ final class AppBootstrapper {
                 activation: activation,
                 isRequiredForCoreValue: capability.isRequiredForCoreValue,
                 canDefer: capability.canDefer
-            )
+            ))
         }
+        return mergedCapabilities
     }
     
     // MARK: - Layer C: Activate Enabled Sources
+    @MainActor
     private func activateEnabledSources(
         context: BootstrapContext,
         capabilities: [SourceCapability],
@@ -126,12 +131,12 @@ final class AppBootstrapper {
         // Attempt activation only for sources not already active
         for capability in enabledCapabilities {
             // Skip if already active in registry
-            if registry.isActive(capability.kind) {
+            if await registry.isActive(capability.kind) {
                 continue
             }
             
             do {
-                let activeSource = try await registry.activate(capability.kind, in: context)
+                _ = try await registry.activate(capability.kind, in: context)
                 // Registry manages active sources, we don't need to track them here
             } catch {
                 // Activation failed - generate issues from provider
@@ -153,23 +158,24 @@ final class AppBootstrapper {
         }
         
         // Return current active sources from registry and any issues
-        let activeSources = registry.getActiveSources()
+        let activeSources = await registry.getActiveSources()
         return (activeSources, sourceIssues)
     }
     
     // MARK: - Layer D: Compute Boot State
+    @MainActor
     private func computeBootState(
         context: BootstrapContext,
         capabilities: [SourceCapability],
         activeSources: [SourceKind: ActiveSource],
         issues: [SourceIssue],
         registry: SourceRegistry
-    ) -> AppBootState {
+    ) async -> AppBootState {
         // Determine state based on actual active sources
         if !activeSources.isEmpty {
             // Include issues for enabled sources only (discovery + activation)
             let enabledKinds = Set(SourceKind.allCases.filter { context.activationStateStore.isEnabled($0) })
-            let enabledDiscoveryIssues = generateDiscoverySourceIssues(capabilities: capabilities, registry: registry)
+            let enabledDiscoveryIssues = await generateDiscoverySourceIssues(capabilities: capabilities, registry: registry)
                 .filter { enabledKinds.contains($0.kind) }
             let allRuntimeIssues = enabledDiscoveryIssues + issues
             
@@ -181,13 +187,14 @@ final class AppBootstrapper {
         } else {
             // No active sources - show setup
             // Include discovery issues for all sources
-            let discoveryIssues = generateDiscoverySourceIssues(capabilities: capabilities, registry: registry)
+            let discoveryIssues = await generateDiscoverySourceIssues(capabilities: capabilities, registry: registry)
             let allIssues = discoveryIssues + issues
             return .setupRequired(context, capabilities, allIssues)
         }
     }
     
-    private func generateDiscoverySourceIssues(capabilities: [SourceCapability], registry: SourceRegistry) -> [SourceIssue] {
+    @MainActor
+    private func generateDiscoverySourceIssues(capabilities: [SourceCapability], registry: SourceRegistry) async -> [SourceIssue] {
         var issues: [SourceIssue] = []
         
         for capability in capabilities {

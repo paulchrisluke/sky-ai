@@ -10,6 +10,20 @@ final class AppSession: ObservableObject {
     private let bootstrapper: AppBootstrapper
     private let sourceRegistry = SourceRegistry() // Lives here, not in bootstrap
     private nonisolated(unsafe) var terminationObserver: NSObjectProtocol?
+    
+    // MARK: - PreferencesView Compatibility
+    var config: Config? { currentContext?.config }
+    var startupError: String? {
+        switch bootState {
+        case .fatal(.storageInitializationFailed(let reason)): 
+            return "Storage initialization failed: \(reason)"
+        case .fatal(.configurationLoadFailed(let reason)): 
+            return "Configuration load failed: \(reason)"
+        case .fatal(.loggerInitializationFailed(let reason)): 
+            return "Logger initialization failed: \(reason)"
+        default: return nil
+        }
+    }
 
     init(bootstrapper: AppBootstrapper = AppBootstrapper()) {
         self.bootstrapper = bootstrapper
@@ -81,6 +95,38 @@ final class AppSession: ObservableObject {
         Task { @MainActor in
             await sourceRegistry.shutdown()
         }
+    }
+    
+    // MARK: - PreferencesView Methods
+    func saveConnectionSettings(
+        workerUrl: String,
+        workspaceId: String,
+        accountId: String,
+        apiKey: String,
+        openaiApiKey: String
+    ) async throws {
+        guard let context = currentContext else {
+            throw NSError(domain: "AppSession", code: 1, userInfo: [NSLocalizedDescriptionKey: "No active context"])
+        }
+        
+        let defaults = UserDefaults.standard
+        let keychain = KeychainStore()
+        
+        // Save to UserDefaults
+        defaults.set(workerUrl.isEmpty ? nil : workerUrl, forKey: Preferences.Keys.workerUrl)
+        defaults.set(workspaceId.isEmpty ? nil : workspaceId, forKey: Preferences.Keys.workspaceId)
+        defaults.set(accountId.isEmpty ? nil : accountId, forKey: Preferences.Keys.accountId)
+        
+        // Save to Keychain
+        if !apiKey.isEmpty {
+            try keychain.write(apiKey, account: Preferences.Keys.keychainAPIKey)
+        }
+        if !openaiApiKey.isEmpty {
+            try keychain.write(openaiApiKey, account: Preferences.Keys.keychainOpenAI)
+        }
+        
+        // Refresh boot state to pick up new config
+        await refreshBootState()
     }
     
     // MARK: - Private Helpers

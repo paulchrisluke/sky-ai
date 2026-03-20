@@ -28,24 +28,14 @@ final class ContactsSourceProvider: SourceProvider {
     }
     
     func activate(in context: BootstrapContext) async throws -> ActiveSource {
-        // Request permission if needed
         let currentStatus = await checkContactsAuthorizationStatus()
         if !currentStatus.isAuthorized {
             try await requestContactsAccess()
         }
-        
-        // Create contacts watcher
-        let watcher = ContactsWatcher(config: context.config, logger: context.logger)
-        
-        // Start the watcher
-        try await watcher.startObserving()
-        
-        // Return active source with stop function
+
         return ActiveSource(
             kind: .contacts,
-            stop: {
-                await watcher.stopObserving()
-            }
+            stop: { }
         )
     }
     
@@ -124,5 +114,33 @@ final class ContactsSourceProvider: SourceProvider {
         }
         
         return issues
+    }
+    
+    func generateActivationFailureIssues(for error: Error) -> [SourceIssue] {
+        let errorMessage = error.localizedDescription.lowercased()
+        
+        if errorMessage.contains("denied") || errorMessage.contains("restricted") {
+            return [SourceIssue(
+                kind: .contacts,
+                severity: .error,
+                category: .authorization,
+                title: "Contacts Access Denied",
+                description: "Blawby cannot access your contacts. Please check your privacy settings.",
+                repairActions: [
+                    .openSystemSettings(.contacts)
+                ]
+            )]
+        } else {
+            return [SourceIssue(
+                kind: .contacts,
+                severity: .error,
+                category: .activation,
+                title: "Contacts Activation Failed",
+                description: error.localizedDescription,
+                repairActions: [
+                    .retryActivation(.contacts)
+                ]
+            )]
+        }
     }
 }

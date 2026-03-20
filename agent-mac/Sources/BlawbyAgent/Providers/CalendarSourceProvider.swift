@@ -38,7 +38,7 @@ final class CalendarSourceProvider: SourceProvider {
         let watcher = CalendarWatcher(config: context.config, logger: context.logger)
         
         // Start the watcher
-        try await watcher.startObserving()
+        try await watcher.startObserving(onChange: { })
         
         // Mark as enabled
         context.activationStateStore.setEnabled(.calendar, enabled: true)
@@ -63,6 +63,8 @@ final class CalendarSourceProvider: SourceProvider {
             case .denied: return .denied
             case .restricted: return .restricted
             case .notDetermined: return .notDetermined
+            case .fullAccess: return .authorized
+            case .writeOnly: return .authorized
             @unknown default: return .notDetermined
             }
         } else {
@@ -72,6 +74,8 @@ final class CalendarSourceProvider: SourceProvider {
             case .denied: return .denied
             case .restricted: return .restricted
             case .notDetermined: return .notDetermined
+            case .fullAccess: return .authorized
+            case .writeOnly: return .authorized
             @unknown default: return .notDetermined
             }
         }

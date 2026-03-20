@@ -29,18 +29,15 @@ final class MailSourceProvider: SourceProvider {
     
     func activate(in context: BootstrapContext) async throws -> ActiveSource {
         // Create mail watcher - Apple Events permission will be checked during start
-        let watcher = MailWatcher(config: context.config, logger: context.logger)
+        let watcher = MailWatcher(configStore: context.configStore, logger: context.logger)
         
         // Start the watcher - this will fail if automation permission is denied
         do {
-            try await watcher.startObserving()
+            try await watcher.startObserving(onChange: { })
         } catch {
-            // Convert watcher failure to appropriate activation error
-            if error.localizedDescription.contains("Apple Events") || error.localizedDescription.contains("automation") {
-                throw SourceActivationError.automationDenied
-            } else {
-                throw SourceActivationError.watcherStartFailed(error.localizedDescription)
-            }
+            // Normalize runtime errors to appropriate activation errors
+            let normalizedError = normalizeActivationError(error)
+            throw normalizedError
         }
         
         // Return active source with stop function
@@ -50,6 +47,20 @@ final class MailSourceProvider: SourceProvider {
                 await watcher.stopObserving()
             }
         )
+    }
+    
+    // MARK: - Error Normalization
+    private func normalizeActivationError(_ error: Error) -> SourceActivationError {
+        let errorMessage = error.localizedDescription.lowercased()
+        
+        if errorMessage.contains("apple events") || errorMessage.contains("automation") || errorMessage.contains("permission denied") {
+            return .automationDenied
+        } else if errorMessage.contains("mail") || errorMessage.contains("watcher") || errorMessage.contains("monitoring") {
+            return .watcherStartFailed(error.localizedDescription)
+        } else {
+            // Default to watcher failed for unknown errors
+            return .watcherStartFailed("Mail activation failed: \(error.localizedDescription)")
+        }
     }
     
     // MARK: - Issue Generation

@@ -80,7 +80,7 @@ private struct RepairActionsView: View {
 }
 
 // MARK: - Enhanced Source Card View with Repair Actions
-private struct EnhancedSourceCardView: View {
+struct EnhancedSourceCardView: View {
     let capability: SourceCapability
     let issues: [SourceIssue]
     @ObservedObject var session: AppSession
@@ -104,6 +104,7 @@ private struct EnhancedSourceCardView: View {
                 
                 Spacer()
                 
+                // Primary actions based on capability state only (no hard-coded repair)
                 if capability.activation.isActive {
                     Button("Disable") {
                         Task {
@@ -111,12 +112,8 @@ private struct EnhancedSourceCardView: View {
                         }
                     }
                     .buttonStyle(.bordered)
-                } else if capability.authorization == .denied || capability.authorization == .restricted {
-                    Button("Open Settings") {
-                        PlatformHelper.openSystemSettings(for: capability.kind)
-                    }
-                    .buttonStyle(.borderedProminent)
                 } else {
+                    // Enable button - repair actions handled by RepairActionsView
                     Button("Enable") {
                         Task {
                             await session.enableSource(capability.kind)
