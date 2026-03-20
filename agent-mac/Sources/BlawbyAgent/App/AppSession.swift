@@ -4,20 +4,16 @@ import ServiceManagement
 
 @MainActor
 final class AppSession: ObservableObject {
-    @Published private(set) var sourceManager: SourceManager?
-    @Published private(set) var config: Config?
-    @Published private(set) var startupError: String?
+    @Published var bootState: AppBootState = .launching
+    @Published var syncRequested: Bool = true
 
-    let menuState = MenuBarState()
-
-    private var logger: Logger?
-    private var syncCoordinator: SyncCoordinator?
-    private var runtimeController: SyncRuntimeController?
-    private var contactsReader: ContactsReader?
+    private let bootstrapper: AppBootstrapper
+    private let sourceRegistry = SourceRegistry() // Lives here, not in bootstrap
     private nonisolated(unsafe) var terminationObserver: NSObjectProtocol?
 
-    init() {
-        bootstrap()
+    init(bootstrapper: AppBootstrapper = AppBootstrapper()) {
+        self.bootstrapper = bootstrapper
+        boot()
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
@@ -35,160 +31,77 @@ final class AppSession: ObservableObject {
         }
     }
 
+    // MARK: - Sync Intent
     func toggleSync() {
-        setSyncEnabled(!menuState.syncActivated)
+        syncRequested.toggle()
     }
 
-    func setSyncEnabled(_ enabled: Bool) {
-        guard menuState.syncActivated != enabled else { return }
-        menuState.syncActivated = enabled
-        UserDefaults.standard.set(enabled, forKey: Preferences.Keys.syncActivated)
-        logger?.info("sync activated preference updated: \(enabled)")
-
-        if enabled {
-            runtimeController?.start()
-        } else {
-            runtimeController?.stop()
-            menuState.connection = "Paused"
-        }
-    }
-
-    func saveConnectionSettings(
-        workerUrl: String,
-        workspaceId: String,
-        accountId: String,
-        apiKey: String,
-        openaiApiKey: String
-    ) throws {
-        let defaults = UserDefaults.standard
-        defaults.set(workerUrl, forKey: Preferences.Keys.workerUrl)
-        defaults.set(workspaceId, forKey: Preferences.Keys.workspaceId)
-        defaults.set(accountId, forKey: Preferences.Keys.accountId)
-
-        let keychain = KeychainStore()
-        let trimmedAPI = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedAPI.isEmpty {
-            try keychain.delete(Preferences.Keys.keychainAPIKey)
-        } else {
-            try keychain.write(trimmedAPI, account: Preferences.Keys.keychainAPIKey)
-        }
-
-        let trimmedOpenAI = openaiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedOpenAI.isEmpty {
-            try keychain.delete(Preferences.Keys.keychainOpenAI)
-        } else {
-            try keychain.write(trimmedOpenAI, account: Preferences.Keys.keychainOpenAI)
-        }
-
-        guard let current = config else { return }
-        config = Config(
-            workerUrl: workerUrl,
-            apiKey: trimmedAPI.isEmpty ? current.apiKey : trimmedAPI,
-            workspaceId: workspaceId,
-            accountId: ConfigStore.normalizeAccountId(accountId),
-            openaiApiKey: trimmedOpenAI.isEmpty ? nil : trimmedOpenAI
-        )
-    }
-
-    func shutdown() {
-        runtimeController?.stop()
-    }
-
-    private func bootstrap() {
-        NSApp.setActivationPolicy(.accessory)
-
-        do {
-            let startup = try AppStartupComposer().compose()
-            logger = startup.logger
-            sourceManager = startup.sourceManager
-            syncCoordinator = startup.syncCoordinator
-            contactsReader = startup.contactsReader
-            config = startup.config
-
-            menuState.syncActivated = startup.syncActivated
-            menuState.connection = startup.syncActivated ? "Connecting" : "Paused"
-
-            startup.syncCoordinator.setOnStatusChanged { [weak self] snapshot in
-                Task { @MainActor in
-                    self?.menuState.lastSync = snapshot.lastSyncAt
-                }
-            }
-            startup.webSocketPublisher.setOnConnected { [weak self] in
-                Task { @MainActor in
-                    await self?.syncCoordinator?.drainOutboundQueue()
-                }
-            }
-            startup.webSocketPublisher.setOnConnectionStateChanged { [weak self] state in
-                Task { @MainActor in
-                    self?.applyConnectionState(state)
-                }
-            }
-
-            let runtime = SyncRuntimeController(
-                dependencies: .init(
-                    syncCoordinator: startup.syncCoordinator,
-                    sourceManager: startup.sourceManager,
-                    mailWatcher: startup.mailWatcher,
-                    calendarWatcher: startup.calendarWatcher,
-                    logger: startup.logger,
-                    config: startup.config,
-                    localStore: startup.localStore,
-                    webSocketPublisher: startup.webSocketPublisher,
-                    isSyncEnabled: { [weak self] in
-                        self?.menuState.syncActivated == true
-                    }
-                )
-            )
-            runtimeController = runtime
-
-            contactsReader?.start()
-            if menuState.syncActivated {
-                runtime.start()
-            }
-            configureLoginItemRegistration(logger: startup.logger)
-        } catch {
-            startupError = error.localizedDescription
-        }
-    }
-
-    private func applyConnectionState(_ state: WebSocketConnectionState) {
-        if !menuState.syncActivated {
-            menuState.connection = "Paused"
-            return
-        }
-
-        switch state {
-        case .disconnected:
-            menuState.connection = "Disconnected"
-        case .connecting:
-            menuState.connection = "Connecting"
-        case .connected:
-            menuState.connection = "Connected"
-        case .reconnecting(let delaySeconds):
-            menuState.connection = "Reconnecting in \(delaySeconds)s"
-        }
-    }
-
-    private func configureLoginItemRegistration(logger: Logger) {
-        let bundlePath = Bundle.main.bundleURL.path
-        let isApplicationsInstall = bundlePath.hasPrefix("/Applications/")
-
-        if isApplicationsInstall {
+    // MARK: - Source Activation Commands
+    func enableSource(_ kind: SourceKind) async {
+        guard let context = currentContext else { return }
+        
+        // Persist enabled intent
+        context.activationStateStore.setEnabled(kind, enabled: true)
+        
+        // Activate through registry if not already active
+        if !sourceRegistry.isActive(kind) {
             do {
-                try SMAppService.mainApp.register()
-                logger.info("login item registered via SMAppService")
+                _ = try await sourceRegistry.activate(kind, in: context)
             } catch {
-                logger.warning("SMAppService register failed: \(error.localizedDescription)")
+                // Activation failed - will be reflected in next boot state
             }
-            return
         }
-
+        
+        // Recompute boot state
+        await refreshBootState()
+    }
+    
+    func disableSource(_ kind: SourceKind) async {
+        // Deactivate through registry
+        await sourceRegistry.deactivate(kind)
+        
+        // Update persisted intent
+        if let context = currentContext {
+            context.activationStateStore.setEnabled(kind, enabled: false)
+        }
+        
+        // Recompute boot state
+        await refreshBootState()
+    }
+    
+    func refreshBootState() async {
         do {
-            try SMAppService.mainApp.unregister()
-            logger.info("login item unregistered for non-/Applications run")
+            bootState = try await bootstrapper.bootstrap(sourceRegistry: sourceRegistry)
         } catch {
-            logger.warning("SMAppService unregister skipped: \(error.localizedDescription)")
+            bootState = .fatal(.configurationLoadFailed(String(describing: error)))
         }
-        logger.info("login item registration skipped (bundle path: \(bundlePath))")
+    }
+    
+    func shutdown() {
+        Task { @MainActor in
+            await sourceRegistry.shutdown()
+        }
+    }
+    
+    // MARK: - Private Helpers
+    private func boot() {
+        Task { @MainActor in
+            do {
+                bootState = try await bootstrapper.bootstrap(sourceRegistry: sourceRegistry)
+            } catch {
+                bootState = .fatal(.configurationLoadFailed(String(describing: error)))
+            }
+        }
+    }
+    
+    private var currentContext: BootstrapContext? {
+        switch bootState {
+        case .setupRequired(let context, _, _),
+             .ready(let context, _),
+             .degraded(let context, _, _):
+            return context
+        case .launching, .fatal:
+            return nil
+        }
     }
 }
