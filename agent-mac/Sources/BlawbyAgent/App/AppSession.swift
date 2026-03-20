@@ -5,10 +5,11 @@ import ServiceManagement
 @MainActor
 final class AppSession: ObservableObject {
     @Published var bootState: AppBootState = .launching
-    @Published var syncRequested: Bool = true
+    @Published var syncRequested: Bool
 
     private let bootstrapper: AppBootstrapper
     private let sourceRegistry = SourceRegistry() // Lives here, not in bootstrap
+    private let activationStateStore = ActivationStateStore() // Shared store instance
     private nonisolated(unsafe) var terminationObserver: NSObjectProtocol?
     
     // MARK: - PreferencesView Compatibility
@@ -27,14 +28,25 @@ final class AppSession: ObservableObject {
 
     init(bootstrapper: AppBootstrapper = AppBootstrapper()) {
         self.bootstrapper = bootstrapper
-        boot()
+        // Initialize syncRequested from persisted value, defaulting to true like bootstrap
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: Preferences.Keys.syncActivated) == nil {
+            self.syncRequested = true
+        } else {
+            self.syncRequested = defaults.bool(forKey: Preferences.Keys.syncActivated)
+        }
+
+        Task { @MainActor in
+            await boot()
+        }
+
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: nil
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.shutdown()
+                await self?.shutdown()
             }
         }
     }
@@ -46,24 +58,38 @@ final class AppSession: ObservableObject {
     }
 
     // MARK: - Sync Intent
-    func toggleSync() {
+    func toggleSync() async {
         syncRequested.toggle()
+        
+        // Persist sync preference to UserDefaults to affect bootstrap behavior
+        UserDefaults.standard.set(syncRequested, forKey: Preferences.Keys.syncActivated)
+        
+        // Invalidate cache since syncPreference changed
+        bootstrapper.invalidateCache()
+        
+        // Refresh boot state to pick up new sync preference
+        await refreshBootState()
     }
 
     // MARK: - Source Activation Commands
     func enableSource(_ kind: SourceKind) async {
-        guard let context = currentContext else { return }
+        // Persist desired state first - user wants this source enabled
+        activationStateStore.setDesired(kind, desired: true)
         
-        // Persist enabled intent
-        context.activationStateStore.setEnabled(kind, enabled: true)
-        
-        // Activate through registry if not already active
-        if !sourceRegistry.isActive(kind) {
+        // Try to get current context, but work without it if unavailable
+        if let context = currentContext {
             do {
-                _ = try await sourceRegistry.activate(kind, in: context)
+                // Activate through registry if not already active
+                if !sourceRegistry.isActive(kind) {
+                    _ = try await sourceRegistry.activate(kind, in: context)
+                }
+                // Registry manages active sources - no need to persist separate enabled state
             } catch {
-                // Activation failed - will be reflected in next boot state
+                // Activation failed - desired state remains but activation will be retried
             }
+        } else {
+            // No current context available (e.g., in fatal state)
+            // Just persist desired state and let bootstrap handle activation on next refresh
         }
         
         // Recompute boot state
@@ -74,10 +100,8 @@ final class AppSession: ObservableObject {
         // Deactivate through registry
         await sourceRegistry.deactivate(kind)
         
-        // Update persisted intent
-        if let context = currentContext {
-            context.activationStateStore.setEnabled(kind, enabled: false)
-        }
+        // Update persisted desired state using shared store instance
+        activationStateStore.setDesired(kind, desired: false)
         
         // Recompute boot state
         await refreshBootState()
@@ -87,14 +111,12 @@ final class AppSession: ObservableObject {
         do {
             bootState = try await bootstrapper.bootstrap(sourceRegistry: sourceRegistry)
         } catch {
-            bootState = .fatal(.configurationLoadFailed(String(describing: error)))
+            bootState = mapBootstrapError(error)
         }
     }
     
-    func shutdown() {
-        Task { @MainActor in
-            await sourceRegistry.shutdown()
-        }
+    func shutdown() async {
+        await sourceRegistry.shutdown()
     }
     
     // MARK: - PreferencesView Methods
@@ -105,10 +127,6 @@ final class AppSession: ObservableObject {
         apiKey: String,
         openaiApiKey: String
     ) async throws {
-        guard let context = currentContext else {
-            throw NSError(domain: "AppSession", code: 1, userInfo: [NSLocalizedDescriptionKey: "No active context"])
-        }
-        
         let defaults = UserDefaults.standard
         let keychain = KeychainStore()
         
@@ -125,17 +143,45 @@ final class AppSession: ObservableObject {
             try keychain.write(openaiApiKey, account: Preferences.Keys.keychainOpenAI)
         }
         
+        // Invalidate cache since config changed
+        bootstrapper.invalidateCache()
+        
         // Refresh boot state to pick up new config
         await refreshBootState()
     }
     
     // MARK: - Private Helpers
-    private func boot() {
-        Task { @MainActor in
-            do {
-                bootState = try await bootstrapper.bootstrap(sourceRegistry: sourceRegistry)
-            } catch {
-                bootState = .fatal(.configurationLoadFailed(String(describing: error)))
+    private func boot() async {
+        do {
+            bootState = try await bootstrapper.bootstrap(sourceRegistry: sourceRegistry)
+        } catch {
+            bootState = mapBootstrapError(error)
+        }
+    }
+    
+    private func mapBootstrapError(_ error: Error) -> AppBootState {
+        // Map typed BootstrapError to appropriate FatalStartupIssue
+        if let bootstrapError = error as? BootstrapError {
+            switch bootstrapError {
+            case .storageInitializationFailed(let reason):
+                return .fatal(.storageInitializationFailed(reason))
+            case .loggerInitializationFailed(let reason):
+                return .fatal(.loggerInitializationFailed(reason))
+            case .configurationLoadFailed(let reason):
+                return .fatal(.configurationLoadFailed(reason))
+            }
+        } else {
+            // Fallback for unknown errors - classify by error description
+            let errorDescription = String(describing: error)
+            
+            // Use more robust error classification based on error content
+            if error.localizedDescription.contains("storage") || error.localizedDescription.contains("database") {
+                return .fatal(.storageInitializationFailed(errorDescription))
+            } else if error.localizedDescription.contains("logger") || error.localizedDescription.contains("log") {
+                return .fatal(.loggerInitializationFailed(errorDescription))
+            } else {
+                // Default to configuration load failed for unknown errors
+                return .fatal(.configurationLoadFailed(errorDescription))
             }
         }
     }
@@ -143,8 +189,8 @@ final class AppSession: ObservableObject {
     private var currentContext: BootstrapContext? {
         switch bootState {
         case .setupRequired(let context, _, _),
-             .ready(let context, _),
-             .degraded(let context, _, _):
+             .ready(let context, _, _),
+             .degraded(let context, _, _, _):
             return context
         case .launching, .fatal:
             return nil

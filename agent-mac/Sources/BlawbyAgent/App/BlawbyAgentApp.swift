@@ -96,7 +96,7 @@ private struct MenuBarRootView: View {
                 .padding()
                 .frame(width: 320)
                 
-        case .setupRequired(let context, let capabilities, let issues):
+        case .setupRequired(_, _, _):
             VStack(spacing: 8) {
                 Image(systemName: "bolt.horizontal.circle.fill")
                     .font(.title2)
@@ -125,7 +125,7 @@ private struct MenuBarRootView: View {
             .padding()
             .frame(width: 320)
             
-        case .fatal(let fatalIssue):
+        case .fatal(_):
             VStack(spacing: 8) {
                 Image(systemName: "bolt.horizontal.circle.fill")
                     .font(.title2)
@@ -154,7 +154,7 @@ private struct MenuBarRootView: View {
             .padding()
             .frame(width: 320)
             
-        case .ready(let context, let activeSources):
+        case .ready(let context, _, let activeSources):
             ReadyMenuBarView(
                 context: context,
                 activeSources: activeSources,
@@ -164,7 +164,7 @@ private struct MenuBarRootView: View {
             )
             .frame(width: 320)
             
-        case .degraded(let context, let activeSources, let issues):
+        case .degraded(let context, _, let activeSources, let issues):
             DegradedMenuBarView(
                 context: context,
                 activeSources: activeSources,
@@ -213,8 +213,6 @@ private struct ReadyMenuBarView: View {
                 .buttonStyle(.bordered)
             }
         }
-        .padding()
-        .frame(width: 320)
     }
 }
 
@@ -285,17 +283,19 @@ private struct DashboardRootView: View {
             FatalErrorView(fatalIssue: fatalIssue.localizedDescription)
             .frame(minWidth: 960, minHeight: 620)
             
-        case .ready(let context, let activeSources):
+        case .ready(let context, let capabilities, let activeSources):
             ReadyDashboardView(
                 context: context,
+                capabilities: capabilities,
                 activeSources: activeSources,
                 session: session
             )
             .frame(minWidth: 960, minHeight: 620)
             
-        case .degraded(let context, let activeSources, let issues):
+        case .degraded(let context, let capabilities, let activeSources, let issues):
             DegradedDashboardView(
                 context: context,
+                capabilities: capabilities,
                 activeSources: activeSources,
                 issues: issues,
                 session: session
@@ -308,7 +308,7 @@ private struct DashboardRootView: View {
 // MARK: - Onboarding Dashboard View (Phase 3)
 private struct OnboardingDashboardView: View {
     let context: BootstrapContext
-    let capabilities: [SourceCapability]
+    let capabilities: [ResolvedSourceCapability]
     let issues: [SourceIssue]
     @ObservedObject var session: AppSession
     @Environment(\.openWindow) private var openWindow
@@ -424,6 +424,7 @@ final class SparkleUpdateController: ObservableObject {
 // MARK: - Dashboard Views
 private struct ReadyDashboardView: View {
     let context: BootstrapContext
+    let capabilities: [ResolvedSourceCapability]
     let activeSources: [SourceKind: ActiveSource]
     @ObservedObject var session: AppSession
     @Environment(\.openWindow) private var openWindow
@@ -445,19 +446,13 @@ private struct ReadyDashboardView: View {
                 // Active sources
                 LazyVStack(spacing: 16) {
                     ForEach(Array(activeSources.keys).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
-                        EnhancedSourceCardView(
-                            capability: SourceCapability(
-                                kind: kind,
-                                displayName: kind.displayName,
-                                availability: .available,
-                                authorization: .authorized,
-                                activation: .active,
-                                isRequiredForCoreValue: kind == .mail,
-                                canDefer: false
-                            ),
-                            issues: [],
-                            session: session
-                        )
+                        if let capability = capabilities.first(where: { $0.kind == kind }) {
+                            EnhancedSourceCardView(
+                                capability: capability,
+                                issues: [],
+                                session: session
+                            )
+                        }
                     }
                 }
             }
@@ -468,6 +463,7 @@ private struct ReadyDashboardView: View {
 
 private struct DegradedDashboardView: View {
     let context: BootstrapContext
+    let capabilities: [ResolvedSourceCapability]
     let activeSources: [SourceKind: ActiveSource]
     let issues: [SourceIssue]
     @ObservedObject var session: AppSession
@@ -491,19 +487,13 @@ private struct DegradedDashboardView: View {
                 LazyVStack(spacing: 16) {
                     ForEach(Array(activeSources.keys).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
                         let sourceIssues = issues.filter { $0.kind == kind }
-                        EnhancedSourceCardView(
-                            capability: SourceCapability(
-                                kind: kind,
-                                displayName: kind.displayName,
-                                availability: .available,
-                                authorization: .authorized,
-                                activation: .active,
-                                isRequiredForCoreValue: kind == .mail,
-                                canDefer: false
-                            ),
-                            issues: sourceIssues,
-                            session: session
-                        )
+                        if let capability = capabilities.first(where: { $0.kind == kind }) {
+                            EnhancedSourceCardView(
+                                capability: capability,
+                                issues: sourceIssues,
+                                session: session
+                            )
+                        }
                     }
                 }
                 

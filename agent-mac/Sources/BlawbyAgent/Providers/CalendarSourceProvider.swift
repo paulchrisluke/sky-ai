@@ -6,22 +6,22 @@ import EventKit
 final class CalendarSourceProvider: SourceProvider {
     let kind: SourceKind = .calendar
     
-    func discover(in context: BootstrapContext) async -> SourceCapability {
+    func discover(in context: BootstrapContext) async -> DiscoveredSourceCapability {
         // Calendar is always available on macOS
         let availability: SourceAvailability = .available
         
         // Check current authorization status without requesting
         let authorization = await checkCalendarAuthorizationStatus()
         
-        // Discovery only reports availability/auth, not runtime activation state
-        let activation: SourceActivationStatus = .inactive
+        // Discovery only reports discovery state, not runtime activation state
+        let discoveryStatus: SourceDiscoveryStatus = .inactive
         
-        return SourceCapability(
+        return DiscoveredSourceCapability(
             kind: .calendar,
             displayName: "Calendar",
             availability: availability,
             authorization: authorization,
-            activation: activation,
+            discoveryStatus: discoveryStatus,
             isRequiredForCoreValue: false,
             canDefer: true
         )
@@ -40,8 +40,7 @@ final class CalendarSourceProvider: SourceProvider {
         // Start the watcher
         try await watcher.startObserving(onChange: { })
         
-        // Mark as enabled
-        context.activationStateStore.setEnabled(.calendar, enabled: true)
+        // Mark onboarding as completed (actual enabled state managed by registry)
         context.activationStateStore.onboardingCompleted = true
         
         // Return active source with stop function
@@ -55,29 +54,16 @@ final class CalendarSourceProvider: SourceProvider {
     
     // MARK: - Private Methods
     private func checkCalendarAuthorizationStatus() async -> SourceAuthorizationStatus {
-        // Check current status WITHOUT requesting access
-        if #available(macOS 14.0, *) {
-            let status = EKEventStore.authorizationStatus(for: .event)
-            switch status {
-            case .authorized: return .authorized
-            case .denied: return .denied
-            case .restricted: return .restricted
-            case .notDetermined: return .notDetermined
-            case .fullAccess: return .authorized
-            case .writeOnly: return .authorized
-            @unknown default: return .notDetermined
-            }
-        } else {
-            let status = EKEventStore.authorizationStatus(for: .event)
-            switch status {
-            case .authorized: return .authorized
-            case .denied: return .denied
-            case .restricted: return .restricted
-            case .notDetermined: return .notDetermined
-            case .fullAccess: return .authorized
-            case .writeOnly: return .authorized
-            @unknown default: return .notDetermined
-            }
+        let status = EKEventStore.authorizationStatus(for: .event)
+        
+        switch status {
+        case .authorized: return .authorized
+        case .denied: return .denied
+        case .restricted: return .restricted
+        case .notDetermined: return .notDetermined
+        case .fullAccess: return .authorized
+        case .writeOnly: return .authorized
+        @unknown default: return .notDetermined
         }
     }
     
@@ -95,7 +81,7 @@ final class CalendarSourceProvider: SourceProvider {
                         continuation.resume(throwing: NSError(domain: "CalendarSourceProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "Calendar access denied"]))
                         return
                     }
-                    continuation.resume()
+                    continuation.resume(returning: ())
                 }
             } else {
                 // For older macOS, use the older API
@@ -108,14 +94,14 @@ final class CalendarSourceProvider: SourceProvider {
                         continuation.resume(throwing: NSError(domain: "CalendarSourceProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "Calendar access denied"]))
                         return
                     }
-                    continuation.resume()
+                    continuation.resume(returning: ())
                 }
             }
         }
     }
     
     // MARK: - Issue Generation
-    func generateIssues(for capability: SourceCapability) -> [SourceIssue] {
+    func generateIssues(for capability: DiscoveredSourceCapability) -> [SourceIssue] {
         var issues: [SourceIssue] = []
         
         switch capability.authorization {

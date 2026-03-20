@@ -14,6 +14,7 @@ final class ContactsReader: @unchecked Sendable {
     }
 
     func start() {
+        guard observer == nil else { return }
         requestAccessAndRefresh()
         observer = NotificationCenter.default.addObserver(
             forName: .CNContactStoreDidChange,
@@ -81,6 +82,12 @@ final class ContactsReader: @unchecked Sendable {
             logger.info("contacts refreshed count=\(contacts.count)")
         } catch {
             logger.error("contacts refresh failed: \(error.localizedDescription)")
+        }
+    }
+    
+    deinit {
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 }

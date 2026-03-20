@@ -21,9 +21,10 @@
 		64D87FB32ABDEF2744AAB268 /* AppPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87CECE75660918366767E4E1 /* AppPaths.swift */; };
 		73EF4F35647CB37D7EA34F2A /* blawby-logo-source.png in Resources */ = {isa = PBXBuildFile; fileRef = 06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */; };
 		865B4EFF997483C49A9D8997 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */; };
-		8906183134A01A77D5CC849A /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00B3BD000A32BFE8D55E39A8 /* DashboardView.swift */; };
 		9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA25A68472D76D0C994520D /* CalendarWatcher.swift */; };
 		A504C9A76E29448420575E52 /* AppSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B505A7DACEF2BD3A2F01DA76 /* AppSession.swift */; };
+            A504C9A76E29448420575E53 /* AppBootState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B505A7DACEF2BD3A2F01DA77 /* AppBootState.swift */; };
+            A504C9A76E29448420575E54 /* AppBootstrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B505A7DACEF2BD3A2F01DA78 /* AppBootstrapper.swift */; };
 		AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */; };
 		AE169531AE4BFA3F8237E346 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */; };
 		B025B4C8F54811B0EF59D17D /* MenuBarPopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */; };
@@ -53,7 +54,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		00B3BD000A32BFE8D55E39A8 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		03F3929134BE941F4D84B17C /* MessagesReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesReader.swift; sourceTree = "<group>"; };
 		06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "blawby-logo-source.png"; sourceTree = "<group>"; };
 		0FA6D9F37F3C7B9B5574DF43 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -82,6 +82,8 @@
 		A8D04FFB67431F372BB5AF25 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
 		AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketPublisher.swift; sourceTree = "<group>"; };
 		B505A7DACEF2BD3A2F01DA76 /* AppSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSession.swift; sourceTree = "<group>"; };
+            B505A7DACEF2BD3A2F01DA77 /* AppBootState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootState.swift; sourceTree = "<group>"; };
+            B505A7DACEF2BD3A2F01DA78 /* AppBootstrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootstrapper.swift; sourceTree = "<group>"; };
 		C0A27C3B2BCC26C16FDBF4D1 /* ArchitectureGuardrailsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchitectureGuardrailsTests.swift; sourceTree = "<group>"; };
 		C51397B60B3C9B31D8BEAA14 /* SourceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceManager.swift; sourceTree = "<group>"; };
 		CAA25A68472D76D0C994520D /* CalendarWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarWatcher.swift; sourceTree = "<group>"; };
@@ -124,11 +126,12 @@
 		454844A0E0F6606864D8C714 /* App */ = {
 			isa = PBXGroup;
 			children = (
+                            B505A7DACEF2BD3A2F01DA77 /* AppBootState.swift *,
+                            B505A7DACEF2BD3A2F01DA78 /* AppBootstrapper.swift *,
 				87CECE75660918366767E4E1 /* AppPaths.swift */,
 				B505A7DACEF2BD3A2F01DA76 /* AppSession.swift */,
 				44B3EB277CEF5DD708CBDACB /* AppStartupComposer.swift */,
 				740C4465BD562F786A434D1A /* BlawbyAgentApp.swift */,
-				00B3BD000A32BFE8D55E39A8 /* DashboardView.swift */,
 				7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */,
 				587536AF6523B68207BDF79C /* PreferencesView.swift */,
 				268D5A0DF63E60EC68837921 /* SourcesView.swift */,
@@ -346,6 +349,8 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+                            A504C9A76E29448420575E53 /* AppBootState.swift in Sources *,
+                            A504C9A76E29448420575E54 /* AppBootstrapper.swift in Sources *,
 		2FC3B14FF6B6A0F2CED9A9C7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -357,7 +362,6 @@
 				9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */,
 				289661C0209D41B5319B0657 /* Config.swift in Sources */,
 				AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */,
-				8906183134A01A77D5CC849A /* DashboardView.swift in Sources */,
 				5669259E3FB85B9AAB83B428 /* EmlxReader.swift in Sources */,
 				E28372C641824150C40949B0 /* EntityExtractor.swift in Sources */,
 				07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */,

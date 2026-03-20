@@ -6,22 +6,22 @@ import Contacts
 final class ContactsSourceProvider: SourceProvider {
     let kind: SourceKind = .contacts
     
-    func discover(in context: BootstrapContext) async -> SourceCapability {
+    func discover(in context: BootstrapContext) async -> DiscoveredSourceCapability {
         // Contacts is always available on macOS
         let availability: SourceAvailability = .available
         
         // Check current authorization status without requesting
         let authorization = await checkContactsAuthorizationStatus()
         
-        // Discovery only reports availability/auth, not runtime activation state
-        let activation: SourceActivationStatus = .inactive
+        // Discovery only reports discovery state, not runtime activation state
+        let discoveryStatus: SourceDiscoveryStatus = .inactive
         
-        return SourceCapability(
+        return DiscoveredSourceCapability(
             kind: .contacts,
             displayName: "Contacts",
             availability: availability,
             authorization: authorization,
-            activation: activation,
+            discoveryStatus: discoveryStatus,
             isRequiredForCoreValue: false,
             canDefer: true
         )
@@ -65,13 +65,13 @@ final class ContactsSourceProvider: SourceProvider {
                     continuation.resume(throwing: NSError(domain: "ContactsSourceProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "Contacts access denied"]))
                     return
                 }
-                continuation.resume()
+                continuation.resume(returning: ())
             }
         }
     }
     
     // MARK: - Issue Generation
-    func generateIssues(for capability: SourceCapability) -> [SourceIssue] {
+    func generateIssues(for capability: DiscoveredSourceCapability) -> [SourceIssue] {
         var issues: [SourceIssue] = []
         
         switch capability.authorization {

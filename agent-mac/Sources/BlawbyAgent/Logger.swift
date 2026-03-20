@@ -1,6 +1,6 @@
 import Foundation
 
-final class Logger {
+final class Logger: @unchecked Sendable {
     private let logURL: URL
     private let queue = DispatchQueue(label: "com.blawby.agent.logger")
     private let formatter: ISO8601DateFormatter

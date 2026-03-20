@@ -1,6 +1,107 @@
 import Foundation
 import Combine
 
+// MARK: - Background Worker Actor
+
+/// Dedicated actor for safe background processing of mail entities
+/// Returns results for main actor to handle I/O operations
+actor MailEntityWorker {
+    private let mailProcessor: any MailProcessing
+    private let logger: Logger
+    
+    init(mailProcessor: any MailProcessing, logger: Logger) {
+        self.mailProcessor = mailProcessor
+        self.logger = logger
+    }
+    
+    func processEntities(
+        messages: [RawMessage],
+        workspaceId: String,
+        accountId: String
+    ) async -> EntityProcessingResult {
+        logger.info("background entity extraction starting for \(messages.count) messages")
+        do {
+            let entitiesProcessing = try await mailProcessor.process(messages: messages, workspaceId: workspaceId, skipExtraction: false)
+            logger.info("background entity extraction completed: \(entitiesProcessing.entities.count) entities extracted")
+            
+            if !entitiesProcessing.entities.isEmpty {
+                let entitiesPayload = SourceEntitiesPayload(
+                    type: "entities",
+                    workspaceId: workspaceId,
+                    accountId: accountId,
+                    entities: entitiesProcessing.entities
+                )
+                
+                let payload = try JSONEncoder().encode(entitiesPayload)
+                guard let json = String(data: payload, encoding: .utf8) else {
+                    throw NSError(domain: "MailEntityWorker", code: 3, userInfo: [NSLocalizedDescriptionKey: "payload encode failed"])
+                }
+                
+                // Calculate entity counts by message ID for main actor
+                let entityCounts = Dictionary(grouping: entitiesProcessing.entities, by: { $0.messageId })
+                    .mapValues { $0.count }
+                
+                return EntityProcessingResult(
+                    hasEntities: true,
+                    entitiesJson: json,
+                    entityCounts: entityCounts,
+                    totalEntities: entitiesProcessing.entities.count,
+                    errorDescription: nil
+                )
+            } else {
+                logger.info("no entities extracted from \(messages.count) messages for \(accountId)")
+                return EntityProcessingResult(
+                    hasEntities: false,
+                    entitiesJson: nil,
+                    entityCounts: [:],
+                    totalEntities: 0,
+                    errorDescription: nil
+                )
+            }
+        } catch {
+            logger.error("background entity extraction failed: \(error.localizedDescription)")
+            return EntityProcessingResult(
+                hasEntities: false,
+                entitiesJson: nil,
+                entityCounts: [:],
+                totalEntities: 0,
+                errorDescription: error.localizedDescription
+            )
+        }
+    }
+}
+
+/// Result from background entity processing (Sendable-safe)
+struct EntityProcessingResult: Sendable {
+    let hasEntities: Bool
+    let entitiesJson: String?
+    let entityCounts: [String: Int]
+    let totalEntities: Int
+    let errorDescription: String?
+}
+
+// MARK: - Source Status
+enum SourceStatus: String, CaseIterable {
+    case pending = "pending"
+    case syncing = "syncing"
+    case idle = "idle"
+    case current = "current"
+    case error = "error"
+    case paused = "paused"
+    
+    var displayName: String {
+        switch self {
+        case .pending: return "Pending"
+        case .syncing: return "Syncing"
+        case .idle: return "Idle"
+        case .current: return "Current"
+        case .error: return "Error"
+        case .paused: return "Paused"
+        }
+    }
+}
+
+@MainActor
 @preconcurrency protocol SourceManaging: AnyObject {
     func start()
     func stop()
@@ -12,7 +113,8 @@ import Combine
     func syncSource(_ id: String) async
 }
 
-final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable {
+@MainActor
+final class SourceManager: ObservableObject, SourceManaging {
     @Published private(set) var sources: [ConnectedSource] = []
 
     private let config: Config
@@ -22,6 +124,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
     private let mailProcessor: any MailProcessing
     private let webSocketPublisher: any WebSocketPublishing
     private let logger: Logger
+    private let mailEntityWorker: MailEntityWorker
 
     private var loopTask: Task<Void, Never>?
     private var running = false
@@ -47,6 +150,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
         self.mailProcessor = mailProcessor
         self.webSocketPublisher = webSocketPublisher
         self.logger = logger
+        self.mailEntityWorker = MailEntityWorker(mailProcessor: mailProcessor, logger: logger)
         self.sources = localStore.connectedSources()
     }
 
@@ -67,7 +171,6 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
         loopTask = nil
     }
 
-    @MainActor
     func refreshSources() async {
         sources = localStore.connectedSources()
     }
@@ -88,12 +191,27 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
     }
 
     private func checkFullDiskAccess() {
-        let mailRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mail/V10")
-        let isFDA = FileManager.default.isReadableFile(atPath: mailRoot.path)
-        if isFDA {
-            logger.info("SourceManager: Full Disk Access GRANTED (V10 is readable)")
-        } else {
-            logger.warning("SourceManager: Full Disk Access MISSING! Mail sync will be slow. Grant FDA to BlawbyAgent in System Settings > Privacy & Security.")
+        // Check multiple possible Mail directory paths for different macOS versions
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let possibleMailPaths = [
+            "Library/Mail/V10",  // macOS 10.15+
+            "Library/Mail/V9",   // macOS 10.14
+            "Library/Mail/V8",   // macOS 10.13
+            "Library/Mail"       // Fallback to check parent directory
+        ]
+        
+        var hasValidAccess = false
+        for mailPath in possibleMailPaths {
+            let fullPath = homeDir.appendingPathComponent(mailPath)
+            if FileManager.default.isReadableFile(atPath: fullPath.path) {
+                hasValidAccess = true
+                logger.info("SourceManager: Full Disk Access GRANTED (\(mailPath) is readable)")
+                break
+            }
+        }
+        
+        if !hasValidAccess {
+            logger.warning("SourceManager: Full Disk Access REQUIRED - none of the Mail directories are readable")
         }
     }
 
@@ -119,21 +237,14 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
 
     func syncSource(_ id: String, maxBatches: Int) async {
         logger.info("syncSource: called for \(id)")
-        let shouldSync = await MainActor.run {
-            if syncingIds.contains(id) {
-                logger.info("syncSource: skipping \(id) - already syncing")
-                return false
-            }
-            syncingIds.insert(id)
-            return true
+        if syncingIds.contains(id) {
+            logger.info("syncSource: skipping \(id) - already syncing")
+            return
         }
+        syncingIds.insert(id)
         
-        guard shouldSync else { return }
-
         defer {
-            Task { @MainActor in
-                syncingIds.remove(id)
-            }
+            syncingIds.remove(id)
         }
 
         guard let source = localStore.connectedSource(id: id) else {
@@ -157,7 +268,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                     syncCursor: source.syncCursor,
                     totalEstimated: source.totalEstimated,
                     totalSynced: source.totalSynced,
-                    status: "current",
+                    status: .current,
                     lastError: nil
                 )
             default:
@@ -169,7 +280,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                 syncCursor: source.syncCursor,
                 totalEstimated: source.totalEstimated,
                 totalSynced: source.totalSynced,
-                status: "error",
+                status: .error,
                 lastError: error.localizedDescription
             )
             logger.error("source sync failed id=\(source.id): \(error.localizedDescription)")
@@ -179,8 +290,8 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
     }
 
     private func bootstrapAndRunLoop() async {
-        // Start discovery in background, don't block the sync loop
-        Task.detached(priority: .background) { [weak self] in
+        // Start discovery asynchronously
+        Task { [weak self] in
             guard let self = self else { return }
             await self.discoverSources()
         }
@@ -210,12 +321,12 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             .filter { source in
                 guard source.enabled else { return false }
                 
-                if source.status == "syncing" || source.status == "pending" {
+                if source.status == .syncing || source.status == .pending {
                     return true
                 }
                 
                 // Allow anything that is idle, not just if estimated > 0.
-                if source.status == "idle" {
+                if source.status == .idle {
                     return true
                 }
                 
@@ -223,13 +334,13 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             }
             .map { $0.id }
         
-        logger.info("sync baseline: total=\(baselineIds.count), first=\(baselineIds.first ?? "none"), contains gmail=\(baselineIds.contains { $0.contains("paulchrisluke@gmail.com") })")
+        logger.info("sync baseline: total=\(baselineIds.count), first=\(baselineIds.first ?? "none")")
         
-        // Prioritize Gmail sources first
-        let gmailSources = baselineIds.filter { $0.contains("paulchrisluke@gmail.com") }
-        let otherSources = baselineIds.filter { !$0.contains("paulchrisluke@gmail.com") }
-        let prioritizedIds = gmailSources + otherSources
-        logger.info("sync prioritization: gmail sources=\(gmailSources.count), other sources=\(otherSources.count), gmail first=\(gmailSources.first ?? "none")")
+        // Generic prioritization: prioritize mail sources first, then others
+        let mailSources = baselineIds.filter { $0.hasPrefix("mail:") }
+        let otherSources = baselineIds.filter { !$0.hasPrefix("mail:") }
+        let prioritizedIds = mailSources + otherSources
+        logger.info("sync prioritization: mail sources=\(mailSources.count), other sources=\(otherSources.count), mail first=\(mailSources.first ?? "none")")
         
         if dirtySourceIds.isEmpty {
             logger.info("sync returning prioritized: count=\(prioritizedIds.count)")
@@ -241,13 +352,14 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
         logger.info("sync dirty sources: \(dirtyIds.joined(separator: ", "))")
         dirtySourceIds.removeAll()
         
-        // Combine dirty and prioritized sources, but maintain Gmail priority
-        let combinedSources = Array(Set(prioritizedIds).union(dirtyIds))
-        let gmailAllSources = combinedSources.filter { $0.contains("paulchrisluke@gmail.com") }
-        let otherAllSources = combinedSources.filter { !$0.contains("paulchrisluke@gmail.com") }
-        let finalPrioritizedIds = gmailAllSources + otherAllSources
+        // Combine dirty and prioritized sources, but maintain mail priority and deterministic ordering
+        let prioritizedSet = Set(prioritizedIds)
+        let combinedSources = prioritizedIds + dirtyIds.filter { !prioritizedSet.contains($0) }
+        let mailAllSources = combinedSources.filter { $0.hasPrefix("mail:") }
+        let otherAllSources = combinedSources.filter { !$0.hasPrefix("mail:") }
+        let finalPrioritizedIds = mailAllSources + otherAllSources
         
-        logger.info("sync final prioritized: gmail=\(gmailAllSources.count), total=\(finalPrioritizedIds.count), gmail first=\(finalPrioritizedIds.first ?? "none")")
+        logger.info("sync final prioritized: mail=\(mailAllSources.count), total=\(finalPrioritizedIds.count), mail first=\(finalPrioritizedIds.first ?? "none")")
         return finalPrioritizedIds
     }
 
@@ -267,14 +379,17 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                 continue
             }
             
-            let existing = localStore.connectedSource(id: source.id)
-            
             // Rename All Mail to INBOX for Gmail accounts
             let displayName = source.sourceName == "All Mail" && source.accountId.contains("gmail") ? "INBOX" : source.sourceName
             let finalSourceId = source.sourceName == "All Mail" && source.accountId.contains("gmail") ? "mail:\(source.accountId):INBOX" : source.id
             if source.sourceName == "All Mail" && source.accountId.contains("gmail") {
                 logger.info("renaming Gmail All Mail to INBOX for \(source.accountId), updating source ID from \(source.id) to \(finalSourceId)")
             }
+            
+            // Check both old ID and final ID for existing state during migration
+            let existingLegacy = localStore.connectedSource(id: source.id)
+            let existingFinal = localStore.connectedSource(id: finalSourceId)
+            let existing = existingFinal ?? existingLegacy
             
             // Get message count to populate total_estimated
             let messageCount = await mailWatcher.messageCount(accountId: source.accountId, mailbox: source.mailbox)
@@ -295,7 +410,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                 syncCursor: existing?.syncCursor,
                 totalEstimated: updatedEstimated,
                 totalSynced: existing?.totalSynced ?? 0,
-                status: existing?.status ?? "pending",
+                status: existing?.status ?? .pending,
                 lastError: existing?.lastError
             )
         }
@@ -328,7 +443,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                     syncCursor: existing?.syncCursor,
                     totalEstimated: updatedEstimated,
                     totalSynced: existing?.totalSynced ?? 0,
-                    status: existing?.status ?? "pending",
+                    status: existing?.status ?? .pending,
                     lastError: existing?.lastError
                 )
             }
@@ -353,7 +468,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             syncCursor: existing?.syncCursor,
             totalEstimated: existing?.totalEstimated ?? 0,
             totalSynced: existing?.totalSynced ?? 0,
-            status: existing?.status ?? "pending",
+            status: existing?.status ?? .pending,
             lastError: existing?.lastError
         )
     }
@@ -376,7 +491,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             syncCursor: source.syncCursor,
             totalEstimated: estimated,
             totalSynced: source.totalSynced,
-            status: "syncing",
+            status: .syncing,
             lastError: nil
         )
         logger.info("syncing mail source: \(source.sourceName) (estimated \(estimated))")
@@ -400,7 +515,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             logger.info("fetched \(batch.count) messages for \(source.sourceName) since \(currentCursor)")
 
             if batch.isEmpty {
-                let finalStatus = (source.totalSynced + totalProcessed >= estimated && estimated > 0) ? "current" : "pending"
+                let finalStatus = (source.totalSynced + totalProcessed >= estimated && estimated > 0) ? .current : .pending
                 logger.info("batch empty for \(source.sourceName), final status: \(finalStatus)")
                 localStore.updateConnectedSourceSync(
                     id: source.id,
@@ -414,7 +529,6 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             }
 
             logger.info("processing batch of \(batch.count) messages for \(source.sourceName)")
-            let isBackfill = source.totalSynced < estimated
             
             // Get chunks immediately (fast path) - skip entity extraction to avoid blocking
             logger.info("calling mailProcessor.process with \(batch.count) messages (chunks only)")
@@ -450,34 +564,19 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             }
             
             // Entity extraction runs in background, doesn't block cursor advancement
-            Task.detached(priority: .background) { [weak self] in
+            let worker = self.mailEntityWorker
+            let accountId = parsed.accountId
+            let workspaceId = self.config.workspaceId
+            let batchCopy = batch
+            
+            Task(priority: .background) { [weak self] in
+                let result = await worker.processEntities(
+                    messages: batchCopy,
+                    workspaceId: workspaceId,
+                    accountId: accountId
+                )
                 guard let self = self else { return }
-                logger.info("background entity extraction starting for \(batch.count) messages")
-                do {
-                    let entitiesProcessing = try await self.mailProcessor.process(messages: batch, workspaceId: self.config.workspaceId, skipExtraction: false)
-                    logger.info("background entity extraction completed: \(entitiesProcessing.entities.count) entities extracted")
-                    if !entitiesProcessing.entities.isEmpty {
-                        let entitiesPayload = SourceEntitiesPayload(
-                            type: "entities",
-                            workspaceId: self.config.workspaceId,
-                            accountId: parsed.accountId,
-                            entities: entitiesProcessing.entities
-                        )
-                        try await self.webSocketPublisher.send(type: "entities", payload: self.encodeJSON(entitiesPayload))
-                        logger.info("published entities for \(entitiesProcessing.entities.count) entities for \(parsed.accountId)")
-                        
-                        // Update entity counts in local database
-                        let entityCounts = Dictionary(grouping: entitiesProcessing.entities, by: { $0.messageId })
-                            .mapValues { $0.count }
-                        for (messageId, count) in entityCounts {
-                            self.localStore.markMessageProcessed(messageId, accountId: parsed.accountId, entityCount: count)
-                        }
-                    } else {
-                        logger.info("no entities extracted from \(batch.count) messages for \(parsed.accountId)")
-                    }
-                } catch {
-                    logger.error("background entity extraction failed: \(error.localizedDescription)")
-                }
+                await self.handleEntityProcessingResult(result, accountId: accountId)
             }
 
             let batchNewestDate = batch.map(\.date).max() ?? currentCursor
@@ -498,7 +597,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                 syncCursor: currentCursor,
                 totalEstimated: estimated,
                 totalSynced: source.totalSynced + totalProcessed,
-                status: (source.totalSynced + totalProcessed >= estimated) ? "current" : "syncing",
+                status: (source.totalSynced + totalProcessed >= estimated) ? .current : .syncing,
                 lastError: nil
             )
             
@@ -516,7 +615,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             syncCursor: source.syncCursor,
             totalEstimated: source.totalEstimated,
             totalSynced: source.totalSynced,
-            status: "syncing",
+            status: .syncing,
             lastError: nil
         )
 
@@ -529,7 +628,7 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
                 syncCursor: end,
                 totalEstimated: source.totalEstimated,
                 totalSynced: source.totalSynced,
-                status: "current",
+                status: .current,
                 lastError: nil
             )
             return
@@ -567,48 +666,35 @@ final class SourceManager: ObservableObject, SourceManaging, @unchecked Sendable
             syncCursor: newestDate,
             totalEstimated: nextEstimated,
             totalSynced: source.totalSynced + sentCount,
-            status: "current",
+            status: .current,
             lastError: nil
         )
     }
 
-    private func publishMailPayloads(result: MailProcessingResult, accountId: String) async throws {
-        let rawMessages = result.rawMessages
-        let entities = result.entities
-
-        if rawMessages.isEmpty {
+    /// Handle entity processing result on main actor (I/O operations only)
+    private func handleEntityProcessingResult(_ result: EntityProcessingResult, accountId: String) async {
+        if let errorDescription = result.errorDescription {
+            logger.error("entity processing failed for \(accountId): \(errorDescription)")
             return
         }
-
-        if !entities.isEmpty {
-            let entitiesPayload = SourceEntitiesPayload(
-                type: "entities",
-                workspaceId: config.workspaceId,
-                accountId: accountId,
-                entities: entities
-            )
-            try await webSocketPublisher.send(type: "entities", payload: try encodeJSON(entitiesPayload))
+        
+        guard result.hasEntities, let entitiesJson = result.entitiesJson else {
+            logger.info("no entities to process for \(accountId)")
+            return
         }
-
-        let chunksPayload = SourceChunksPayload(
-            type: "chunks",
-            workspaceId: config.workspaceId,
-            accountId: accountId,
-            messages: rawMessages.map {
-                SourceChunksPayload.Message(
-                    messageId: $0.messageId,
-                    subject: $0.subject,
-                    bodyText: $0.bodyText,
-                    fromEmail: $0.from,
-                    toEmails: $0.to,
-                    mailbox: $0.mailbox,
-                    sentAt: iso8601WithFractionalSeconds($0.date)
-                )
+        
+        do {
+            // Send WebSocket payload on main actor
+            try await webSocketPublisher.send(type: "entities", payload: entitiesJson)
+            logger.info("published entities for \(result.totalEntities) entities for \(accountId)")
+            
+            // Update local database on main actor
+            for (messageId, count) in result.entityCounts {
+                localStore.markMessageProcessed(messageId, accountId: accountId, entityCount: count)
             }
-        )
-
-        logger.info("chunks payload sample: subject='\(chunksPayload.messages.first?.subject ?? "nil")' bodyLen=\(chunksPayload.messages.first?.bodyText.count ?? 0)")
-        try await webSocketPublisher.send(type: "chunks", payload: try encodeJSON(chunksPayload))
+        } catch {
+            logger.error("failed to handle entity processing result for \(accountId): \(error.localizedDescription)")
+        }
     }
 
     private func parseMailSourceId(_ id: String) -> (accountId: String, mailbox: String)? {

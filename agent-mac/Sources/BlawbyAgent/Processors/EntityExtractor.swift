@@ -100,22 +100,19 @@ enum EntityExtractorError: Error {
     case invalidOpenAIResponse
 }
 
-protocol EntityExtracting {
+protocol EntityExtracting: Sendable {
     func extract(messages: [RawMessage], workspaceId: String) async throws -> [ExtractedEntity]
 }
 
-final class EntityExtractor: EntityExtracting {
+final class EntityExtractor: @unchecked Sendable, EntityExtracting {
     private let apiKey: String?
     private let contactsReader: ContactsReader?
     private let logger: Logger
-    private let iso: ISO8601DateFormatter
 
     init(apiKey: String?, contactsReader: ContactsReader?, logger: Logger) {
         self.apiKey = apiKey
         self.contactsReader = contactsReader
         self.logger = logger
-        self.iso = ISO8601DateFormatter()
-        self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
 
     func extract(messages: [RawMessage], workspaceId: String) async throws -> [ExtractedEntity] {
@@ -227,7 +224,7 @@ final class EntityExtractor: EntityExtracting {
                 actionDescription: row.actionDescription ?? row.action_description,
                 riskLevel: risk,
                 confidence: confidence,
-                sentAt: iso.string(from: source.date),
+                sentAt: makeISOFormatter().string(from: source.date),
                 subject: source.subject,
                 fromEmail: source.from,
                 mailbox: source.mailbox
@@ -244,7 +241,7 @@ final class EntityExtractor: EntityExtracting {
             lines.append("Subject: \(message.subject)")
             lines.append("From: \(message.from)")
             lines.append("To: \(message.to.joined(separator: ", "))")
-            lines.append("Date: \(iso.string(from: message.date))")
+            lines.append("Date: \(makeISOFormatter().string(from: message.date))")
             lines.append("Direction: inbound")
             lines.append("Contact Context: \(contactContext(for: message))")
             lines.append("Body: \(message.bodyText)")
@@ -358,6 +355,12 @@ final class EntityExtractor: EntityExtracting {
         throw EntityExtractorError.invalidOpenAIResponse
     }
     
+    private func makeISOFormatter() -> ISO8601DateFormatter {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return iso
+    }
+    
     private func fixIncompleteJSON(_ content: String) -> String {
         // Find the last complete JSON object before any incomplete trailing data
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -393,10 +396,8 @@ final class EntityExtractor: EntityExtracting {
 
     private func normalizeStatus(_ value: String) -> String {
         switch value.lowercased() {
-        case "paid", "overdue", "pending", "requires_action", "unknown":
+        case "open", "paid", "overdue", "pending", "requires_action", "unknown":
             return value.lowercased()
-        case "open":
-            return "pending"
         default:
             return "unknown"
         }
@@ -404,10 +405,8 @@ final class EntityExtractor: EntityExtracting {
 
     private func normalizeRisk(_ value: String) -> String {
         switch value.lowercased() {
-        case "low", "medium", "high":
+        case "low", "medium", "high", "critical":
             return value.lowercased()
-        case "critical":
-            return "high"
         default:
             return "low"
         }
@@ -415,7 +414,7 @@ final class EntityExtractor: EntityExtracting {
 
     private func normalizeEntityType(_ value: String) -> String {
         let normalized = value.lowercased()
-        let allowed = ["invoice", "payment", "contract", "correspondence", "alert", "request"]
+        let allowed = ["invoice", "payment", "contract", "correspondence", "alert", "request", "appointment"]
         return allowed.contains(normalized) ? normalized : "correspondence"
     }
 

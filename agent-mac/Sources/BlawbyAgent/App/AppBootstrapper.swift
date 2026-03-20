@@ -3,6 +3,24 @@ import SwiftUI
 import EventKit
 import Contacts
 
+// MARK: - Bootstrap Error Types
+enum BootstrapError: Error, LocalizedError {
+    case storageInitializationFailed(String)
+    case configurationLoadFailed(String)
+    case loggerInitializationFailed(String)
+    
+    var errorDescription: String? {
+        switch self {
+        case .storageInitializationFailed(let reason):
+            return "Storage initialization failed: \(reason)"
+        case .configurationLoadFailed(let reason):
+            return "Configuration load failed: \(reason)"
+        case .loggerInitializationFailed(let reason):
+            return "Logger initialization failed: \(reason)"
+        }
+    }
+}
+
 // MARK: - Bootstrap Context
 struct BootstrapContext {
     let logger: Logger
@@ -15,24 +33,49 @@ struct BootstrapContext {
 }
 
 // MARK: - App Bootstrapper
+@MainActor
 final class AppBootstrapper {
+    private var cachedContext: BootstrapContext?
+    
     func bootstrap(sourceRegistry: SourceRegistry) async throws -> AppBootState {
-        // Layer A: Unconditional boot (never triggers permissions)
-        let context = try await performUnconditionalBoot()
+        // Use cached context if available, otherwise create new one
+        let context = try await getCachedContext()
         
         // Layer B: Source discovery (determines relevance, no permissions requested)
         let discoveredCapabilities = await discoverSources(context: context, registry: sourceRegistry)
         
-        // Layer C: Load enabled intents and attempt activation
+        // Layer C: Load desired intents and attempt activation
         let (activeSources, activationIssues) = try await activateEnabledSources(context: context, capabilities: discoveredCapabilities, registry: sourceRegistry)
         
         // Layer D: Merge runtime activation state for UI (after activation)
-        let mergedCapabilities = await mergeActivationState(capabilities: discoveredCapabilities, registry: sourceRegistry)
+        let resolvedCapabilities = await resolveCapabilities(discoveredCapabilities: discoveredCapabilities, registry: sourceRegistry)
         
         // Layer E: Compute boot state from actual runtime plus issues
-        let bootState = await computeBootState(context: context, capabilities: mergedCapabilities, activeSources: activeSources, issues: activationIssues, registry: sourceRegistry)
+        let bootState = await computeBootState(
+            context: context, 
+            discoveredCapabilities: discoveredCapabilities,
+            resolvedCapabilities: resolvedCapabilities, 
+            activeSources: activeSources, 
+            issues: activationIssues, 
+            registry: sourceRegistry
+        )
         
         return bootState
+    }
+    
+    // MARK: - Cached Context Management
+    private func getCachedContext() async throws -> BootstrapContext {
+        if let cachedContext = cachedContext {
+            return cachedContext
+        }
+        
+        let newContext = try await performUnconditionalBoot()
+        cachedContext = newContext
+        return newContext
+    }
+    
+    func invalidateCache() {
+        cachedContext = nil
     }
     
     // MARK: - Layer A: Unconditional Boot
@@ -40,14 +83,43 @@ final class AppBootstrapper {
         let baseDir = resolveBlawbyHome()
         try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
         
-        // Core infrastructure that must succeed
-        let logger = try Logger(baseDirectory: baseDir)
-        let localStore = try LocalStore(baseDirectory: baseDir)
-        let configStore = try ConfigStore(baseDirectory: baseDir)
+        // Core infrastructure that must succeed - throw typed errors at exact failure points
+        let logger: Logger
+        do {
+            logger = try Logger(baseDirectory: baseDir)
+        } catch {
+            throw BootstrapError.loggerInitializationFailed(String(describing: error))
+        }
+        
+        let localStore: LocalStore
+        do {
+            localStore = try LocalStore(baseDirectory: baseDir)
+        } catch {
+            throw BootstrapError.storageInitializationFailed(String(describing: error))
+        }
+        
+        let configStore: ConfigStore
+        do {
+            configStore = try ConfigStore(baseDirectory: baseDir)
+        } catch {
+            throw BootstrapError.storageInitializationFailed(String(describing: error))
+        }
         
         // Configuration loading
-        let fileConfig = configStore.load()
-        let prefs = try Preferences.load(config: fileConfig)
+        let fileConfig: Config
+        do {
+            fileConfig = configStore.load()
+        } catch {
+            throw BootstrapError.configurationLoadFailed(String(describing: error))
+        }
+        
+        let prefs: Preferences
+        do {
+            prefs = try Preferences.load(config: fileConfig)
+        } catch {
+            throw BootstrapError.configurationLoadFailed(String(describing: error))
+        }
+        
         let config = Config(
             workerUrl: prefs.workerUrl ?? fileConfig.workerUrl,
             apiKey: prefs.apiKey ?? fileConfig.apiKey,
@@ -79,12 +151,12 @@ final class AppBootstrapper {
     }
     
     // MARK: - Layer B: Source Discovery
-    @MainActor
-    private func discoverSources(context: BootstrapContext, registry: SourceRegistry) async -> [SourceCapability] {
-        var capabilities: [SourceCapability] = []
+    private func discoverSources(context: BootstrapContext, registry: SourceRegistry) async -> [DiscoveredSourceCapability] {
+        var capabilities: [DiscoveredSourceCapability] = []
         
-        // Discover all sources through registry providers
-        for provider in registry.providers.values {
+        // Discover sources in deterministic order using SourceKind.allCases
+        for kind in SourceKind.allCases {
+            guard let provider = registry.providers[kind] else { continue }
             let capability = await provider.discover(in: context)
             capabilities.append(capability)
         }
@@ -92,44 +164,47 @@ final class AppBootstrapper {
         return capabilities
     }
     
-    // MARK: - Merge Runtime Activation State
-    @MainActor
-    private func mergeActivationState(
-        capabilities: [SourceCapability],
+    // MARK: - Layer D: Resolve Runtime State
+    private func resolveCapabilities(
+        discoveredCapabilities: [DiscoveredSourceCapability],
         registry: SourceRegistry
-    ) async -> [SourceCapability] {
-        var mergedCapabilities: [SourceCapability] = []
-        for capability in capabilities {
-            let activation: SourceActivationStatus = await registry.isActive(capability.kind) ? .active : .inactive
-            mergedCapabilities.append(SourceCapability(
-                kind: capability.kind,
-                displayName: capability.displayName,
-                availability: capability.availability,
-                authorization: capability.authorization,
-                activation: activation,
-                isRequiredForCoreValue: capability.isRequiredForCoreValue,
-                canDefer: capability.canDefer
+    ) async -> [ResolvedSourceCapability] {
+        var resolvedCapabilities: [ResolvedSourceCapability] = []
+        for discovered in discoveredCapabilities {
+            // Get runtime state from registry
+            let runtimeStatus = registry.getRuntimeState(discovered.kind)
+            
+            resolvedCapabilities.append(ResolvedSourceCapability(
+                kind: discovered.kind,
+                displayName: discovered.displayName,
+                availability: discovered.availability,
+                authorization: discovered.authorization,
+                discoveryStatus: discovered.discoveryStatus,  // Keep original discovery state
+                runtimeStatus: runtimeStatus,  // Set actual runtime state
+                isRequiredForCoreValue: discovered.isRequiredForCoreValue,
+                canDefer: discovered.canDefer
             ))
         }
-        return mergedCapabilities
+        return resolvedCapabilities
     }
     
     // MARK: - Layer C: Activate Enabled Sources
-    @MainActor
     private func activateEnabledSources(
         context: BootstrapContext,
-        capabilities: [SourceCapability],
+        capabilities: [DiscoveredSourceCapability],
         registry: SourceRegistry
     ) async throws -> ([SourceKind: ActiveSource], [SourceIssue]) {
         var sourceIssues: [SourceIssue] = []
         
-        // Get enabled sources from persisted intent
-        let enabledCapabilities = capabilities.filter { 
-            context.activationStateStore.isEnabled($0.kind) && $0.availability.isAvailable
+        // Get desired sources from persisted user intent, gated on authorization
+        let desiredCapabilities = capabilities.filter { 
+            context.activationStateStore.isDesired($0.kind) && 
+            $0.availability.isAvailable &&
+            $0.authorization.isAuthorized
         }
         
         // Attempt activation only for sources not already active
-        for capability in enabledCapabilities {
+        for capability in desiredCapabilities {
             // Skip if already active in registry
             if await registry.isActive(capability.kind) {
                 continue
@@ -137,7 +212,7 @@ final class AppBootstrapper {
             
             do {
                 _ = try await registry.activate(capability.kind, in: context)
-                // Registry manages active sources, we don't need to track them here
+                // Registry manages active sources - no need to persist separate enabled state
             } catch {
                 // Activation failed - generate issues from provider
                 if let provider = registry.providers[capability.kind] {
@@ -162,39 +237,49 @@ final class AppBootstrapper {
         return (activeSources, sourceIssues)
     }
     
-    // MARK: - Layer D: Compute Boot State
-    @MainActor
+    // MARK: - Layer E: Compute Boot State
     private func computeBootState(
         context: BootstrapContext,
-        capabilities: [SourceCapability],
+        discoveredCapabilities: [DiscoveredSourceCapability],
+        resolvedCapabilities: [ResolvedSourceCapability],
         activeSources: [SourceKind: ActiveSource],
         issues: [SourceIssue],
         registry: SourceRegistry
     ) async -> AppBootState {
         // Determine state based on actual active sources
         if !activeSources.isEmpty {
-            // Include issues for enabled sources only (discovery + activation)
-            let enabledKinds = Set(SourceKind.allCases.filter { context.activationStateStore.isEnabled($0) })
-            let enabledDiscoveryIssues = await generateDiscoverySourceIssues(capabilities: capabilities, registry: registry)
-                .filter { enabledKinds.contains($0.kind) }
+            // Include issues for desired sources only (discovery + activation)
+            let desiredKinds = Set(SourceKind.allCases.filter { context.activationStateStore.isDesired($0) })
+            let enabledDiscoveryIssues = await generateDiscoverySourceIssues(capabilities: discoveredCapabilities, registry: registry)
+                .filter { desiredKinds.contains($0.kind) }
             let allRuntimeIssues = enabledDiscoveryIssues + issues
             
             if !allRuntimeIssues.isEmpty {
-                return .degraded(context, activeSources, allRuntimeIssues)
+                return .degraded(context, resolvedCapabilities, activeSources, allRuntimeIssues)
             } else {
-                return .ready(context, activeSources)
+                return .ready(context, resolvedCapabilities, activeSources)
             }
         } else {
-            // No active sources - show setup
-            // Include discovery issues for all sources
-            let discoveryIssues = await generateDiscoverySourceIssues(capabilities: capabilities, registry: registry)
+            // No active sources - determine if setup is actually required
+            let hasCompletedOnboarding = context.activationStateStore.onboardingCompleted
+            let syncIsDisabled = !context.syncPreference
+            let hasSkippedAllSources = SourceKind.allCases.allSatisfy { context.activationStateStore.isSkipped($0) }
+            
+            // If user has completed onboarding and either disabled sync or skipped all sources, 
+            // treat as valid steady state rather than setup required
+            if hasCompletedOnboarding && (syncIsDisabled || hasSkippedAllSources) {
+                // Return ready with empty active sources - this is a valid state
+                return .ready(context, resolvedCapabilities, [:])
+            }
+            
+            // Otherwise, setup is still required
+            let discoveryIssues = await generateDiscoverySourceIssues(capabilities: discoveredCapabilities, registry: registry)
             let allIssues = discoveryIssues + issues
-            return .setupRequired(context, capabilities, allIssues)
+            return .setupRequired(context, resolvedCapabilities, allIssues)
         }
     }
     
-    @MainActor
-    private func generateDiscoverySourceIssues(capabilities: [SourceCapability], registry: SourceRegistry) async -> [SourceIssue] {
+    private func generateDiscoverySourceIssues(capabilities: [DiscoveredSourceCapability], registry: SourceRegistry) async -> [SourceIssue] {
         var issues: [SourceIssue] = []
         
         for capability in capabilities {

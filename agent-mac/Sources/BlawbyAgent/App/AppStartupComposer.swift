@@ -19,7 +19,7 @@ final class AppStartupComposer {
         try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
 
         let logger = try Logger(baseDirectory: baseDir)
-        let localStore = try LocalStore(baseDirectory: baseDir)
+        let localStore = try LocalStore(dbPath: baseDir.appendingPathComponent("blawby.db").path)
         let configStore = try ConfigStore(baseDirectory: baseDir)
 
         let fileConfig = configStore.load()

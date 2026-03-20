@@ -27,23 +27,35 @@ struct ConnectedSource {
     let syncCursor: Date?
     let totalEstimated: Int
     let totalSynced: Int
-    let status: String
+    let status: SourceStatus
     let lastError: String?
     let createdAt: Date
     let updatedAt: Date
 }
 
-final class LocalStore {
+final class LocalStore: @unchecked Sendable {
     private let dbQueue: DatabaseQueue
-    private let iso: ISO8601DateFormatter
+    private var migrator: DatabaseMigrator!
 
-    init(baseDirectory: URL) throws {
-        let dbURL = baseDirectory.appendingPathComponent("blawby.db")
-        self.dbQueue = try DatabaseQueue(path: dbURL.path)
-        self.iso = ISO8601DateFormatter()
-        self.iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    init(dbPath: String) throws {
+        dbQueue = try DatabaseQueue(path: dbPath)
+        setupMigrations()
+        try migrator.migrate(dbQueue)
+    }
+    
+    convenience init(baseDirectory: URL) throws {
+        try self.init(dbPath: baseDirectory.appendingPathComponent("blawby.db").path)
+    }
+    
+    private func makeISOFormatter() -> ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }
+    
+    private func setupMigrations() {
+        self.migrator = DatabaseMigrator()
 
-        var migrator = DatabaseMigrator()
         migrator.registerMigration("v1_local_store") { db in
             try db.create(table: "sync_cursors") { t in
                 t.column("account_id", .text).notNull()
@@ -139,95 +151,87 @@ final class LocalStore {
             try db.create(index: "idx_connected_sources_account_type", on: "connected_sources", columns: ["account_id", "source_type"])
             try db.create(index: "idx_connected_sources_enabled_status", on: "connected_sources", columns: ["enabled", "status"])
 
-            try db.execute(
-                sql: """
-                INSERT INTO connected_sources (
-                  id, source_type, account_id, source_name, enabled,
-                  sync_cursor, total_estimated, total_synced, status,
-                  last_error, created_at, updated_at
-                )
-                SELECT
-                  CASE
-                    WHEN source = 'mail_live' THEN 'mail:' || account_id || ':INBOX'
-                    WHEN source = 'messages' THEN 'messages:' || account_id
-                    ELSE source || ':' || account_id
-                  END AS id,
-                  CASE
-                    WHEN source = 'messages' THEN 'messages'
-                    ELSE 'mail'
-                  END AS source_type,
-                  account_id,
-                  CASE
-                    WHEN source = 'mail_live' THEN account_id || ' - INBOX'
-                    WHEN source = 'messages' THEN 'Messages'
-                    ELSE source
-                  END AS source_name,
-                  1 AS enabled,
-                  last_seen_at AS sync_cursor,
-                  0 AS total_estimated,
-                  0 AS total_synced,
-                  CASE
-                    WHEN last_seen_at IS NULL THEN 'idle'
-                    ELSE 'current'
-                  END AS status,
-                  NULL AS last_error,
-                  updated_at AS created_at,
-                  updated_at
-                FROM sync_cursors
-                WHERE source NOT LIKE 'bootstrap:%'
-                """
+            try db.execute(sql: """
+            INSERT INTO connected_sources (
+              id, source_type, account_id, source_name, enabled,
+              sync_cursor, total_estimated, total_synced, status,
+              last_error, created_at, updated_at
             )
+            SELECT
+              CASE
+                WHEN source = 'mail_live' THEN 'mail:' || account_id || ':INBOX'
+                WHEN source = 'messages' THEN 'messages:' || account_id
+                ELSE source || ':' || account_id
+              END AS id,
+              CASE
+                WHEN source = 'messages' THEN 'messages'
+                ELSE 'mail'
+              END AS source_type,
+              account_id,
+              CASE
+                WHEN source = 'mail_live' THEN account_id || ' - INBOX'
+                WHEN source = 'messages' THEN 'Messages'
+                ELSE source
+              END AS source_name,
+              1 AS enabled,
+              last_seen_at AS sync_cursor,
+              0 AS total_estimated,
+              0 AS total_synced,
+              CASE
+                WHEN last_seen_at IS NULL THEN 'idle'
+                ELSE 'current'
+              END AS status,
+              NULL AS last_error,
+              updated_at AS created_at,
+              updated_at
+            FROM sync_cursors
+            WHERE source NOT LIKE 'bootstrap:%'
+            """)
 
-            try db.execute(
-                sql: """
-                INSERT OR IGNORE INTO connected_sources (
-                  id, source_type, account_id, source_name, enabled,
-                  sync_cursor, total_estimated, total_synced, status,
-                  last_error, created_at, updated_at
-                )
-                SELECT
-                  'mail:' || account_name || ':INBOX',
-                  'mail',
-                  account_name,
-                  account_name || ' - INBOX',
-                  1,
-                  NULL,
-                  0,
-                  0,
-                  'idle',
-                  NULL,
-                  first_seen_at,
-                  last_seen_at
-                FROM mail_accounts
-                """
+            try db.execute(sql: """
+            INSERT OR IGNORE INTO connected_sources (
+              id, source_type, account_id, source_name, enabled,
+              sync_cursor, total_estimated, total_synced, status,
+              last_error, created_at, updated_at
             )
+            SELECT
+              'mail:' || account_name || ':INBOX',
+              'mail',
+              account_name,
+              account_name || ' - INBOX',
+              1,
+              NULL,
+              0,
+              0,
+              'idle',
+              NULL,
+              first_seen_at,
+              last_seen_at
+            FROM mail_accounts
+            """)
 
-            try db.execute(
-                sql: """
-                INSERT OR IGNORE INTO connected_sources (
-                  id, source_type, account_id, source_name, enabled,
-                  sync_cursor, total_estimated, total_synced, status,
-                  last_error, created_at, updated_at
-                )
-                SELECT
-                  'calendar:' || source_name,
-                  'calendar',
-                  'calendar',
-                  source_name,
-                  1,
-                  NULL,
-                  0,
-                  0,
-                  'idle',
-                  NULL,
-                  first_seen_at,
-                  last_seen_at
-                FROM calendar_sources
-                """
+            try db.execute(sql: """
+            INSERT OR IGNORE INTO connected_sources (
+              id, source_type, account_id, source_name, enabled,
+              sync_cursor, total_estimated, total_synced, status,
+              last_error, created_at, updated_at
             )
+            SELECT
+              'calendar:' || source_name,
+              'calendar',
+              'calendar',
+              source_name,
+              1,
+              NULL,
+              0,
+              0,
+              'idle',
+              NULL,
+              first_seen_at,
+              last_seen_at
+            FROM calendar_sources
+            """)
         }
-
-        try migrator.migrate(dbQueue)
     }
 
     func getCursor(accountId: String, source: String) -> (lastSeenAt: Date?, lastSeenUid: String?) {
@@ -263,7 +267,7 @@ final class LocalStore {
                 }
 
                 let lastSeenAtText: String? = row["sync_cursor"]
-                let lastSeenAt = lastSeenAtText.map { iso.date(from: $0) }.flatMap { $0 }
+                let lastSeenAt = lastSeenAtText.map { makeISOFormatter().date(from: $0) }.flatMap { $0 }
                 let lastSeenUid: String? = legacy?["last_seen_uid"]
                 return (lastSeenAt, lastSeenUid)
             }
@@ -279,8 +283,8 @@ final class LocalStore {
             return
         }
 
-        let lastSeenAtText = lastSeenAt.map { iso.string(from: $0) }
-        let updatedAt = iso.string(from: Date())
+        let lastSeenAtText = lastSeenAt.map { makeISOFormatter().string(from: $0) }
+        let updatedAt = makeISOFormatter().string(from: Date())
         do {
             try dbQueue.write { db in
                 try db.execute(
@@ -301,7 +305,7 @@ final class LocalStore {
                         accountId,
                         connectedSourceName(accountId: accountId, source: source),
                         lastSeenAtText,
-                        lastSeenAt == nil ? "idle" : "current",
+                        lastSeenAt == nil ? SourceStatus.idle.rawValue : SourceStatus.current.rawValue,
                         updatedAt,
                         updatedAt
                     ]
@@ -331,7 +335,7 @@ final class LocalStore {
             .filter { !$0.isEmpty }
         guard !normalized.isEmpty else { return }
 
-        let now = iso.string(from: Date())
+        let now = makeISOFormatter().string(from: Date())
         do {
             try dbQueue.write { db in
                 for name in normalized {
@@ -375,7 +379,7 @@ final class LocalStore {
             .filter { !$0.isEmpty }
         guard !normalized.isEmpty else { return }
 
-        let now = iso.string(from: Date())
+        let now = makeISOFormatter().string(from: Date())
         do {
             try dbQueue.write { db in
                 for name in normalized {
@@ -470,11 +474,11 @@ final class LocalStore {
         syncCursor: Date? = nil,
         totalEstimated: Int = 0,
         totalSynced: Int = 0,
-        status: String = "idle",
+        status: SourceStatus = .idle,
         lastError: String? = nil
     ) {
-        let now = iso.string(from: Date())
-        let cursorText = syncCursor.map { iso.string(from: $0) }
+        let now = makeISOFormatter().string(from: Date())
+        let cursorText = syncCursor.map { makeISOFormatter().string(from: $0) }
         do {
             try dbQueue.write { db in
                 try db.execute(
@@ -506,7 +510,7 @@ final class LocalStore {
                         cursorText,
                         max(0, totalEstimated),
                         max(0, totalSynced),
-                        status,
+                        status.rawValue,
                         lastError,
                         now,
                         now
@@ -519,7 +523,7 @@ final class LocalStore {
     }
 
     func setConnectedSourceEnabled(id: String, enabled: Bool) {
-        let now = iso.string(from: Date())
+        let now = makeISOFormatter().string(from: Date())
         do {
             try dbQueue.write { db in
                 try db.execute(
@@ -528,7 +532,7 @@ final class LocalStore {
                     SET enabled = ?, status = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    arguments: [enabled ? 1 : 0, enabled ? "idle" : "paused", now, id]
+                    arguments: [enabled ? 1 : 0, enabled ? SourceStatus.idle.rawValue : SourceStatus.paused.rawValue, now, id]
                 )
             }
         } catch {
@@ -541,11 +545,11 @@ final class LocalStore {
         syncCursor: Date?,
         totalEstimated: Int? = nil,
         totalSynced: Int? = nil,
-        status: String,
+        status: SourceStatus,
         lastError: String? = nil
     ) {
-        let now = iso.string(from: Date())
-        let cursorText = syncCursor.map { iso.string(from: $0) }
+        let now = makeISOFormatter().string(from: Date())
+        let cursorText = syncCursor.map { makeISOFormatter().string(from: $0) }
         do {
             try dbQueue.write { db in
                 try db.execute(
@@ -563,7 +567,7 @@ final class LocalStore {
                         cursorText,
                         totalEstimated.map { max(0, $0) },
                         totalSynced.map { max(0, $0) },
-                        status,
+                        status.rawValue,
                         lastError,
                         now,
                         id
@@ -599,7 +603,7 @@ final class LocalStore {
                         message_id, account_id, processed_at, entity_count, sent
                     ) VALUES (?, ?, ?, ?, 0)
                     """,
-                    arguments: [messageId, accountId, iso.string(from: Date()), entityCount]
+                    arguments: [messageId, accountId, makeISOFormatter().string(from: Date()), entityCount]
                 )
             }
         } catch {
@@ -648,7 +652,7 @@ final class LocalStore {
                     INSERT OR REPLACE INTO processed_events (event_uid, calendar_id, sent_at)
                     VALUES (?, ?, ?)
                     """,
-                    arguments: [uid, calendarId, iso.string(from: Date())]
+                    arguments: [uid, calendarId, makeISOFormatter().string(from: Date())]
                 )
             }
         } catch {
@@ -665,7 +669,7 @@ final class LocalStore {
                     INSERT INTO outbound_queue (id, payload_type, payload_json, created_at, attempts)
                     VALUES (?, ?, ?, ?, 0)
                     """,
-                    arguments: [id, type, json, iso.string(from: Date())]
+                    arguments: [id, type, json, makeISOFormatter().string(from: Date())]
                 )
             }
             return id
@@ -810,7 +814,7 @@ final class LocalStore {
         queued: Int = 0,
         failed: Int = 0
     ) {
-        let now = iso.string(from: Date())
+        let now = makeISOFormatter().string(from: Date())
         do {
             try dbQueue.write { db in
                 try db.execute(
@@ -857,7 +861,7 @@ final class LocalStore {
                     sent: row["sent_total"],
                     queued: row["queued_total"],
                     failed: row["failed_total"],
-                    lastActivityAt: lastText.flatMap { iso.date(from: $0) }
+                    lastActivityAt: lastText.flatMap { makeISOFormatter().date(from: $0) }
                 )
             }
         } catch {
@@ -867,7 +871,7 @@ final class LocalStore {
     }
 
     func seedSyncMetricsIfNeeded(accountId: String) {
-        let now = iso.string(from: Date())
+        let now = makeISOFormatter().string(from: Date())
         do {
             try dbQueue.write { db in
                 let mailCount = try Int.fetchOne(
@@ -951,7 +955,7 @@ final class LocalStore {
                 let processed: Int = row?["processed"] ?? 0
                 let sent: Int = row?["sent"] ?? 0
                 let lastProcessedText: String? = row?["last_processed_at"]
-                let lastProcessedAt = lastProcessedText.flatMap { iso.date(from: $0) }
+                let lastProcessedAt = lastProcessedText.flatMap { makeISOFormatter().date(from: $0) }
                 return (processed, sent, lastProcessedAt)
             }
         } catch {
@@ -974,7 +978,7 @@ final class LocalStore {
                 )
                 let sent: Int = row?["sent"] ?? 0
                 let lastSentText: String? = row?["last_sent_at"]
-                let lastSentAt = lastSentText.flatMap { iso.date(from: $0) }
+                let lastSentAt = lastSentText.flatMap { makeISOFormatter().date(from: $0) }
                 return (sent, lastSentAt)
             }
         } catch {
@@ -999,7 +1003,7 @@ final class LocalStore {
                             contact.familyName,
                             contact.organizationName,
                             String(data: try JSONEncoder().encode(contact.phoneNumbers), encoding: .utf8) ?? "[]",
-                            iso.string(from: Date())
+                            makeISOFormatter().string(from: Date())
                         ]
                     )
                 }
@@ -1062,7 +1066,7 @@ final class LocalStore {
                 }
 
                 let lastSeenAtText: String? = row["last_seen_at"]
-                let lastSeenAt = lastSeenAtText.map { iso.date(from: $0) }.flatMap { $0 }
+                let lastSeenAt = lastSeenAtText.map { makeISOFormatter().date(from: $0) }.flatMap { $0 }
                 let lastSeenUid: String? = row["last_seen_uid"]
                 return (lastSeenAt, lastSeenUid)
             }
@@ -1073,8 +1077,8 @@ final class LocalStore {
     }
 
     private func setLegacyCursor(accountId: String, source: String, lastSeenAt: Date?, lastSeenUid: String?) {
-        let lastSeenAtText = lastSeenAt.map { iso.string(from: $0) }
-        let updatedAt = iso.string(from: Date())
+        let lastSeenAtText = lastSeenAt.map { makeISOFormatter().string(from: $0) }
+        let updatedAt = makeISOFormatter().string(from: Date())
         do {
             try dbQueue.write { db in
                 try db.execute(
@@ -1102,13 +1106,15 @@ final class LocalStore {
         if source == "messages" {
             return "messages:\(accountId)"
         }
+        if source.hasPrefix("calendar:") {
+            return source
+        }
         return "\(source):\(accountId)"
     }
-
+    
     private func connectedSourceType(for source: String) -> String {
-        if source == "messages" {
-            return "messages"
-        }
+        if source == "messages" { return "messages" }
+        if source.hasPrefix("calendar:") { return "calendar" }
         return "mail"
     }
 
@@ -1118,6 +1124,9 @@ final class LocalStore {
         }
         if source == "messages" {
             return "Messages"
+        }
+        if source.hasPrefix("calendar:") {
+            return String(source.dropFirst("calendar:".count))
         }
         return source
     }
@@ -1131,17 +1140,18 @@ final class LocalStore {
             let status: String = row["status"],
             let createdAtText: String = row["created_at"],
             let updatedAtText: String = row["updated_at"],
-            let createdAt = iso.date(from: createdAtText),
-            let updatedAt = iso.date(from: updatedAtText)
+            let createdAt = makeISOFormatter().date(from: createdAtText),
+            let updatedAt = makeISOFormatter().date(from: updatedAtText)
         else {
             return nil
         }
         let enabledInt: Int = row["enabled"] ?? 1
         let syncCursorText: String? = row["sync_cursor"]
-        let syncCursor = syncCursorText.flatMap { iso.date(from: $0) }
+        let syncCursor = syncCursorText.flatMap { makeISOFormatter().date(from: $0) }
         let totalEstimated: Int = row["total_estimated"] ?? 0
         let totalSynced: Int = row["total_synced"] ?? 0
         let lastError: String? = row["last_error"]
+        let statusEnum = SourceStatus(rawValue: status) ?? .pending
         return ConnectedSource(
             id: id,
             sourceType: sourceType,
@@ -1151,7 +1161,7 @@ final class LocalStore {
             syncCursor: syncCursor,
             totalEstimated: totalEstimated,
             totalSynced: totalSynced,
-            status: status,
+            status: statusEnum,
             lastError: lastError,
             createdAt: createdAt,
             updatedAt: updatedAt

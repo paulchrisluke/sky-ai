@@ -5,11 +5,11 @@ struct MailProcessingResult {
     let rawMessages: [RawMessage]
 }
 
-protocol MailProcessing {
+protocol MailProcessing: Sendable {
     func process(messages: [RawMessage], workspaceId: String, skipExtraction: Bool) async throws -> MailProcessingResult
 }
 
-final class MailProcessor {
+final class MailProcessor: @unchecked Sendable, MailProcessing {
     private let extractor: any EntityExtracting
     private let logger: Logger
 

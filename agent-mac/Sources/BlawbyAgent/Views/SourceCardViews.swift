@@ -27,7 +27,7 @@ private struct RepairActionsView: View {
                     // Repair actions
                     if !issue.repairActions.isEmpty {
                         HStack {
-                            ForEach(issue.repairActions) { action in
+                            ForEach(issue.repairActions, id: \.self) { action in
                                 Button(action.title) {
                                     executeRepairAction(action)
                                 }
@@ -50,13 +50,13 @@ private struct RepairActionsView: View {
             }
         case .openSystemSettings(let kind):
             PlatformHelper.openSystemSettings(for: kind)
-        case .enableAutomation(let kind):
+        case .enableAutomation(_):
             PlatformHelper.openAutomationSettings()
         case .retryActivation(let kind):
             Task {
                 await session.enableSource(kind)
             }
-        case .contactSupport(let kind):
+        case .contactSupport(_):
             // Open support URL or help
             PlatformHelper.openSupportURL()
         }
@@ -81,7 +81,7 @@ private struct RepairActionsView: View {
 
 // MARK: - Enhanced Source Card View with Repair Actions
 struct EnhancedSourceCardView: View {
-    let capability: SourceCapability
+    let capability: ResolvedSourceCapability
     let issues: [SourceIssue]
     @ObservedObject var session: AppSession
     
@@ -105,7 +105,7 @@ struct EnhancedSourceCardView: View {
                 Spacer()
                 
                 // Primary actions based on capability state only (no hard-coded repair)
-                if capability.activation.isActive {
+                if capability.runtimeStatus == .active {
                     Button("Disable") {
                         Task {
                             await session.disableSource(capability.kind)
@@ -159,7 +159,7 @@ struct EnhancedSourceCardView: View {
     
     // ... existing computed properties ...
     private var statusColor: Color {
-        switch capability.activation {
+        switch capability.runtimeStatus {
         case .active: return .green
         case .activating: return .orange
         case .inactive: return .gray
@@ -168,7 +168,7 @@ struct EnhancedSourceCardView: View {
     }
     
     private var statusText: String {
-        switch capability.activation {
+        switch capability.runtimeStatus {
         case .active: return "Active"
         case .activating: return "Activating..."
         case .inactive: return "Inactive"

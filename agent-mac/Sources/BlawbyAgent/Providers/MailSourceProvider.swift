@@ -5,7 +5,7 @@ import SwiftUI
 final class MailSourceProvider: SourceProvider {
     let kind: SourceKind = .mail
     
-    func discover(in context: BootstrapContext) async -> SourceCapability {
+    func discover(in context: BootstrapContext) async -> DiscoveredSourceCapability {
         // Check if Mail.app is available
         let mailUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Mail")
         let availability: SourceAvailability = mailUrl != nil ? .available : .unavailable(reason: "Mail.app not installed")
@@ -13,15 +13,15 @@ final class MailSourceProvider: SourceProvider {
         // Mail uses Apple Events - authorization state unknown until activation
         let authorization: SourceAuthorizationStatus = .notRequired
         
-        // Discovery only reports availability/auth, not runtime activation state
-        let activation: SourceActivationStatus = .inactive
+        // Discovery only reports discovery state, not runtime activation state
+        let discoveryStatus: SourceDiscoveryStatus = .inactive
         
-        return SourceCapability(
+        return DiscoveredSourceCapability(
             kind: .mail,
             displayName: "Mail",
             availability: availability,
             authorization: authorization,
-            activation: activation,
+            discoveryStatus: discoveryStatus,
             isRequiredForCoreValue: true,
             canDefer: false
         )
@@ -64,7 +64,7 @@ final class MailSourceProvider: SourceProvider {
     }
     
     // MARK: - Issue Generation
-    func generateIssues(for capability: SourceCapability) -> [SourceIssue] {
+    func generateIssues(for capability: DiscoveredSourceCapability) -> [SourceIssue] {
         var issues: [SourceIssue] = []
         
         switch capability.availability {
@@ -118,7 +118,19 @@ final class MailSourceProvider: SourceProvider {
                 )]
             }
         }
-        return []
+        
+        // Fallback for unknown errors
+        return [SourceIssue(
+            kind: .mail,
+            severity: .error,
+            category: .activation,
+            title: "Mail Activation Failed",
+            description: error.localizedDescription,
+            repairActions: [
+                .retryActivation(.mail),
+                .contactSupport(.mail)
+            ]
+        )]
     }
 }
 
