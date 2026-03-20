@@ -1,12 +1,12 @@
 import Foundation
 import SwiftUI
 
-// MARK: - Core Boot State (Phase 2)
+// MARK: - App Boot State
 enum AppBootState {
     case launching
-    case setupRequired(BootstrapContext, [SourceCapability], [StartupIssue])
+    case setupRequired(BootstrapContext, [SourceCapability], [SourceIssue])
     case ready(BootstrapContext, [SourceKind: ActiveSource])
-    case degraded(BootstrapContext, [SourceKind: ActiveSource], [StartupIssue])
+    case degraded(BootstrapContext, [SourceKind: ActiveSource], [SourceIssue])
     case fatal(FatalStartupIssue)
 }
 
@@ -124,6 +124,8 @@ protocol SourceProvider {
     var kind: SourceKind { get }
     func discover(in context: BootstrapContext) async -> SourceCapability
     func activate(in context: BootstrapContext) async throws -> ActiveSource
+    func generateIssues(for capability: SourceCapability) -> [SourceIssue]
+    func generateActivationFailureIssues(for error: Error) -> [SourceIssue]
 }
 
 // MARK: - Activation State Persistence
@@ -171,32 +173,21 @@ class ActivationStateStore {
 // MARK: - Source Registry (Activation Boundary)
 @MainActor
 class SourceRegistry {
-    private var providers: [SourceKind: SourceProvider] = [:]
+    private var _providers: [SourceKind: SourceProvider] = [:]
     private var activeSources: [SourceKind: ActiveSource] = [:]
-    private var discoveredCapabilities: [SourceCapability] = []
+    
+    var providers: [SourceKind: SourceProvider] { _providers }
     
     init() {
         // Register providers
-        providers[.calendar] = CalendarSourceProvider()
-        // TODO: Add Mail and Contacts providers in Phase 2+
-    }
-    
-    // MARK: - Discovery
-    func updateCapabilities(_ capabilities: [SourceCapability]) {
-        discoveredCapabilities = capabilities
-    }
-    
-    func getCapabilities() -> [SourceCapability] {
-        return discoveredCapabilities
-    }
-    
-    func getCapability(for kind: SourceKind) -> SourceCapability? {
-        return discoveredCapabilities.first { $0.kind == kind }
+        _providers[.calendar] = CalendarSourceProvider()
+        _providers[.mail] = MailSourceProvider()
+        _providers[.contacts] = ContactsSourceProvider()
     }
     
     // MARK: - Activation (Only Boundary)
     func activate(_ kind: SourceKind, in context: BootstrapContext) async throws -> ActiveSource {
-        guard let provider = providers[kind] else {
+        guard let provider = _providers[kind] else {
             throw NSError(domain: "SourceRegistry", code: 1, userInfo: [NSLocalizedDescriptionKey: "No provider for source kind: \(kind.rawValue)"])
         }
         

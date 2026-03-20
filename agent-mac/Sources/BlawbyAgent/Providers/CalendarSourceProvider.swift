@@ -109,4 +109,64 @@ final class CalendarSourceProvider: SourceProvider {
             }
         }
     }
+    
+    // MARK: - Issue Generation
+    func generateIssues(for capability: SourceCapability) -> [SourceIssue] {
+        var issues: [SourceIssue] = []
+        
+        switch capability.authorization {
+        case .denied:
+            issues.append(SourceIssue(
+                kind: .calendar,
+                severity: .warning,
+                category: .authorization,
+                title: "Calendar Access Denied",
+                description: "Blawby cannot access your calendar events",
+                repairActions: [
+                    .openSystemSettings(.calendar)
+                ]
+            ))
+        case .restricted:
+            issues.append(SourceIssue(
+                kind: .calendar,
+                severity: .warning,
+                category: .authorization,
+                title: "Calendar Access Restricted",
+                description: "Calendar access is restricted by system policy",
+                repairActions: [
+                    .openSystemSettings(.calendar),
+                    .contactSupport(.calendar)
+                ]
+            ))
+        case .notDetermined:
+            issues.append(SourceIssue(
+                kind: .calendar,
+                severity: .info,
+                category: .authorization,
+                title: "Calendar Access Available",
+                description: "Enable calendar access for event scheduling",
+                repairActions: [
+                    .requestPermission(.calendar)
+                ]
+            ))
+        case .authorized, .notRequired:
+            break
+        }
+        
+        return issues
+    }
+    
+    func generateActivationFailureIssues(for error: Error) -> [SourceIssue] {
+        return [SourceIssue(
+            kind: .calendar,
+            severity: .error,
+            category: .activation,
+            title: "Calendar Activation Failed",
+            description: error.localizedDescription,
+            repairActions: [
+                .retryActivation(.calendar),
+                .contactSupport(.calendar)
+            ]
+        )]
+    }
 }

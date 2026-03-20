@@ -306,11 +306,11 @@ private struct DashboardRootView: View {
     }
 }
 
-// MARK: - Onboarding Dashboard View (Phase 1)
+// MARK: - Onboarding Dashboard View (Phase 3)
 private struct OnboardingDashboardView: View {
     let context: BootstrapContext
     let capabilities: [SourceCapability]
-    let issues: [StartupIssue]
+    let issues: [SourceIssue]
     @ObservedObject var session: AppSession
     @Environment(\.openWindow) private var openWindow
 
@@ -328,11 +328,13 @@ private struct OnboardingDashboardView: View {
                 }
                 .padding(.top, 32)
                 
-                // Source cards
+                // Source cards with repair actions
                 LazyVStack(spacing: 16) {
                     ForEach(capabilities) { capability in
-                        SourceCardView(
+                        let sourceIssues = issues.filter { $0.kind == capability.kind }
+                        EnhancedSourceCardView(
                             capability: capability,
+                            issues: sourceIssues,
                             session: session
                         )
                     }
@@ -350,46 +352,57 @@ private struct OnboardingDashboardView: View {
                             }
                         }
                     }
-                    .padding(.vertical, 24)
                 }
-                
-                // What happens next
-                VStack(spacing: 8) {
-                    Text("What happens next")
-                        .font(.headline)
-                    Text("Blawby will sync your data and help you stay organized with intelligent task extraction and insights.")
-                        .font(.body)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 600)
-                }
-                .padding(.vertical, 24)
-                
-                // Current status
-                VStack(spacing: 8) {
-                    Text("Current Status")
-                        .font(.headline)
-                    HStack {
-                        Label("Version", systemImage: "info.circle")
-                        Spacer()
-                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
-                    }
-                    HStack {
-                        Label("Sync", systemImage: "arrow.triangle.2.circlepath")
-                        Spacer()
-                        Text(session.syncRequested ? "Enabled" : "Disabled")
-                    }
-                }
-                .frame(maxWidth: 400)
-                
-                Spacer()
             }
-            .padding()
+            .padding(.horizontal, 32)
         }
     }
 }
 
-// MARK: - Source Card View (Phase 2)
+// MARK: - Issue Card View
+private struct IssueCardView: View {
+    let issue: SourceIssue
+    
+    var body: some View {
+        HStack {
+            Image(systemName: severityIcon(for: issue.severity))
+                .foregroundColor(severityColor(for: issue.severity))
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(issue.title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                
+                Text(issue.description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+        }
+        .padding()
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+    }
+    
+    private func severityIcon(for severity: IssueSeverity) -> String {
+        switch severity {
+        case .error: return "xmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .info: return "info.circle.fill"
+        }
+    }
+    
+    private func severityColor(for severity: IssueSeverity) -> Color {
+        switch severity {
+        case .error: return .red
+        case .warning: return .orange
+        case .info: return .blue
+        }
+    }
+}
+
+// MARK: - Source Card View (Legacy - for backward compatibility)
 private struct SourceCardView: View {
     let capability: SourceCapability
     @ObservedObject var session: AppSession
@@ -421,8 +434,7 @@ private struct SourceCardView: View {
                     .buttonStyle(.bordered)
                 } else if capability.authorization == .denied || capability.authorization == .restricted {
                     Button("Open Settings") {
-                        // Open System Settings to the appropriate privacy section
-                        openSystemSettings(for: capability.kind)
+                        PlatformHelper.openSystemSettings(for: capability.kind)
                     }
                     .buttonStyle(.borderedProminent)
                 } else {
@@ -485,19 +497,6 @@ private struct SourceCardView: View {
         return capability.availability.isAvailable && 
                capability.authorization != .denied &&
                capability.authorization != .restricted
-    }
-    
-    private func openSystemSettings(for kind: SourceKind) {
-        let url: URL
-        switch kind {
-        case .calendar:
-            url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!
-        case .contacts:
-            url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts")!
-        case .mail:
-            url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!
-        }
-        NSWorkspace.shared.open(url)
     }
     
     private var authStatusIcon: String {

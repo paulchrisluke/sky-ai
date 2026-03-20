@@ -21,7 +21,7 @@ final class AppBootstrapper {
         let context = try await performUnconditionalBoot()
         
         // Layer B: Source discovery (determines relevance, no permissions requested)
-        let discoveredCapabilities = await discoverSources(context: context)
+        let discoveredCapabilities = await discoverSources(context: context, registry: sourceRegistry)
         
         // Layer C: Load enabled intents and attempt activation
         let (activeSources, activationIssues) = try await activateEnabledSources(context: context, capabilities: discoveredCapabilities, registry: sourceRegistry)
@@ -30,7 +30,7 @@ final class AppBootstrapper {
         let mergedCapabilities = mergeActivationState(capabilities: discoveredCapabilities, registry: sourceRegistry)
         
         // Layer E: Compute boot state from actual runtime plus issues
-        let bootState = computeBootState(context: context, capabilities: mergedCapabilities, activeSources: activeSources, issues: activationIssues)
+        let bootState = computeBootState(context: context, capabilities: mergedCapabilities, activeSources: activeSources, issues: activationIssues, registry: sourceRegistry)
         
         return bootState
     }
@@ -79,20 +79,14 @@ final class AppBootstrapper {
     }
     
     // MARK: - Layer B: Source Discovery
-    private func discoverSources(context: BootstrapContext) async -> [SourceCapability] {
+    private func discoverSources(context: BootstrapContext, registry: SourceRegistry) async -> [SourceCapability] {
         var capabilities: [SourceCapability] = []
         
-        // Discover Mail availability
-        let mailCapability = await discoverMailCapability(context: context)
-        capabilities.append(mailCapability)
-        
-        // Discover Calendar capability
-        let calendarCapability = await discoverCalendarCapability(context: context)
-        capabilities.append(calendarCapability)
-        
-        // Discover Contacts capability
-        let contactsCapability = await discoverContactsCapability(context: context)
-        capabilities.append(contactsCapability)
+        // Discover all sources through registry providers
+        for provider in registry.providers.values {
+            let capability = await provider.discover(in: context)
+            capabilities.append(capability)
+        }
         
         return capabilities
     }
@@ -116,128 +110,13 @@ final class AppBootstrapper {
         }
     }
     
-    // MARK: - Individual Source Discovery
-    private func discoverMailCapability(context: BootstrapContext) async -> SourceCapability {
-        // Check if Mail.app is available
-        let mailUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Mail")
-        let availability: SourceAvailability = mailUrl != nil ? .available : .unavailable(reason: "Mail.app not installed")
-        
-        // Mail doesn't require explicit permissions upfront (uses Apple Events)
-        let authorization: SourceAuthorizationStatus = .notRequired
-        
-        // Mail is highest user value, cannot be deferred
-        let activation: SourceActivationStatus = .inactive
-        
-        return SourceCapability(
-            kind: .mail,
-            displayName: "Mail",
-            availability: availability,
-            authorization: authorization,
-            activation: activation,
-            isRequiredForCoreValue: true,
-            canDefer: false
-        )
-    }
-    
-    private func discoverCalendarCapability(context: BootstrapContext) async -> SourceCapability {
-        // Check Calendar availability (always available on macOS)
-        let availability: SourceAvailability = .available
-        
-        // Check current authorization status without requesting
-        let authorization = await checkCalendarAuthorizationStatus()
-        
-        let activation: SourceActivationStatus = .inactive
-        
-        return SourceCapability(
-            kind: .calendar,
-            displayName: "Calendar",
-            availability: availability,
-            authorization: authorization,
-            activation: activation,
-            isRequiredForCoreValue: false,
-            canDefer: true
-        )
-    }
-    
-    private func discoverContactsCapability(context: BootstrapContext) async -> SourceCapability {
-        // Check Contacts availability (always available on macOS)
-        let availability: SourceAvailability = .available
-        
-        // Check current authorization status without requesting
-        let authorization = await checkContactsAuthorizationStatus()
-        
-        let activation: SourceActivationStatus = .inactive
-        
-        // Contacts is enrichment, can be deferred
-        return SourceCapability(
-            kind: .contacts,
-            displayName: "Contacts",
-            availability: availability,
-            authorization: authorization,
-            activation: activation,
-            isRequiredForCoreValue: false,
-            canDefer: true
-        )
-    }
-    
-    // MARK: - Authorization Status Checks (Side-Effect Free)
-    private func checkCalendarAuthorizationStatus() async -> SourceAuthorizationStatus {
-        // Check current status WITHOUT requesting access
-        if #available(macOS 14.0, *) {
-            let status = EKEventStore.authorizationStatus(for: .event)
-            switch status {
-            case .authorized:
-                return .authorized
-            case .denied:
-                return .denied
-            case .restricted:
-                return .restricted
-            case .notDetermined:
-                return .notDetermined
-            @unknown default:
-                return .notDetermined
-            }
-        } else {
-            let status = EKEventStore.authorizationStatus(for: .event)
-            switch status {
-            case .authorized:
-                return .authorized
-            case .denied:
-                return .denied
-            case .restricted:
-                return .restricted
-            case .notDetermined:
-                return .notDetermined
-            @unknown default:
-                return .notDetermined
-            }
-        }
-    }
-    
-    private func checkContactsAuthorizationStatus() async -> SourceAuthorizationStatus {
-        // Check current status WITHOUT requesting access
-        let status = CNContactStore.authorizationStatus(for: .contacts)
-        switch status {
-        case .authorized:
-            return .authorized
-        case .denied:
-            return .denied
-        case .restricted:
-            return .restricted
-        case .notDetermined:
-            return .notDetermined
-        @unknown default:
-            return .notDetermined
-        }
-    }
-    
     // MARK: - Layer C: Activate Enabled Sources
     private func activateEnabledSources(
         context: BootstrapContext,
         capabilities: [SourceCapability],
         registry: SourceRegistry
-    ) async throws -> ([SourceKind: ActiveSource], [StartupIssue]) {
-        var activationIssues: [StartupIssue] = []
+    ) async throws -> ([SourceKind: ActiveSource], [SourceIssue]) {
+        var sourceIssues: [SourceIssue] = []
         
         // Get enabled sources from persisted intent
         let enabledCapabilities = capabilities.filter { 
@@ -255,14 +134,27 @@ final class AppBootstrapper {
                 let activeSource = try await registry.activate(capability.kind, in: context)
                 // Registry manages active sources, we don't need to track them here
             } catch {
-                // Activation failed - add to issues
-                activationIssues.append(.activationFailed(capability.kind, reason: error.localizedDescription))
+                // Activation failed - generate issues from provider
+                if let provider = registry.providers[capability.kind] {
+                    let providerIssues = provider.generateActivationFailureIssues(for: error)
+                    sourceIssues.append(contentsOf: providerIssues)
+                } else {
+                    // Fallback generic issue
+                    sourceIssues.append(SourceIssue(
+                        kind: capability.kind,
+                        severity: .error,
+                        category: .activation,
+                        title: "\(capability.kind.displayName) Activation Failed",
+                        description: error.localizedDescription,
+                        repairActions: [.retryActivation(capability.kind)]
+                    ))
+                }
             }
         }
         
         // Return current active sources from registry and any issues
         let activeSources = registry.getActiveSources()
-        return (activeSources, activationIssues)
+        return (activeSources, sourceIssues)
     }
     
     // MARK: - Layer D: Compute Boot State
@@ -270,20 +162,15 @@ final class AppBootstrapper {
         context: BootstrapContext,
         capabilities: [SourceCapability],
         activeSources: [SourceKind: ActiveSource],
-        issues: [StartupIssue]
+        issues: [SourceIssue],
+        registry: SourceRegistry
     ) -> AppBootState {
         // Determine state based on actual active sources
         if !activeSources.isEmpty {
             // Include issues for enabled sources only (discovery + activation)
             let enabledKinds = Set(SourceKind.allCases.filter { context.activationStateStore.isEnabled($0) })
-            let enabledDiscoveryIssues = extractIssues(capabilities: capabilities).filter { issue in
-                switch issue {
-                case .sourceUnavailable(let kind, _), .authorizationDenied(let kind), .activationFailed(let kind, _):
-                    return enabledKinds.contains(kind)
-                case .partialDependencyFailure:
-                    return true
-                }
-            }
+            let enabledDiscoveryIssues = generateDiscoverySourceIssues(capabilities: capabilities, registry: registry)
+                .filter { enabledKinds.contains($0.kind) }
             let allRuntimeIssues = enabledDiscoveryIssues + issues
             
             if !allRuntimeIssues.isEmpty {
@@ -294,46 +181,23 @@ final class AppBootstrapper {
         } else {
             // No active sources - show setup
             // Include discovery issues for all sources
-            let discoveryIssues = extractIssues(capabilities: capabilities)
+            let discoveryIssues = generateDiscoverySourceIssues(capabilities: capabilities, registry: registry)
             let allIssues = discoveryIssues + issues
             return .setupRequired(context, capabilities, allIssues)
         }
     }
     
-    private func extractIssues(capabilities: [SourceCapability]) -> [StartupIssue] {
-        var issues: [StartupIssue] = []
+    private func generateDiscoverySourceIssues(capabilities: [SourceCapability], registry: SourceRegistry) -> [SourceIssue] {
+        var issues: [SourceIssue] = []
         
         for capability in capabilities {
-            switch capability.availability {
-            case .unavailable(let reason):
-                issues.append(.sourceUnavailable(capability.kind, reason: reason))
-            case .available:
-                break
-            }
-            
-            switch capability.authorization {
-            case .denied:
-                issues.append(.authorizationDenied(capability.kind))
-            case .restricted:
-                issues.append(.authorizationDenied(capability.kind))
-            case .notRequired, .authorized, .notDetermined:
-                break
+            // Generate issues from providers for discovery state
+            if let provider = registry.providers[capability.kind] {
+                let providerIssues = provider.generateIssues(for: capability)
+                issues.append(contentsOf: providerIssues)
             }
         }
         
         return issues
-    }
-    
-    // MARK: - Error Mapping
-    private func mapToFatalIssue(_ error: Error) -> FatalStartupIssue {
-        let errorMessage = error.localizedDescription
-        
-        if errorMessage.contains("Logger") || errorMessage.contains("log") {
-            return .loggerInitializationFailed(errorMessage)
-        } else if errorMessage.contains("Config") || errorMessage.contains("preferences") {
-            return .configurationLoadFailed(errorMessage)
-        } else {
-            return .storageInitializationFailed(errorMessage)
-        }
     }
 }
