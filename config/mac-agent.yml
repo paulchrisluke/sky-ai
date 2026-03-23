@@ -1,0 +1,39 @@
+# Canonical configuration for macOS agent
+# This is the single source of truth for app metadata
+
+app:
+  bundle_id: "com.blawby.BlawbyAgent"
+  name: "BlawbyAgent"
+  marketing_version: "1.1"
+  current_project_version: "1"
+
+# Update Configuration
+sparkle:
+  feed_url: "https://downloads.blawby.com/appcast.xml"
+  public_ed_key: "0IC6N25L3FuF6YeIUQUPXTEx5YA9LGKQvrz8aUkukbw="
+  enable_automatic_checks: true
+
+# Build Configuration
+build:
+  deployment_target: "13.0"
+  swift_version: "6.0"
+  xcode_version: "16.0"
+  
+# Code Signing Configuration
+signing:
+  development_team: "948S9JG4VL"
+  code_sign_style: "Automatic"
+  entitlements_file: "BlawbyAgent/BlawbyAgent.entitlements"
+
+# Privacy Descriptions
+privacy:
+  contacts_usage: "Blawby uses Contacts to enrich email data"
+  calendar_usage: "Blawby reads your calendar to keep your schedule current"
+  apple_events_usage: "Blawby reads Mail to process your emails"
+
+# Release Build Overrides
+release:
+  code_sign_style: "Manual"
+  # These will be overridden by CI environment variables
+  code_sign_identity: null
+  development_team: null

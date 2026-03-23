@@ -82,6 +82,13 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: brew install xcodegen
 
+      - name: Generate configurations
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          node scripts/generate-configs.js
+          ./scripts/validate-configs.sh
+
       - name: Generate Xcode project
         if: steps.gate.outputs.skip != 'true'
         run: |

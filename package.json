@@ -19,11 +19,15 @@
     "cf:d1:migrate:dev:jobs": "wrangler d1 migrations apply sky-ai-dev --config wrangler.jobs.toml",
     "cf:d1:migrate:prod": "node -e \"console.error('Blocked: prod migrations disabled in dev-only mode'); process.exit(1)\"",
     "cf:d1:migrate:prod:api": "node -e \"console.error('Blocked: prod migrations disabled in dev-only mode'); process.exit(1)\"",
-    "cf:d1:migrate:prod:jobs": "node -e \"console.error('Blocked: prod migrations disabled in dev-only mode'); process.exit(1)\""
+    "cf:d1:migrate:prod:jobs": "node -e \"console.error('Blocked: prod migrations disabled in dev-only mode'); process.exit(1)\"",
+    "config:generate": "node scripts/generate-configs.js",
+    "config:validate": "./scripts/validate-configs.sh"
   },
   "devDependencies": {
     "typescript": "^5.8.2",
-    "wrangler": "^4.6.0"
+    "wrangler": "^4.6.0",
+    "toml": "^3.0.0",
+    "js-yaml": "^4.1.0"
   },
   "engines": {
     "node": ">=20"

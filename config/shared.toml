@@ -1,0 +1,50 @@
+# Shared configuration for all environments
+# This is the single source of truth for common values
+
+[shared]
+# AI Gateway Configuration
+aig_account_id = "fa3dc6c06433f6b0ea78d95bce23ad91"
+aig_gateway_id = "sky-ai"
+
+# OpenAI Configuration
+openai_model = "gpt-4o-mini"
+openai_embedding_model = "text-embedding-3-small"
+
+# Authentication
+access_auth_enabled = true
+allow_api_key_bypass = true
+
+# Development Environment
+environment = "dev"
+
+# Database Configuration (Development)
+dev_database_name = "sky-ai-dev"
+dev_database_id = "4d6853be-e6da-45df-b054-afd2207413e6"
+
+# Vectorize Configuration (Development)
+dev_vectorize_index = "sky-ai-memory-dev"
+
+# R2 Configuration (Development)
+dev_r2_bucket = "sky-ai-artifacts-dev"
+
+# Production Environment Overrides
+[prod]
+environment = "prod"
+allow_api_key_bypass = false
+
+# Production Database Configuration
+[prod.database]
+database_name = "sky-ai-prod"
+database_id = "e0dc4ec1-26d5-46db-819d-a416bb76c7ec"
+
+# Production Vectorize Configuration
+[prod.vectorize]
+index_name = "sky-ai-memory-prod"
+
+# Production R2 Configuration
+[prod.r2]
+bucket_name = "sky-ai-artifacts-prod"
+
+# Production Queue Configuration
+[prod.queues]
+embedding_queue = "sky-ai-embeddings-prod"

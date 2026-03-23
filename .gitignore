@@ -22,3 +22,13 @@ agent-mac/BlawbyAgent.xcodeproj/xcuserdata/
 *.xcuserstate
 
 dist/
+
+# Legacy agent
+agent-legacy/
+
+# Generated configuration files (generated from config/ directory)
+# Uncomment these lines if you want to exclude generated files from git
+# wrangler.toml
+# wrangler.api.toml  
+# wrangler.jobs.toml
+# agent-mac/project.yml
