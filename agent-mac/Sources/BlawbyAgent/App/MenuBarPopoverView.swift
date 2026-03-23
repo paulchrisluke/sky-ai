@@ -139,14 +139,14 @@ struct SourceRow: View {
                 let ratio = estimated > 0 ? CGFloat(synced) / CGFloat(estimated) : 0.0
                 
                 HStack {
-                    if source.status == "current" {
+                    if source.status == SourceStatus.current {
                         ProgressView(value: estimated > 0 ? 1.0 : 0.0)
                             .progressViewStyle(LinearProgressViewStyle())
                             .accentColor(statusColor)
                         Text(estimated == 0 ? "waiting" : "100% ✓")
                             .font(.caption)
                             .frame(width: 60, alignment: .trailing)
-                    } else if source.status == "syncing" {
+                    } else if source.status == SourceStatus.syncing {
                         ProgressView(value: ratio)
                             .progressViewStyle(LinearProgressViewStyle())
                             .accentColor(statusColor)
@@ -157,7 +157,7 @@ struct SourceRow: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .frame(width: 60, alignment: .trailing)
-                    } else if source.status == "error" {
+                    } else if source.status == SourceStatus.error {
                         ProgressView(value: ratio)
                             .progressViewStyle(LinearProgressViewStyle())
                             .accentColor(statusColor)
@@ -194,9 +194,9 @@ struct SourceRow: View {
 
     private var statusColor: Color {
         switch source.status {
-        case "syncing": return .blue
-        case "current": return .green
-        case "error": return .red
+        case SourceStatus.syncing: return .blue
+        case SourceStatus.current: return .green
+        case SourceStatus.error: return .red
         default: return .secondary
         }
     }

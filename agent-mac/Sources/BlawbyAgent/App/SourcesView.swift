@@ -47,10 +47,10 @@ final class SourcesViewModel: ObservableObject {
         if !source.enabled {
             return "Paused"
         }
-        if source.status == "error" {
+        if source.status == SourceStatus.error {
             return source.lastError.map { "Error: \($0)" } ?? "Error"
         }
-        if source.status == "current" {
+        if source.status == SourceStatus.current {
             return "✓ Current"
         }
 

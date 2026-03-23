@@ -8,34 +8,39 @@
 
 /* Begin PBXBuildFile section */
 		07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */; };
+		251C0D1B7DAF0C7BF481749F /* AppBootstrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3475543C21D45E97A01ABA79 /* AppBootstrapper.swift */; };
 		289661C0209D41B5319B0657 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C61DC164DE3E5327702F99 /* Config.swift */; };
 		2934EF299DD477179A67C5E5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = BB22FC45049BCFD0751A8C05 /* GRDB */; };
 		2DDB718641C49BBCA0AE4453 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = F774B8F1D3F8FDDD014AFB59 /* Sparkle */; };
 		35107213E4698BF5E5BBB72E /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 587536AF6523B68207BDF79C /* PreferencesView.swift */; };
 		41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D04FFB67431F372BB5AF25 /* Preferences.swift */; };
 		440107DEC999EF6CFC534016 /* ArchitectureGuardrailsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A27C3B2BCC26C16FDBF4D1 /* ArchitectureGuardrailsTests.swift */; };
+		440A2F2E62D6DA88CC1854FF /* ContactsSourceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B33F8FF66BA92D555D47D836 /* ContactsSourceProvider.swift */; };
 		4413D173B8E7F76D1E4D0A17 /* SyncRuntimeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D61E618D73D3F20C6A37A91 /* SyncRuntimeController.swift */; };
 		5669259E3FB85B9AAB83B428 /* EmlxReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618247051F36D3E6E0F259B2 /* EmlxReader.swift */; };
 		5CC9CA5CFEAE6825FD97365D /* SourcesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 268D5A0DF63E60EC68837921 /* SourcesView.swift */; };
 		601AAAE0FA4B3A381F207342 /* BlawbyAgentApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 740C4465BD562F786A434D1A /* BlawbyAgentApp.swift */; };
 		64D87FB32ABDEF2744AAB268 /* AppPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87CECE75660918366767E4E1 /* AppPaths.swift */; };
 		73EF4F35647CB37D7EA34F2A /* blawby-logo-source.png in Resources */ = {isa = PBXBuildFile; fileRef = 06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */; };
+		7C9D8FCFC156C9F9FFD4E674 /* MailSourceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F42F29F82BD3E75DCF53E6 /* MailSourceProvider.swift */; };
 		865B4EFF997483C49A9D8997 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */; };
+		9D16582B3D94360347857B86 /* SourceCardViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD28F7CECDABEC091EE1759F /* SourceCardViews.swift */; };
 		9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA25A68472D76D0C994520D /* CalendarWatcher.swift */; };
 		A504C9A76E29448420575E52 /* AppSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B505A7DACEF2BD3A2F01DA76 /* AppSession.swift */; };
-            A504C9A76E29448420575E53 /* AppBootState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B505A7DACEF2BD3A2F01DA77 /* AppBootState.swift */; };
-            A504C9A76E29448420575E54 /* AppBootstrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B505A7DACEF2BD3A2F01DA78 /* AppBootstrapper.swift */; };
 		AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */; };
 		AE169531AE4BFA3F8237E346 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */; };
 		B025B4C8F54811B0EF59D17D /* MenuBarPopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */; };
 		B195F2396EB9DA0B8459F1E2 /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 451B18EF815B4011EC7984E0 /* SyncCoordinator.swift */; };
 		BB15E6DFD68F10D2B575D763 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 2B16F395DEC869A73CE18AB5 /* Info.plist */; };
 		D2F5CA44EA53E5343394DFC2 /* SourceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51397B60B3C9B31D8BEAA14 /* SourceManager.swift */; };
+		D3833C1F06FF318AD8AAD61B /* AppBootState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79820553FD3356DF0E1DCF6D /* AppBootState.swift */; };
 		DCD50954F90A217D7A91D856 /* AppStartupComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44B3EB277CEF5DD708CBDACB /* AppStartupComposer.swift */; };
 		DFFC1AC2AA62764E85066948 /* MessagesReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03F3929134BE941F4D84B17C /* MessagesReader.swift */; };
 		E05C5F898DC18439BCCA9DAB /* Mail.sdef in Resources */ = {isa = PBXBuildFile; fileRef = 2DBF363EB08A6121C368B7D3 /* Mail.sdef */; };
 		E28372C641824150C40949B0 /* EntityExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0A817E9BA538BAB3D28137 /* EntityExtractor.swift */; };
+		E428055827EE8D2D2DE9D747 /* CalendarSourceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 805E9C47B3BA9302100FFE63 /* CalendarSourceProvider.swift */; };
 		E4AA27EF6229A9F55A7CE3C9 /* WebSocketPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */; };
+		E4F92C838CE2F75071BE8A20 /* SourceRepairModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCD3A2D7970A222D391517FD /* SourceRepairModel.swift */; };
 		E767675D89D955EF433CB79D /* Logger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57F3234AC7A5DD02502FB8E4 /* Logger.swift */; };
 		ED0EFA21EFEE03F9779BD1C3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0FA6D9F37F3C7B9B5574DF43 /* Assets.xcassets */; };
 		F2B127D621F90D6157611987 /* MailWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49CF3713D972922FB05679E3 /* MailWatcher.swift */; };
@@ -64,6 +69,7 @@
 		29C61DC164DE3E5327702F99 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
 		2B16F395DEC869A73CE18AB5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		2DBF363EB08A6121C368B7D3 /* Mail.sdef */ = {isa = PBXFileReference; path = Mail.sdef; sourceTree = "<group>"; };
+		3475543C21D45E97A01ABA79 /* AppBootstrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootstrapper.swift; sourceTree = "<group>"; };
 		44B3EB277CEF5DD708CBDACB /* AppStartupComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStartupComposer.swift; sourceTree = "<group>"; };
 		451B18EF815B4011EC7984E0 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
 		49CF3713D972922FB05679E3 /* MailWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailWatcher.swift; sourceTree = "<group>"; };
@@ -75,18 +81,22 @@
 		7172F45B5B28D80C2994749B /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
 		740C4465BD562F786A434D1A /* BlawbyAgentApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlawbyAgentApp.swift; sourceTree = "<group>"; };
 		7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPopoverView.swift; sourceTree = "<group>"; };
+		79820553FD3356DF0E1DCF6D /* AppBootState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootState.swift; sourceTree = "<group>"; };
 		7AD1458AF0D14F688184AE90 /* MailProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailProcessor.swift; sourceTree = "<group>"; };
+		805E9C47B3BA9302100FFE63 /* CalendarSourceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarSourceProvider.swift; sourceTree = "<group>"; };
 		87CECE75660918366767E4E1 /* AppPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPaths.swift; sourceTree = "<group>"; };
 		9D61E618D73D3F20C6A37A91 /* SyncRuntimeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRuntimeController.swift; sourceTree = "<group>"; };
 		A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinatorTests.swift; sourceTree = "<group>"; };
 		A8D04FFB67431F372BB5AF25 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
 		AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketPublisher.swift; sourceTree = "<group>"; };
+		B33F8FF66BA92D555D47D836 /* ContactsSourceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsSourceProvider.swift; sourceTree = "<group>"; };
 		B505A7DACEF2BD3A2F01DA76 /* AppSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSession.swift; sourceTree = "<group>"; };
-            B505A7DACEF2BD3A2F01DA77 /* AppBootState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootState.swift; sourceTree = "<group>"; };
-            B505A7DACEF2BD3A2F01DA78 /* AppBootstrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootstrapper.swift; sourceTree = "<group>"; };
+		BD28F7CECDABEC091EE1759F /* SourceCardViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceCardViews.swift; sourceTree = "<group>"; };
 		C0A27C3B2BCC26C16FDBF4D1 /* ArchitectureGuardrailsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchitectureGuardrailsTests.swift; sourceTree = "<group>"; };
+		C0F42F29F82BD3E75DCF53E6 /* MailSourceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSourceProvider.swift; sourceTree = "<group>"; };
 		C51397B60B3C9B31D8BEAA14 /* SourceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceManager.swift; sourceTree = "<group>"; };
 		CAA25A68472D76D0C994520D /* CalendarWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarWatcher.swift; sourceTree = "<group>"; };
+		FCD3A2D7970A222D391517FD /* SourceRepairModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceRepairModel.swift; sourceTree = "<group>"; };
 		FE15D867F583668A8E9ED2AC /* BlawbyAgent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BlawbyAgent.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -113,11 +123,14 @@
 				C51397B60B3C9B31D8BEAA14 /* SourceManager.swift */,
 				454844A0E0F6606864D8C714 /* App */,
 				BB772045B29E715068B5624A /* Config */,
+				899B6F592AEDA152ECD565B8 /* Models */,
 				5B0F5C6558B9F7C0198D5597 /* Processors */,
+				F1E9C6780E568F0521D85C1E /* Providers */,
 				83A9F14D60DEF70EA4D3EE6C /* Publishers */,
 				5972F29CD7D7522776653F8E /* Readers */,
 				DCA9353FB58B551A4FE15EC1 /* Storage */,
 				8AC9A08B232EA0D1798C35F5 /* Utilities */,
+				5C26C153F8904EC65A5917E4 /* Views */,
 			);
 			name = BlawbyAgent;
 			path = Sources/BlawbyAgent;
@@ -126,8 +139,8 @@
 		454844A0E0F6606864D8C714 /* App */ = {
 			isa = PBXGroup;
 			children = (
-                            B505A7DACEF2BD3A2F01DA77 /* AppBootState.swift *,
-                            B505A7DACEF2BD3A2F01DA78 /* AppBootstrapper.swift *,
+				79820553FD3356DF0E1DCF6D /* AppBootState.swift */,
+				3475543C21D45E97A01ABA79 /* AppBootstrapper.swift */,
 				87CECE75660918366767E4E1 /* AppPaths.swift */,
 				B505A7DACEF2BD3A2F01DA76 /* AppSession.swift */,
 				44B3EB277CEF5DD708CBDACB /* AppStartupComposer.swift */,
@@ -157,6 +170,14 @@
 				7AD1458AF0D14F688184AE90 /* MailProcessor.swift */,
 			);
 			path = Processors;
+			sourceTree = "<group>";
+		};
+		5C26C153F8904EC65A5917E4 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				BD28F7CECDABEC091EE1759F /* SourceCardViews.swift */,
+			);
+			path = Views;
 			sourceTree = "<group>";
 		};
 		5DCCF81F84C458B80263CE30 /* Products */ = {
@@ -193,6 +214,14 @@
 				AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */,
 			);
 			path = Publishers;
+			sourceTree = "<group>";
+		};
+		899B6F592AEDA152ECD565B8 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				FCD3A2D7970A222D391517FD /* SourceRepairModel.swift */,
+			);
+			path = Models;
 			sourceTree = "<group>";
 		};
 		8AC9A08B232EA0D1798C35F5 /* Utilities */ = {
@@ -239,6 +268,16 @@
 				D43BF19C4C6D4DDCFC8F073B /* Resources */,
 				5DCCF81F84C458B80263CE30 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		F1E9C6780E568F0521D85C1E /* Providers */ = {
+			isa = PBXGroup;
+			children = (
+				805E9C47B3BA9302100FFE63 /* CalendarSourceProvider.swift */,
+				B33F8FF66BA92D555D47D836 /* ContactsSourceProvider.swift */,
+				C0F42F29F82BD3E75DCF53E6 /* MailSourceProvider.swift */,
+			);
+			path = Providers;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -349,19 +388,21 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-                            A504C9A76E29448420575E53 /* AppBootState.swift in Sources *,
-                            A504C9A76E29448420575E54 /* AppBootstrapper.swift in Sources *,
 		2FC3B14FF6B6A0F2CED9A9C7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D3833C1F06FF318AD8AAD61B /* AppBootState.swift in Sources */,
+				251C0D1B7DAF0C7BF481749F /* AppBootstrapper.swift in Sources */,
 				64D87FB32ABDEF2744AAB268 /* AppPaths.swift in Sources */,
 				A504C9A76E29448420575E52 /* AppSession.swift in Sources */,
 				DCD50954F90A217D7A91D856 /* AppStartupComposer.swift in Sources */,
 				601AAAE0FA4B3A381F207342 /* BlawbyAgentApp.swift in Sources */,
+				E428055827EE8D2D2DE9D747 /* CalendarSourceProvider.swift in Sources */,
 				9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */,
 				289661C0209D41B5319B0657 /* Config.swift in Sources */,
 				AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */,
+				440A2F2E62D6DA88CC1854FF /* ContactsSourceProvider.swift in Sources */,
 				5669259E3FB85B9AAB83B428 /* EmlxReader.swift in Sources */,
 				E28372C641824150C40949B0 /* EntityExtractor.swift in Sources */,
 				07EB53C51FE362062D6B79F0 /* EnvLoader.swift in Sources */,
@@ -369,12 +410,15 @@
 				F35B208CDC199CE894928EC4 /* LocalStore.swift in Sources */,
 				E767675D89D955EF433CB79D /* Logger.swift in Sources */,
 				F8EB764AD635AF4AC529E989 /* MailProcessor.swift in Sources */,
+				7C9D8FCFC156C9F9FFD4E674 /* MailSourceProvider.swift in Sources */,
 				F2B127D621F90D6157611987 /* MailWatcher.swift in Sources */,
 				B025B4C8F54811B0EF59D17D /* MenuBarPopoverView.swift in Sources */,
 				DFFC1AC2AA62764E85066948 /* MessagesReader.swift in Sources */,
 				41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */,
 				35107213E4698BF5E5BBB72E /* PreferencesView.swift in Sources */,
+				9D16582B3D94360347857B86 /* SourceCardViews.swift in Sources */,
 				D2F5CA44EA53E5343394DFC2 /* SourceManager.swift in Sources */,
+				E4F92C838CE2F75071BE8A20 /* SourceRepairModel.swift in Sources */,
 				5CC9CA5CFEAE6825FD97365D /* SourcesView.swift in Sources */,
 				B195F2396EB9DA0B8459F1E2 /* SyncCoordinator.swift in Sources */,
 				4413D173B8E7F76D1E4D0A17 /* SyncRuntimeController.swift in Sources */,
@@ -428,7 +472,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -442,7 +486,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				INFOPLIST_FILE = BlawbyAgent/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -488,7 +532,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -508,7 +552,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				INFOPLIST_FILE = BlawbyAgent/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 1.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

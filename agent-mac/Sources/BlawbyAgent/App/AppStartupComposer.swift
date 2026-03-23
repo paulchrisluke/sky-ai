@@ -14,7 +14,8 @@ struct AppStartupContext {
 }
 
 final class AppStartupComposer {
-    func compose() throws -> AppStartupContext {
+    @MainActor
+func compose() throws -> AppStartupContext {
         let baseDir = resolveBlawbyHome()
         try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
 

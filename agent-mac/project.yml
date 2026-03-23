@@ -12,8 +12,8 @@ settings:
     MACOSX_DEPLOYMENT_TARGET: "13.0"
     CODE_SIGN_STYLE: Automatic
     INFOPLIST_FILE: BlawbyAgent/Info.plist
-    MARKETING_VERSION: "0.1"
-    CURRENT_PROJECT_VERSION: "2"
+    MARKETING_VERSION: "1.1"
+    CURRENT_PROJECT_VERSION: "1"
 
 packages:
   GRDB:

@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 
 // MARK: - Source Repair Actions
-enum SourceRepairAction: Identifiable {
+enum SourceRepairAction: Identifiable, Hashable {
     case requestPermission(SourceKind)
     case openSystemSettings(SourceKind)
     case enableAutomation(SourceKind)

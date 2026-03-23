@@ -39,5 +39,3 @@ final class MailProcessor: @unchecked Sendable, MailProcessing {
         return MailProcessingResult(entities: extracted, rawMessages: messages)
     }
 }
-
-extension MailProcessor: MailProcessing {}

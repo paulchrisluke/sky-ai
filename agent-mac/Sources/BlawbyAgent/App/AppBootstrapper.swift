@@ -33,11 +33,11 @@ struct BootstrapContext {
 }
 
 // MARK: - App Bootstrapper
-@MainActor
 final class AppBootstrapper {
     private var cachedContext: BootstrapContext?
     
-    func bootstrap(sourceRegistry: SourceRegistry) async throws -> AppBootState {
+    @MainActor
+func bootstrap(sourceRegistry: SourceRegistry) async throws -> AppBootState {
         // Use cached context if available, otherwise create new one
         let context = try await getCachedContext()
         
@@ -151,7 +151,8 @@ final class AppBootstrapper {
     }
     
     // MARK: - Layer B: Source Discovery
-    private func discoverSources(context: BootstrapContext, registry: SourceRegistry) async -> [DiscoveredSourceCapability] {
+    @MainActor
+private func discoverSources(context: BootstrapContext, registry: SourceRegistry) async -> [DiscoveredSourceCapability] {
         var capabilities: [DiscoveredSourceCapability] = []
         
         // Discover sources in deterministic order using SourceKind.allCases
@@ -165,7 +166,8 @@ final class AppBootstrapper {
     }
     
     // MARK: - Layer D: Resolve Runtime State
-    private func resolveCapabilities(
+    @MainActor
+private func resolveCapabilities(
         discoveredCapabilities: [DiscoveredSourceCapability],
         registry: SourceRegistry
     ) async -> [ResolvedSourceCapability] {
@@ -189,7 +191,8 @@ final class AppBootstrapper {
     }
     
     // MARK: - Layer C: Activate Enabled Sources
-    private func activateEnabledSources(
+    @MainActor
+private func activateEnabledSources(
         context: BootstrapContext,
         capabilities: [DiscoveredSourceCapability],
         registry: SourceRegistry
@@ -238,7 +241,8 @@ final class AppBootstrapper {
     }
     
     // MARK: - Layer E: Compute Boot State
-    private func computeBootState(
+    @MainActor
+private func computeBootState(
         context: BootstrapContext,
         discoveredCapabilities: [DiscoveredSourceCapability],
         resolvedCapabilities: [ResolvedSourceCapability],
@@ -279,7 +283,8 @@ final class AppBootstrapper {
         }
     }
     
-    private func generateDiscoverySourceIssues(capabilities: [DiscoveredSourceCapability], registry: SourceRegistry) async -> [SourceIssue] {
+    @MainActor
+private func generateDiscoverySourceIssues(capabilities: [DiscoveredSourceCapability], registry: SourceRegistry) async -> [SourceIssue] {
         var issues: [SourceIssue] = []
         
         for capability in capabilities {

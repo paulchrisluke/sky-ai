@@ -515,7 +515,7 @@ final class SourceManager: ObservableObject, SourceManaging {
             logger.info("fetched \(batch.count) messages for \(source.sourceName) since \(currentCursor)")
 
             if batch.isEmpty {
-                let finalStatus = (source.totalSynced + totalProcessed >= estimated && estimated > 0) ? .current : .pending
+                let finalStatus = (source.totalSynced + totalProcessed >= estimated && estimated > 0) ? SourceStatus.current : SourceStatus.pending
                 logger.info("batch empty for \(source.sourceName), final status: \(finalStatus)")
                 localStore.updateConnectedSourceSync(
                     id: source.id,
