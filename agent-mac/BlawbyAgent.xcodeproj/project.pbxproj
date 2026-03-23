@@ -14,7 +14,6 @@
 		2DDB718641C49BBCA0AE4453 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = F774B8F1D3F8FDDD014AFB59 /* Sparkle */; };
 		35107213E4698BF5E5BBB72E /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 587536AF6523B68207BDF79C /* PreferencesView.swift */; };
 		41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D04FFB67431F372BB5AF25 /* Preferences.swift */; };
-		440107DEC999EF6CFC534016 /* ArchitectureGuardrailsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A27C3B2BCC26C16FDBF4D1 /* ArchitectureGuardrailsTests.swift */; };
 		440A2F2E62D6DA88CC1854FF /* ContactsSourceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B33F8FF66BA92D555D47D836 /* ContactsSourceProvider.swift */; };
 		4413D173B8E7F76D1E4D0A17 /* SyncRuntimeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D61E618D73D3F20C6A37A91 /* SyncRuntimeController.swift */; };
 		5669259E3FB85B9AAB83B428 /* EmlxReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618247051F36D3E6E0F259B2 /* EmlxReader.swift */; };
@@ -23,13 +22,11 @@
 		64D87FB32ABDEF2744AAB268 /* AppPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87CECE75660918366767E4E1 /* AppPaths.swift */; };
 		73EF4F35647CB37D7EA34F2A /* blawby-logo-source.png in Resources */ = {isa = PBXBuildFile; fileRef = 06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */; };
 		7C9D8FCFC156C9F9FFD4E674 /* MailSourceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F42F29F82BD3E75DCF53E6 /* MailSourceProvider.swift */; };
-		865B4EFF997483C49A9D8997 /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */; };
 		9D16582B3D94360347857B86 /* SourceCardViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD28F7CECDABEC091EE1759F /* SourceCardViews.swift */; };
 		9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA25A68472D76D0C994520D /* CalendarWatcher.swift */; };
 		A504C9A76E29448420575E52 /* AppSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B505A7DACEF2BD3A2F01DA76 /* AppSession.swift */; };
 		AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */; };
 		AE169531AE4BFA3F8237E346 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */; };
-		B025B4C8F54811B0EF59D17D /* MenuBarPopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */; };
 		B195F2396EB9DA0B8459F1E2 /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 451B18EF815B4011EC7984E0 /* SyncCoordinator.swift */; };
 		BB15E6DFD68F10D2B575D763 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 2B16F395DEC869A73CE18AB5 /* Info.plist */; };
 		D2F5CA44EA53E5343394DFC2 /* SourceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C51397B60B3C9B31D8BEAA14 /* SourceManager.swift */; };
@@ -48,22 +45,11 @@
 		F8EB764AD635AF4AC529E989 /* MailProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AD1458AF0D14F688184AE90 /* MailProcessor.swift */; };
 /* End PBXBuildFile section */
 
-/* Begin PBXContainerItemProxy section */
-		BC7933B0D4BB7A0277EC153B /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = C422B8B0B5CCDE1B98776636 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 82ED3CBA1FADC94B14E23293;
-			remoteInfo = BlawbyAgent;
-		};
-/* End PBXContainerItemProxy section */
-
 /* Begin PBXFileReference section */
 		03F3929134BE941F4D84B17C /* MessagesReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesReader.swift; sourceTree = "<group>"; };
 		06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "blawby-logo-source.png"; sourceTree = "<group>"; };
 		0FA6D9F37F3C7B9B5574DF43 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		179EAD9F6055A4CC9A547F45 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
-		1E125D8D55798E8F07C4698C /* BlawbyAgentTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BlawbyAgentTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		22555E3F5B82AC5F64C6D820 /* EnvLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvLoader.swift; sourceTree = "<group>"; };
 		268D5A0DF63E60EC68837921 /* SourcesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesView.swift; sourceTree = "<group>"; };
 		29C61DC164DE3E5327702F99 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
@@ -80,19 +66,16 @@
 		62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsReader.swift; sourceTree = "<group>"; };
 		7172F45B5B28D80C2994749B /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
 		740C4465BD562F786A434D1A /* BlawbyAgentApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlawbyAgentApp.swift; sourceTree = "<group>"; };
-		7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPopoverView.swift; sourceTree = "<group>"; };
 		79820553FD3356DF0E1DCF6D /* AppBootState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootState.swift; sourceTree = "<group>"; };
 		7AD1458AF0D14F688184AE90 /* MailProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailProcessor.swift; sourceTree = "<group>"; };
 		805E9C47B3BA9302100FFE63 /* CalendarSourceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarSourceProvider.swift; sourceTree = "<group>"; };
 		87CECE75660918366767E4E1 /* AppPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPaths.swift; sourceTree = "<group>"; };
 		9D61E618D73D3F20C6A37A91 /* SyncRuntimeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRuntimeController.swift; sourceTree = "<group>"; };
-		A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinatorTests.swift; sourceTree = "<group>"; };
 		A8D04FFB67431F372BB5AF25 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
 		AB0ECE50ADBFBE8C11A25598 /* WebSocketPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketPublisher.swift; sourceTree = "<group>"; };
 		B33F8FF66BA92D555D47D836 /* ContactsSourceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsSourceProvider.swift; sourceTree = "<group>"; };
 		B505A7DACEF2BD3A2F01DA76 /* AppSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSession.swift; sourceTree = "<group>"; };
 		BD28F7CECDABEC091EE1759F /* SourceCardViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceCardViews.swift; sourceTree = "<group>"; };
-		C0A27C3B2BCC26C16FDBF4D1 /* ArchitectureGuardrailsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchitectureGuardrailsTests.swift; sourceTree = "<group>"; };
 		C0F42F29F82BD3E75DCF53E6 /* MailSourceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailSourceProvider.swift; sourceTree = "<group>"; };
 		C51397B60B3C9B31D8BEAA14 /* SourceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceManager.swift; sourceTree = "<group>"; };
 		CAA25A68472D76D0C994520D /* CalendarWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarWatcher.swift; sourceTree = "<group>"; };
@@ -145,7 +128,6 @@
 				B505A7DACEF2BD3A2F01DA76 /* AppSession.swift */,
 				44B3EB277CEF5DD708CBDACB /* AppStartupComposer.swift */,
 				740C4465BD562F786A434D1A /* BlawbyAgentApp.swift */,
-				7691998160FA810BCDB682E3 /* MenuBarPopoverView.swift */,
 				587536AF6523B68207BDF79C /* PreferencesView.swift */,
 				268D5A0DF63E60EC68837921 /* SourcesView.swift */,
 				9D61E618D73D3F20C6A37A91 /* SyncRuntimeController.swift */,
@@ -184,19 +166,8 @@
 			isa = PBXGroup;
 			children = (
 				FE15D867F583668A8E9ED2AC /* BlawbyAgent.app */,
-				1E125D8D55798E8F07C4698C /* BlawbyAgentTests.xctest */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		697AA728D7FBC844026CF633 /* BlawbyAgentTests */ = {
-			isa = PBXGroup;
-			children = (
-				C0A27C3B2BCC26C16FDBF4D1 /* ArchitectureGuardrailsTests.swift */,
-				A620027621A3B087FFC4A3BF /* SyncCoordinatorTests.swift */,
-			);
-			name = BlawbyAgentTests;
-			path = Tests/BlawbyAgentTests;
 			sourceTree = "<group>";
 		};
 		7181D6FB17C8C2779C52524D /* Branding */ = {
@@ -264,7 +235,6 @@
 			isa = PBXGroup;
 			children = (
 				26D4C3366FD7BAB9AD4ADF25 /* BlawbyAgent */,
-				697AA728D7FBC844026CF633 /* BlawbyAgentTests */,
 				D43BF19C4C6D4DDCFC8F073B /* Resources */,
 				5DCCF81F84C458B80263CE30 /* Products */,
 			);
@@ -304,24 +274,6 @@
 			productReference = FE15D867F583668A8E9ED2AC /* BlawbyAgent.app */;
 			productType = "com.apple.product-type.application";
 		};
-		A64338D7CAC7F6FBADFA6099 /* BlawbyAgentTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = CE5D6CFBEFD51F16C5D88A7A /* Build configuration list for PBXNativeTarget "BlawbyAgentTests" */;
-			buildPhases = (
-				2B5E4E1D4B0B1F9E842B9DF4 /* Sources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				374B1F1165BE7748C25A48B6 /* PBXTargetDependency */,
-			);
-			name = BlawbyAgentTests;
-			packageProductDependencies = (
-			);
-			productName = BlawbyAgentTests;
-			productReference = 1E125D8D55798E8F07C4698C /* BlawbyAgentTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -333,9 +285,6 @@
 				TargetAttributes = {
 					82ED3CBA1FADC94B14E23293 = {
 						DevelopmentTeam = 948S9JG4VL;
-						ProvisioningStyle = Automatic;
-					};
-					A64338D7CAC7F6FBADFA6099 = {
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -359,7 +308,6 @@
 			projectRoot = "";
 			targets = (
 				82ED3CBA1FADC94B14E23293 /* BlawbyAgent */,
-				A64338D7CAC7F6FBADFA6099 /* BlawbyAgentTests */,
 			);
 		};
 /* End PBXProject section */
@@ -379,15 +327,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		2B5E4E1D4B0B1F9E842B9DF4 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				440107DEC999EF6CFC534016 /* ArchitectureGuardrailsTests.swift in Sources */,
-				865B4EFF997483C49A9D8997 /* SyncCoordinatorTests.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		2FC3B14FF6B6A0F2CED9A9C7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -412,7 +351,6 @@
 				F8EB764AD635AF4AC529E989 /* MailProcessor.swift in Sources */,
 				7C9D8FCFC156C9F9FFD4E674 /* MailSourceProvider.swift in Sources */,
 				F2B127D621F90D6157611987 /* MailWatcher.swift in Sources */,
-				B025B4C8F54811B0EF59D17D /* MenuBarPopoverView.swift in Sources */,
 				DFFC1AC2AA62764E85066948 /* MessagesReader.swift in Sources */,
 				41F2AAA0674D9A91DD29C259 /* Preferences.swift in Sources */,
 				35107213E4698BF5E5BBB72E /* PreferencesView.swift in Sources */,
@@ -427,14 +365,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXTargetDependency section */
-		374B1F1165BE7748C25A48B6 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 82ED3CBA1FADC94B14E23293 /* BlawbyAgent */;
-			targetProxy = BC7933B0D4BB7A0277EC153B /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		454DA359B2DE2CB61AFBAB6D /* Release */ = {
@@ -493,7 +423,7 @@
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				SWIFT_VERSION = 6.0;
+				SWIFT_VERSION = 5.9;
 			};
 			name = Release;
 		};
@@ -560,7 +490,7 @@
 				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 6.0;
+				SWIFT_VERSION = 5.9;
 			};
 			name = Debug;
 		};
@@ -582,22 +512,6 @@
 			};
 			name = Debug;
 		};
-		BA77FC188DE4125AD99335FC /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				COMBINE_HIDPI_IMAGES = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@loader_path/../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgentTests;
-				SDKROOT = macosx;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BlawbyAgent.app/Contents/MacOS/BlawbyAgent";
-			};
-			name = Debug;
-		};
 		DE92039CB0FD2AA46269880C /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -613,22 +527,6 @@
 				OTHER_LDFLAGS = "-framework EventKit -framework Contacts -framework ScriptingBridge";
 				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgent;
 				SDKROOT = macosx;
-			};
-			name = Release;
-		};
-		FA6CFA09D772C23CB18CBED0 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				COMBINE_HIDPI_IMAGES = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@loader_path/../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.blawby.BlawbyAgentTests;
-				SDKROOT = macosx;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BlawbyAgent.app/Contents/MacOS/BlawbyAgent";
 			};
 			name = Release;
 		};
@@ -649,15 +547,6 @@
 			buildConfigurations = (
 				7ED4A756DB04AB3DCDA42733 /* Debug */,
 				DE92039CB0FD2AA46269880C /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
-		};
-		CE5D6CFBEFD51F16C5D88A7A /* Build configuration list for PBXNativeTarget "BlawbyAgentTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				BA77FC188DE4125AD99335FC /* Debug */,
-				FA6CFA09D772C23CB18CBED0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

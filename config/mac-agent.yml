@@ -15,8 +15,8 @@ sparkle:
 
 # Build Configuration
 build:
+  swift_version: "5.9"
   deployment_target: "13.0"
-  swift_version: "6.0"
   xcode_version: "16.0"
   
 # Code Signing Configuration
@@ -37,3 +37,19 @@ release:
   # These will be overridden by CI environment variables
   code_sign_identity: null
   development_team: null
+
+# Package Dependencies
+packages:
+  GRDB:
+    url: "https://github.com/groue/GRDB.swift.git"
+    from: "6.0.0"
+  Sparkle:
+    url: "https://github.com/sparkle-project/Sparkle"
+    from: "2.6.0"
+
+# Target Dependencies
+target_dependencies:
+  - package: "GRDB"
+    product: "GRDB"
+  - package: "Sparkle"
+    product: "Sparkle"

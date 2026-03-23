@@ -90,171 +90,97 @@ private struct MenuBarRootView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        switch session.bootState {
-        case .launching:
-            ProgressView("Starting…")
-                .padding()
-                .frame(width: 320)
-                
-        case .setupRequired(_, _, _):
-            VStack(spacing: 8) {
+        VStack(spacing: 0) {
+            // Title
+            HStack {
                 Image(systemName: "bolt.horizontal.circle.fill")
-                    .font(.title2)
-                    .foregroundColor(.blue)
-                
-                Text("Setup Required")
+                    .foregroundColor(.primary)
+                Text("Blawby")
                     .font(.headline)
-                
-                Text("Connect a source to get started")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                
-                Divider()
-                
-                Button("Open Dashboard") {
+                Spacer()
+            }
+            .padding()
+            
+            Divider()
+            
+            // Source toggles
+            VStack(spacing: 0) {
+                ForEach([SourceKind.calendar, SourceKind.mail, SourceKind.contacts], id: \.self) { kind in
+                    SourceToggleRow(
+                        kind: kind,
+                        isEnabled: session.isEnabled(kind),
+                        canToggle: session.canToggle(kind),
+                        onToggle: { enabled in
+                            Task {
+                                await session.setEnabled(kind, enabled)
+                            }
+                        }
+                    )
+                }
+            }
+            
+            Divider()
+            
+            // Action rows
+            VStack(spacing: 0) {
+                ActionRow(title: "Dashboard") {
                     activateAndOpenWindow("main-dashboard", openWindow: openWindow)
                 }
-                .buttonStyle(.borderedProminent)
                 
-                Button("Preferences") {
+                ActionRow(title: "Preferences") {
                     activateAndOpenWindow("preferences", openWindow: openWindow)
                 }
-                .buttonStyle(.bordered)
-            }
-            .padding()
-            .frame(width: 320)
-            
-        case .fatal(_):
-            VStack(spacing: 8) {
-                Image(systemName: "bolt.horizontal.circle.fill")
-                    .font(.title2)
-                    .foregroundColor(.red)
                 
-                Text("Startup Failed")
-                    .font(.headline)
-                
-                Text("Blawby encountered an error")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                
-                Divider()
-                
-                Button("Preferences") {
-                    activateAndOpenWindow("preferences", openWindow: openWindow)
-                }
-                .buttonStyle(.borderedProminent)
-                
-                Button("Quit") {
+                ActionRow(title: "Quit") {
                     NSApplication.shared.terminate(nil)
                 }
-                .buttonStyle(.bordered)
             }
-            .padding()
-            .frame(width: 320)
-            
-        case .ready(let context, _, let activeSources):
-            ReadyMenuBarView(
-                context: context,
-                activeSources: activeSources,
-                session: session,
-                onOpenDashboard: { activateAndOpenWindow("main-dashboard", openWindow: openWindow) },
-                onOpenPreferences: { activateAndOpenWindow("preferences", openWindow: openWindow) }
-            )
-            .frame(width: 320)
-            
-        case .degraded(let context, _, let activeSources, let issues):
-            DegradedMenuBarView(
-                context: context,
-                activeSources: activeSources,
-                issues: issues,
-                session: session,
-                onOpenDashboard: { activateAndOpenWindow("main-dashboard", openWindow: openWindow) },
-                onOpenPreferences: { activateAndOpenWindow("preferences", openWindow: openWindow) }
-            )
-            .frame(width: 320)
         }
+        .frame(width: 280)
     }
 }
 
-// MARK: - Ready Menu Bar View
-private struct ReadyMenuBarView: View {
-    let context: BootstrapContext
-    let activeSources: [SourceKind: ActiveSource]
-    @ObservedObject var session: AppSession
-    let onOpenDashboard: () -> Void
-    let onOpenPreferences: () -> Void
+private struct SourceToggleRow: View {
+    let kind: SourceKind
+    let isEnabled: Bool
+    let canToggle: Bool
+    let onToggle: (Bool) -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bolt.horizontal.circle.fill")
-                .font(.title2)
-                .foregroundColor(.green)
+        HStack {
+            Text(kind.displayName)
+                .font(.body)
             
-            Text("Blawby Ready")
-                .font(.headline)
+            Spacer()
             
-            Text("Sources connected")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            Divider()
-            
-            VStack(spacing: 8) {
-                Button("Open Dashboard") {
-                    onOpenDashboard()
-                }
-                .buttonStyle(.borderedProminent)
-                
-                Button("Preferences") {
-                    onOpenPreferences()
-                }
-                .buttonStyle(.bordered)
-            }
+            Toggle("", isOn: Binding(
+                get: { isEnabled },
+                set: { onToggle($0) }
+            ))
+            .toggleStyle(.switch)
+            .disabled(!canToggle)
         }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
     }
 }
 
-// MARK: - Degraded Menu Bar View
-private struct DegradedMenuBarView: View {
-    let context: BootstrapContext
-    let activeSources: [SourceKind: ActiveSource]
-    let issues: [SourceIssue]
-    @ObservedObject var session: AppSession
-    let onOpenDashboard: () -> Void
-    let onOpenPreferences: () -> Void
+private struct ActionRow: View {
+    let title: String
+    let action: () -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bolt.horizontal.circle.fill")
-                .font(.title2)
-                .foregroundColor(.orange)
-            
-            Text("Attention Needed")
-                .font(.headline)
-            
-            Text("Some sources need attention")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            
-            Divider()
-            
-            VStack(spacing: 8) {
-                Button("Open Dashboard") {
-                    onOpenDashboard()
-                }
-                .buttonStyle(.borderedProminent)
-                
-                Button("Preferences") {
-                    onOpenPreferences()
-                }
-                .buttonStyle(.bordered)
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                Spacer()
             }
         }
-        .padding()
-        .frame(width: 320)
+        .buttonStyle(.plain)
+        .padding(.horizontal)
+        .padding(.vertical, 8)
     }
 }
 

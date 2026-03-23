@@ -155,12 +155,14 @@ function generateXcodeGenConfig() {
         CURRENT_PROJECT_VERSION: macAgentConfig.app.current_project_version
       }
     },
+    packages: macAgentConfig.packages,
     targets: {
       BlawbyAgent: {
         type: "application",
         platform: "macOS",
         sources: [
-          { path: "Sources/BlawbyAgent" }
+          { path: "Sources/BlawbyAgent" },
+          { path: "Resources", buildPhase: "resources" }
         ],
         info: {
           path: "BlawbyAgent/Info.plist",
@@ -178,10 +180,7 @@ function generateXcodeGenConfig() {
             SUEnableAutomaticChecks: macAgentConfig.sparkle.enable_automatic_checks
           }
         },
-        dependencies: [
-          { package: "GRDB", product: "GRDB" },
-          { package: "Sparkle", product: "Sparkle" }
-        ],
+        dependencies: macAgentConfig.target_dependencies,
         settings: {
           base: {
             DEVELOPMENT_TEAM: macAgentConfig.signing.development_team,

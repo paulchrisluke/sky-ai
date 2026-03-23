@@ -71,6 +71,31 @@ final class AppSession: ObservableObject {
         await refreshBootState()
     }
 
+    // MARK: - Source Toggle Helpers
+    func isEnabled(_ kind: SourceKind) -> Bool {
+        return sourceRegistry.isActive(kind)
+    }
+    
+    func canToggle(_ kind: SourceKind) -> Bool {
+        // Can toggle if we have a context and the source is available
+        guard currentContext != nil else { return false }
+        
+        // Check if we have the provider and it's available
+        guard sourceRegistry.providers[kind] != nil else { return false }
+        
+        // For now, allow toggling if we have a provider
+        // More sophisticated logic can be added based on authorization status
+        return true
+    }
+    
+    func setEnabled(_ kind: SourceKind, _ enabled: Bool) async {
+        if enabled {
+            await enableSource(kind)
+        } else {
+            await disableSource(kind)
+        }
+    }
+    
     // MARK: - Source Activation Commands
     func enableSource(_ kind: SourceKind) async {
         // Persist desired state first - user wants this source enabled
