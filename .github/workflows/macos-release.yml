@@ -96,6 +96,18 @@ jobs:
           cd agent-mac
           xcodegen generate
 
+      - name: Build app (verification)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          cd agent-mac
+          xcodebuild \
+            -project BlawbyAgent.xcodeproj \
+            -scheme BlawbyAgent \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            build
+
       - name: Import Apple signing certificate
         if: steps.gate.outputs.skip != 'true'
         run: |

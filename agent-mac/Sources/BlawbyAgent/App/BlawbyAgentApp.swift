@@ -254,28 +254,14 @@ private struct OnboardingDashboardView: View {
                 .padding(.top, 32)
                 
                 // Source cards with repair actions
-                LazyVStack(spacing: 16) {
+                LazyVStack(spacing: 12) {
                     ForEach(capabilities) { capability in
                         let sourceIssues = issues.filter { $0.kind == capability.kind }
-                        EnhancedSourceCardView(
+                        ExpandableSourceRow(
                             capability: capability,
                             issues: sourceIssues,
                             session: session
                         )
-                    }
-                }
-                
-                // Issues section (if any)
-                if !issues.isEmpty {
-                    VStack(spacing: 16) {
-                        Text("Some issues need attention")
-                            .font(.headline)
-                        
-                        LazyVStack(spacing: 12) {
-                            ForEach(issues) { issue in
-                                IssueCardView(issue: issue)
-                            }
-                        }
                     }
                 }
             }
@@ -283,51 +269,6 @@ private struct OnboardingDashboardView: View {
         }
     }
 }
-
-// MARK: - Issue Card View
-private struct IssueCardView: View {
-    let issue: SourceIssue
-    
-    var body: some View {
-        HStack {
-            Image(systemName: severityIcon(for: issue.severity))
-                .foregroundColor(severityColor(for: issue.severity))
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(issue.title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                Text(issue.description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Spacer()
-        }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
-    }
-    
-    private func severityIcon(for severity: IssueSeverity) -> String {
-        switch severity {
-        case .error: return "xmark.circle.fill"
-        case .warning: return "exclamationmark.triangle.fill"
-        case .info: return "info.circle.fill"
-        }
-    }
-    
-    private func severityColor(for severity: IssueSeverity) -> Color {
-        switch severity {
-        case .error: return .red
-        case .warning: return .orange
-        case .info: return .blue
-        }
-    }
-}
-
-
 
 // MARK: - Sparkle Update Controller
 @MainActor
@@ -370,10 +311,10 @@ private struct ReadyDashboardView: View {
                 .padding(.top, 32)
                 
                 // Active sources
-                LazyVStack(spacing: 16) {
+                LazyVStack(spacing: 12) {
                     ForEach(Array(activeSources.keys).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
                         if let capability = capabilities.first(where: { $0.kind == kind }) {
-                            EnhancedSourceCardView(
+                            ExpandableSourceRow(
                                 capability: capability,
                                 issues: [],
                                 session: session
@@ -410,11 +351,11 @@ private struct DegradedDashboardView: View {
                 .padding(.top, 32)
                 
                 // Active sources with issues
-                LazyVStack(spacing: 16) {
+                LazyVStack(spacing: 12) {
                     ForEach(Array(activeSources.keys).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
                         let sourceIssues = issues.filter { $0.kind == kind }
                         if let capability = capabilities.first(where: { $0.kind == kind }) {
-                            EnhancedSourceCardView(
+                            ExpandableSourceRow(
                                 capability: capability,
                                 issues: sourceIssues,
                                 session: session
@@ -423,19 +364,6 @@ private struct DegradedDashboardView: View {
                     }
                 }
                 
-                // Issues section
-                if !issues.isEmpty {
-                    VStack(spacing: 16) {
-                        Text("Additional Issues")
-                            .font(.headline)
-                        
-                        LazyVStack(spacing: 12) {
-                            ForEach(issues) { issue in
-                                IssueCardView(issue: issue)
-                            }
-                        }
-                    }
-                }
             }
             .padding(.horizontal, 32)
         }

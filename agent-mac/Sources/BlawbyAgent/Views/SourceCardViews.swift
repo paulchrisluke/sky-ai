@@ -79,23 +79,25 @@ private struct RepairActionsView: View {
     }
 }
 
-// MARK: - Enhanced Source Card View with Repair Actions
-struct EnhancedSourceCardView: View {
+// MARK: - Expandable Source Row with Inline Details
+struct ExpandableSourceRow: View {
     let capability: ResolvedSourceCapability
     let issues: [SourceIssue]
     @ObservedObject var session: AppSession
+    @State private var isExpanded = false
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Source status and primary actions
+        VStack(spacing: 0) {
+            // Compact row (always visible)
             HStack {
                 Image(systemName: capability.kind.systemImage)
                     .font(.title2)
                     .foregroundColor(statusColor)
                 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(capability.displayName)
-                        .font(.headline)
+                        .font(.body)
+                        .fontWeight(.medium)
                     
                     Text(statusText)
                         .font(.caption)
@@ -104,60 +106,100 @@ struct EnhancedSourceCardView: View {
                 
                 Spacer()
                 
-                // Primary actions based on capability state only (no hard-coded repair)
-                if capability.runtimeStatus == .active {
-                    Button("Disable") {
-                        Task {
-                            await session.disableSource(capability.kind)
+                // Expansion indicator
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isExpanded.toggle()
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            
+            // Expanded details (inline)
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    Divider()
+                    
+                    // Status details
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Status")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(statusText)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        
+                        // Authorization status
+                        if capability.authorization != .notRequired {
+                            HStack {
+                                Image(systemName: authStatusIcon)
+                                    .font(.caption)
+                                    .foregroundColor(authStatusColor)
+                                Text(authStatusText)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
+                        }
+                        
+                        // Availability status
+                        if case .unavailable(let reason) = capability.availability {
+                            HStack {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                Text("Unavailable: \(reason)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
                         }
                     }
-                    .buttonStyle(.bordered)
-                } else {
-                    // Enable button - repair actions handled by RepairActionsView
-                    Button("Enable") {
-                        Task {
-                            await session.enableSource(capability.kind)
+                    
+                    // Actions
+                    HStack(spacing: 12) {
+                        if capability.runtimeStatus == .active {
+                            Button("Disable") {
+                                Task {
+                                    await session.disableSource(capability.kind)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            Button("Enable") {
+                                Task {
+                                    await session.enableSource(capability.kind)
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!canEnable)
                         }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canEnable)
+                    
+                    // Repair actions
+                    if !issues.isEmpty {
+                        Divider()
+                        RepairActionsView(issues: issues, session: session)
+                    }
                 }
-            }
-            
-            // Authorization status
-            if capability.authorization != .notRequired {
-                HStack {
-                    Image(systemName: authStatusIcon)
-                        .foregroundColor(authStatusColor)
-                    Text(authStatusText)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            // Availability status
-            if case .unavailable(let reason) = capability.availability {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundColor(.orange)
-                    Text("Unavailable: \(reason)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            // Repair actions from data model
-            if !issues.isEmpty {
-                Divider()
-                RepairActionsView(issues: issues, session: session)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
         }
-        .padding()
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
     }
     
-    // ... existing computed properties ...
+    // Computed properties (same as before)
     private var statusColor: Color {
         switch capability.runtimeStatus {
         case .active: return .green
