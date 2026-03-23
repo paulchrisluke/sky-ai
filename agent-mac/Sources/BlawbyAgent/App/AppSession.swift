@@ -211,7 +211,7 @@ final class AppSession: ObservableObject {
         }
     }
     
-    private var currentContext: BootstrapContext? {
+    var currentContext: BootstrapContext? {
         switch bootState {
         case .setupRequired(let context, _, _),
              .ready(let context, _, _),

@@ -24,7 +24,13 @@ struct BlawbyAgentApp: App {
         .menuBarExtraStyle(.window)
         
         Window("Blawby Dashboard", id: "main-dashboard") {
-            DashboardRootView(session: session)
+            DashboardRootView(
+                context: nil,
+                capabilities: [],
+                activeSources: [:],
+                issues: [],
+                session: session
+            )
                 .frame(minWidth: 960, minHeight: 620)
         }
         
@@ -186,48 +192,32 @@ private struct ActionRow: View {
 
 
 private struct DashboardRootView: View {
+    let context: BootstrapContext?
+    let capabilities: [ResolvedSourceCapability]
+    let activeSources: [SourceKind: ActiveSource]
+    let issues: [SourceIssue]
     @ObservedObject var session: AppSession
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        switch session.bootState {
-        case .launching:
-            ProgressView("Starting Blawby…")
-                .padding()
-                .frame(minWidth: 960, minHeight: 620)
-                
-        case .setupRequired(let context, let capabilities, let issues):
-            OnboardingDashboardView(
-                context: context,
-                capabilities: capabilities,
-                issues: issues,
-                session: session
-            )
-            .frame(minWidth: 960, minHeight: 620)
-            
-        case .fatal(let fatalIssue):
-            FatalErrorView(fatalIssue: fatalIssue.localizedDescription)
-            .frame(minWidth: 960, minHeight: 620)
-            
-        case .ready(let context, let capabilities, let activeSources):
-            ReadyDashboardView(
-                context: context,
-                capabilities: capabilities,
-                activeSources: activeSources,
-                session: session
-            )
-            .frame(minWidth: 960, minHeight: 620)
-            
-        case .degraded(let context, let capabilities, let activeSources, let issues):
-            DegradedDashboardView(
-                context: context,
-                capabilities: capabilities,
-                activeSources: activeSources,
-                issues: issues,
-                session: session
-            )
-            .frame(minWidth: 960, minHeight: 620)
+        NavigationSplitView {
+            List([
+                ("Overview", "overview", "chart.bar"),
+                ("Mail", "mail", "envelope"),
+                ("Calendar", "calendar", "calendar"),
+                ("Contacts", "contacts", "person.2"),
+                ("Activity", "activity", "clock")
+            ], id: \.1) { item in
+                Label(item.0, systemImage: item.2)
+                    .tag(item.1)
+            }
+            .navigationTitle("Blawby")
+            .listStyle(.sidebar)
+        } detail: {
+            Text("Select a section from the sidebar")
+                .foregroundColor(.secondary)
         }
+        .frame(minWidth: 960, minHeight: 620)
     }
 }
 
@@ -285,110 +275,5 @@ final class SparkleUpdateController: ObservableObject {
     
     func checkForUpdates() {
         updaterController.checkForUpdates(nil)
-    }
-}
-
-// MARK: - Dashboard Views
-private struct ReadyDashboardView: View {
-    let context: BootstrapContext
-    let capabilities: [ResolvedSourceCapability]
-    let activeSources: [SourceKind: ActiveSource]
-    @ObservedObject var session: AppSession
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                // Primary headline
-                VStack(spacing: 8) {
-                    Text("Blawby is ready")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                    Text("Your sources are active and syncing")
-                        .font(.title3)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.top, 32)
-                
-                // Active sources
-                LazyVStack(spacing: 12) {
-                    ForEach(Array(activeSources.keys).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
-                        if let capability = capabilities.first(where: { $0.kind == kind }) {
-                            ExpandableSourceRow(
-                                capability: capability,
-                                issues: [],
-                                session: session
-                            )
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, 32)
-        }
-    }
-}
-
-private struct DegradedDashboardView: View {
-    let context: BootstrapContext
-    let capabilities: [ResolvedSourceCapability]
-    let activeSources: [SourceKind: ActiveSource]
-    let issues: [SourceIssue]
-    @ObservedObject var session: AppSession
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                // Primary headline
-                VStack(spacing: 8) {
-                    Text("Some sources need attention")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                    Text("Fix the issues below to restore full functionality")
-                        .font(.title3)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.top, 32)
-                
-                // Active sources with issues
-                LazyVStack(spacing: 12) {
-                    ForEach(Array(activeSources.keys).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { kind in
-                        let sourceIssues = issues.filter { $0.kind == kind }
-                        if let capability = capabilities.first(where: { $0.kind == kind }) {
-                            ExpandableSourceRow(
-                                capability: capability,
-                                issues: sourceIssues,
-                                session: session
-                            )
-                        }
-                    }
-                }
-                
-            }
-            .padding(.horizontal, 32)
-        }
-    }
-}
-
-private struct FatalErrorView: View {
-    let fatalIssue: String
-    
-    var body: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "exclamationmark.octagon")
-                .font(.system(size: 64))
-                .foregroundColor(.red)
-            
-            Text("Blawby failed to start")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-            
-            Text(fatalIssue)
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding(32)
-        .frame(maxWidth: 400)
     }
 }

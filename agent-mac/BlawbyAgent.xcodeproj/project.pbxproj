@@ -23,6 +23,8 @@
 		73EF4F35647CB37D7EA34F2A /* blawby-logo-source.png in Resources */ = {isa = PBXBuildFile; fileRef = 06E281FDFD0FE6314E31C12E /* blawby-logo-source.png */; };
 		7C9D8FCFC156C9F9FFD4E674 /* MailSourceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F42F29F82BD3E75DCF53E6 /* MailSourceProvider.swift */; };
 		9D16582B3D94360347857B86 /* SourceCardViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD28F7CECDABEC091EE1759F /* SourceCardViews.swift */; };
+		9D16582FA1B2C3D4E5F678901234567 /* DashboardNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB1B2C3D4E5F678901234567 /* DashboardNavigation.swift */; };
+		FA2B3C4D5E6F789012345678 /* DashboardSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC2B3C4D5E6F789012345678 /* DashboardSplitView.swift */; };
 		9DE87BC7ECD1292E88CC3B00 /* CalendarWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA25A68472D76D0C994520D /* CalendarWatcher.swift */; };
 		A504C9A76E29448420575E52 /* AppSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B505A7DACEF2BD3A2F01DA76 /* AppSession.swift */; };
 		AC9DBD2D9146A7C6FFE311CC /* ContactsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62406897B2CEE4BCB19A3B46 /* ContactsReader.swift */; };
