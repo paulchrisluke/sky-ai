@@ -81,6 +81,10 @@ struct BlawbyAgentApp: App {
                 .frame(minWidth: 760, minHeight: 440)
         }
         
+        Settings {
+            PreferencesView(session: session)
+        }
+        
         .commands {
             BlawbyCommands(session: session, updates: updates)
         }
