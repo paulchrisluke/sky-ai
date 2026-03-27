@@ -28,7 +28,7 @@ class FakeStatement {
   }
 
   async all<T>(): Promise<{ results: T[] }> {
-    return this.db.all<T>(this.sql, this.args);
+    return this.db.all<T>();
   }
 }
 

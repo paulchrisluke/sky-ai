@@ -1,3 +1,5 @@
+import { D1Database } from './pipelineEvents';
+
 export type ProviderHealthState = {
   provider: string;
   status: 'healthy' | 'disabled';

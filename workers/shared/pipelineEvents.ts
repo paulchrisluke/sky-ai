@@ -89,10 +89,13 @@ export interface D1Database {
 export interface D1PreparedStatement {
   bind(...values: any[]): D1Statement;
   run(): Promise<D1Result>;
+  first<T = any>(): Promise<T | undefined>;
 }
 
 export interface D1Statement {
   run(): Promise<D1Result>;
+  first<T = any>(): Promise<T | undefined>;
+  all<T = any>(): Promise<{ results: T[] }>;
 }
 
 export interface D1Result {
@@ -102,6 +105,111 @@ export interface D1Result {
     changes?: number;
     last_row_id?: number;
   };
+}
+
+export interface QueueBinding {
+  send(message: any): Promise<void>;
+}
+
+// Cloudflare Worker types
+export interface VectorizeIndex {
+  query(vector: number[], options?: { topK?: number; namespace?: string }): Promise<VectorizeQueryResult>;
+  insert(vectors: VectorizeVector[]): Promise<VectorizeInsertResult>;
+  upsert(vectors: VectorizeVector[]): Promise<VectorizeInsertResult>;
+  delete(ids: string[]): Promise<VectorizeDeleteResult>;
+  describe(): Promise<VectorizeIndexMetadata>;
+}
+
+export interface VectorizeQueryResult {
+  matches: VectorizeMatch[];
+  count: number;
+}
+
+export interface VectorizeMatch {
+  id: string;
+  score: number;
+  metadata?: Record<string, any>;
+  namespace?: string;
+}
+
+export interface VectorizeVector {
+  id: string;
+  values: number[];
+  metadata?: Record<string, any>;
+  namespace?: string;
+}
+
+export interface VectorizeInsertResult {
+  ids: string[];
+  count: number;
+}
+
+export interface VectorizeDeleteResult {
+  deletedCount: number;
+}
+
+export interface VectorizeIndexMetadata {
+  name: string;
+  dimension: number;
+  metric: 'cosine' | 'euclidean' | 'dotproduct';
+  description?: string;
+}
+
+export interface DurableObjectNamespace<T> {
+  get(id: string | DurableObjectId): DurableObjectStub<T>;
+  newUniqueId(): DurableObjectId;
+  idFromName(name: string): DurableObjectId;
+  idFromString(idString: string): DurableObjectId;
+  getByName(name: string): DurableObjectStub<T> | undefined;
+  jurisdiction?: string;
+}
+
+export interface DurableObjectId {
+  toString(): string;
+  equals(other: DurableObjectId): boolean;
+}
+
+export interface DurableObjectStub<T> {
+  fetch(request: Request): Promise<Response>;
+}
+
+export interface DurableObjectState {
+  id: string;
+  storage: DurableObjectStorage;
+  waitUntil(promise: Promise<any>): void;
+  blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
+}
+
+export interface DurableObjectStorage {
+  get<T>(key: string): Promise<T | undefined>;
+  put<T>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  list<T>(options?: { prefix?: string; limit?: number }): Promise<{ keys: { name: string }[]; list: { key: string; value: T }[] }>;
+  deleteAll(): Promise<void>;
+  setAlarm(scheduledTime: number | Date, request: Request): Promise<void>;
+  getAlarm(): Promise<Request | null>;
+  deleteAlarm(): Promise<void>;
+}
+
+export class WebSocketPair {
+  0: WebSocket;
+  1: WebSocket;
+  constructor() {
+    // This would be implemented by the runtime
+    this[0] = null as any;
+    this[1] = null as any;
+  }
+}
+
+// Extend global ResponseInit interface
+declare global {
+  interface ResponseInit {
+    webSocket?: WebSocket | null;
+  }
+  
+  interface WebSocket {
+    accept(): void;
+  }
 }
 
 // Generate request ID with crypto-safe randomness

@@ -113,9 +113,12 @@ function sanitizeTrackedUrl(rawUrl: string): string {
         return sanitizeTrackedUrl(target);
       }
     }
-    const kept = u.searchParams
-      .keys()
-      .filter((k) => !/^utm_/i.test(k) && !/^(gclid|fbclid|mc_eid|mc_cid|euid|trk|tracking|campaign|c)$/i.test(k));
+    const kept: string[] = [];
+    u.searchParams.forEach((value, key) => {
+      if (!/^utm_/i.test(key) && !/^(gclid|fbclid|mc_eid|mc_cid|euid|trk|tracking|campaign|c)$/i.test(key)) {
+        kept.push(key);
+      }
+    });
     const clean = new URL(`${u.protocol}//${u.host}${u.pathname}`);
     for (const key of kept) {
       const values = u.searchParams.getAll(key);

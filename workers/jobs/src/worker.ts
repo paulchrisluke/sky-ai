@@ -929,7 +929,7 @@ async function processSingleEmbeddingJob(
       embeddings.map((values, index) => ({
         id: validRows[index]?.vector_id || `${sourceRecordId}:${index}`,
         values,
-        metadata: parseJsonObject(validRows[index]?.metadata_json)
+        metadata: parseJsonObject(validRows[index]?.metadata_json) as Record<string, VectorizeVectorMetadata>
       }))
     );
 
@@ -1420,9 +1420,8 @@ function sanitizeTrackedUrl(rawUrl: string): string {
         return sanitizeTrackedUrl(target);
       }
     }
-    const kept = u.searchParams
-      .keys()
-      .filter((k) => !/^utm_/i.test(k) && !/^(gclid|fbclid|mc_eid|mc_cid|euid|trk|tracking|campaign|c)$/i.test(k));
+    const kept = Array.from(u.searchParams.keys())
+      .filter((k: string) => !/^utm_/i.test(k) && !/^(gclid|fbclid|mc_eid|mc_cid|euid|trk|tracking|campaign|c)$/i.test(k));
     const clean = new URL(`${u.protocol}//${u.host}${u.pathname}`);
     for (const key of kept) {
       const values = u.searchParams.getAll(key);

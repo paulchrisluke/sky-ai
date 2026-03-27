@@ -1,5 +1,7 @@
 import { chunkText, cleanEmailBody } from './textUtils';
 
+import { D1Database, QueueBinding } from './pipelineEvents';
+
 export type JsonRecord = Record<string, unknown>;
 
 export type IngestCoreEnv = {
@@ -709,7 +711,7 @@ function decodeMimeHeaderWords(value: string): string {
         return new TextDecoder(charset).decode(bytes);
       }
       const qp = encodedText.replace(/_/g, ' ').replace(/=([0-9A-Fa-f]{2})/g, (_m: string, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
-      return new TextDecoder(charset).decode(Uint8Array.from(qp, (char) => char.charCodeAt(0)));
+      return new TextDecoder(charset).decode(Uint8Array.from(qp, (char: string) => char.charCodeAt(0)));
     } catch {
       return encodedText;
     }

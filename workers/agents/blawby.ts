@@ -1,5 +1,24 @@
 import { Agent, callable } from 'agents';
 import { ingestCalendarEventsCore, ingestMacMessagesCore, ingestMessageChunksCore, type JsonRecord } from '../shared/ingestCore';
+import type { D1Database, D1Statement } from '../shared/pipelineEvents';
+
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      SKY_DB: D1Database;
+      WORKER_API_KEY?: string;
+      OPENAI_API_KEY?: string;
+      CF_AIG_AUTH_TOKEN?: string;
+      AIG_ACCOUNT_ID?: string;
+      AIG_GATEWAY_ID?: string;
+      OPENAI_MODEL?: string;
+      AI?: {
+        run(model: string, input: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
+      };
+      WORKERS_AI_CHAT_MODEL?: string;
+    }
+  }
+}
 
 type BlawbyEnv = Cloudflare.Env & {
   SKY_DB: D1Database;
@@ -31,6 +50,8 @@ type GatewayChatResponse = {
 };
 
 export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
+  env: BlawbyEnv = {} as BlawbyEnv;
+
   initialState: BlawbyAgentState = {
     immediateContext: '',
     shortTermMemory: '',
@@ -208,7 +229,13 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
     console.log(`[blawby] mac-mini disconnected: ${code} ${reason}`);
   }
 
-  async onError(_connection: any, error: unknown): Promise<void> {
+  async onError(connection: any, error: unknown): Promise<void>;
+  async onError(error: unknown): Promise<void>;
+  async onError(connectionOrError: any, error?: unknown): Promise<void> {
+    if (error === undefined) {
+      error = connectionOrError;
+      connectionOrError = null;
+    }
     const message = error instanceof Error ? error.message : String(error);
     console.log(`[blawby] mac-mini socket error: ${message}`);
   }
@@ -216,7 +243,7 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
   async skillImmediateContext(): Promise<void> {
     console.log('[blawby] skill_immediate_context started');
 
-    const calendarResult = await this.env.SKY_DB
+    const calendarResult = await (this.env.SKY_DB
       .prepare(
         `SELECT start_at, title
          FROM calendar_events
@@ -224,19 +251,30 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
            AND datetime(start_at) < datetime(CURRENT_TIMESTAMP, '+4 hours')
          ORDER BY datetime(start_at) ASC
          LIMIT 10`
-      )
+      ) as unknown as D1Statement)
       .all<{ start_at: string; title: string | null }>();
 
-    const urgentEntityResult = await this.env.SKY_DB
+    const urgentEntityResult = await (this.env.SKY_DB
       .prepare(
-        `SELECT counterparty_name, entity_type, action_description
+        `SELECT counterparty_name, entity_type, action_description, created_at
          FROM email_entities
          WHERE action_required = 1
            AND datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-2 hours')
          ORDER BY datetime(created_at) DESC
          LIMIT 10`
-      )
-      .all<{ counterparty_name: string | null; entity_type: string; action_description: string | null }>();
+      ) as unknown as D1Statement)
+      .all<{ counterparty_name: string; entity_type: string; action_description: string | null; created_at: string }>();
+
+    const entityResult = await (this.env.SKY_DB
+      .prepare(
+        `SELECT counterparty_name, entity_type, action_description, created_at
+         FROM email_entities
+         WHERE workspace_id = ?
+           AND account_id = ?
+         ORDER BY datetime(created_at) DESC
+         LIMIT 100`
+      ) as unknown as D1Statement)
+      .all<{ counterparty_name: string; entity_type: string; action_description: string | null; created_at: string }>();
 
     const calendarRows = calendarResult.results || [];
     const urgentRows = urgentEntityResult.results || [];
@@ -263,17 +301,28 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
   async skillShortTermMemory(): Promise<void> {
     console.log('[blawby] skill_short_term_memory started');
 
-    const entitiesResult = await this.env.SKY_DB
+    const eventResult = await (this.env.SKY_DB
+      .prepare(
+        `SELECT id, title, start_at
+         FROM calendar_events
+         WHERE workspace_id = ?
+           AND account_id = ?
+         ORDER BY datetime(start_at) DESC
+         LIMIT 50`
+      ) as unknown as D1Statement)
+      .all<{ id: string; title: string | null; start_at: string }>();
+
+    const entitiesResult = await (this.env.SKY_DB
       .prepare(
         `SELECT *
          FROM email_entities
          WHERE datetime(created_at) >= datetime(CURRENT_TIMESTAMP, '-48 hours')
          ORDER BY datetime(created_at) DESC
          LIMIT 50`
-      )
+      ) as unknown as D1Statement)
       .all<Record<string, unknown>>();
 
-    const calendarResult = await this.env.SKY_DB
+    const calendarResult = await (this.env.SKY_DB
       .prepare(
         `SELECT id, title, start_at, end_at, location, calendar_name
          FROM calendar_events
@@ -281,7 +330,7 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
            AND datetime(start_at) < datetime(CURRENT_TIMESTAMP, '+48 hours')
          ORDER BY datetime(start_at) ASC
          LIMIT 20`
-      )
+      ) as unknown as D1Statement)
       .all<{
         id: string;
         title: string | null;
@@ -337,18 +386,18 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
   async skillLongTermMemory(): Promise<void> {
     console.log('[blawby] skill_long_term_memory started');
 
-    const counterpartyResult = await this.env.SKY_DB
+    const counterpartyResult = await (this.env.SKY_DB
       .prepare(
         `SELECT counterparty_name,
                 COUNT(*) AS appearances,
                 GROUP_CONCAT(DISTINCT entity_type) AS types_seen,
-                GROUP_CONCAT(DISTINCT direction) AS directions,
+                GROUP_CONCAT(DISTINCT action_direction) AS directions,
                 MAX(created_at) AS most_recent_date
          FROM email_entities
          GROUP BY counterparty_name
          ORDER BY appearances DESC
          LIMIT 30`
-      )
+      ) as unknown as D1Statement)
       .all<{
         counterparty_name: string | null;
         appearances: number;
@@ -357,7 +406,7 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
         most_recent_date: string | null;
       }>();
 
-    const meetingResult = await this.env.SKY_DB
+    const meetingResult = await (this.env.SKY_DB
       .prepare(
         `SELECT title,
                 COUNT(*) AS occurrences,
@@ -366,7 +415,7 @@ export class BlawbyAgent extends Agent<BlawbyEnv, BlawbyAgentState> {
          GROUP BY title
          ORDER BY occurrences DESC
          LIMIT 20`
-      )
+      ) as unknown as D1Statement)
       .all<{
         title: string | null;
         occurrences: number;

@@ -15,7 +15,7 @@ type JwksCacheEntry = {
   keysByKid: Record<string, JsonWebKey>;
 };
 
-const AUTH_CACHE = new Map<string, JwksCacheEntry>();
+const AUTH_CACHE = new Map<string, { keysByKid: Record<string, JsonWebKey>; expiresAt: number }>();
 
 export function extractBearerToken(request: Request): string | null {
   const auth = request.headers.get('authorization') || '';
@@ -70,7 +70,9 @@ export async function verifyAccessJwtClaims(token: string, env: AccessAuthEnv): 
 
   const signed = new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`);
   const signature = decodeBase64UrlToBytes(encodedSig);
-  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, signed);
+  const signedBuffer = new ArrayBuffer(signed.length);
+  new Uint8Array(signedBuffer).set(signed);
+  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature as BufferSource, signedBuffer);
   if (!valid) throw new Error('jwt_signature_invalid');
 
   const claims = JSON.parse(decodeBase64Url(encodedPayload)) as Record<string, unknown>;
@@ -103,12 +105,14 @@ async function getJwks(env: AccessAuthEnv): Promise<Record<string, JsonWebKey>> 
     return cached.keysByKid;
   }
 
-  const res = await fetch(jwksUrl, { method: 'GET' });
-  if (!res.ok) throw new Error(`jwks_fetch_failed_${res.status}`);
-  const body = (await res.json()) as { keys?: JsonWebKey[] };
+  const response = await fetch(jwksUrl, { method: 'GET' });
+  if (!response.ok) throw new Error(`jwks_fetch_failed_${response.status}`);
+
+  const body = (await response.json()) as { keys?: JsonWebKey[] };
   const keys: Record<string, JsonWebKey> = {};
   for (const key of body.keys || []) {
-    if (key.kid) keys[key.kid] = key;
+    const keyWithKid = key as JsonWebKeyWithKid;
+    if (keyWithKid.kid) keys[keyWithKid.kid] = key;
   }
 
   AUTH_CACHE.set(jwksUrl, {

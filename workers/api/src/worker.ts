@@ -15,6 +15,19 @@ import {
   isProviderTemporarilyDisabled,
   markProviderHealthy
 } from '../../shared/providerHealth';
+import {
+  PipelineEventWriter,
+  UsageLedgerWriter,
+  generateRequestId,
+  nowIso,
+  type PipelineEventInput,
+  type UsageLedgerInput,
+  type D1Database,
+  type VectorizeIndex,
+  type DurableObjectNamespace,
+  type DurableObjectState,
+  WebSocketPair
+} from '../../shared/pipelineEvents';
 import { BlawbyAgent as BlawbyAgentBase } from '../../agents/blawby';
 
 export class BlawbyAgent extends BlawbyAgentBase {}
@@ -25,8 +38,8 @@ export interface Env extends AccessAuthEnv {
   AI?: {
     run(model: string, input: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
   };
-  CHAT_COORDINATOR: DurableObjectNamespace;
-  BLAWBY_AGENT: DurableObjectNamespace;
+  CHAT_COORDINATOR: DurableObjectNamespace<any>;
+  BLAWBY_AGENT: DurableObjectNamespace<any>;
   WORKER_API_KEY?: string;
   ACCESS_AUTH_ENABLED?: string;
   ALLOW_API_KEY_BYPASS?: string;
@@ -145,6 +158,10 @@ export default {
       return runExtraction(request, env);
     }
 
+    if (request.method === 'POST' && url.pathname === '/v1/extractions/report') {
+      return reportExtraction(request, env);
+    }
+
     if (request.method === 'GET' && url.pathname === '/briefing/today') {
       return getTodayBriefing(request, env);
     }
@@ -226,7 +243,7 @@ export class ChatCoordinator {
     this.sockets = new Set();
     this.sessionLocks = new Map();
     this.socketContexts = new Map();
-    this.state.storage.setAlarm(Date.now() + 60_000);
+    this.state.storage.setAlarm(Date.now() + 60_000, new Request('https://internal/alarm', { method: 'POST' }));
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -295,6 +312,8 @@ export class ChatCoordinator {
       this.sessionLocks.delete(sessionId);
       await this.state.storage.delete(`active:${sessionId}`);
       await clearSessionActiveRun(this.env, sessionId);
+      
+      const context = this.socketContexts.get(socket);
       const cancelledEvent = await appendRunEvent(this.env, {
         sessionId,
         workspaceId: context?.workspaceId || 'default',
@@ -351,7 +370,7 @@ export class ChatCoordinator {
       accountId,
       startedAt: Date.now()
     });
-    await this.state.storage.setAlarm(Date.now() + 60_000);
+    await this.state.storage.setAlarm(Date.now() + 60_000, new Request('https://internal/alarm', { method: 'POST' }));
     await setSessionActiveRun(this.env, sessionId, runId);
 
     try {
@@ -409,7 +428,7 @@ export class ChatCoordinator {
         workspaceId,
         accountId,
         query,
-        intent: result.intent,
+        intent: result.intent as QueryIntent,
         citationStatus: result.citationStatus,
         citationsCount: result.citations.length,
         searched: result.searched
@@ -469,7 +488,7 @@ export class ChatCoordinator {
       prefix: 'active:'
     });
 
-    for (const [key, value] of active) {
+    for (const { key, value } of active.list) {
       if (!value) continue;
       const elapsed = now - Number(value.startedAt || 0);
       if (elapsed < timeoutMs) continue;
@@ -487,14 +506,14 @@ export class ChatCoordinator {
         sessionId,
         runId: value.runId,
         error: 'run_timeout_watchdog',
-        eventId: failedEvent?.id,
-        lastEventId: failedEvent?.cursor
+        eventId: (failedEvent as { id: string; cursor: number } | undefined)?.id || undefined,
+        lastEventId: (failedEvent as { id: string; cursor: number } | undefined)?.cursor || undefined
       });
       this.sessionLocks.delete(sessionId);
       await this.state.storage.delete(key);
       await clearSessionActiveRun(this.env, sessionId).catch(() => {});
     }
-    await this.state.storage.setAlarm(Date.now() + 60_000);
+    await this.state.storage.setAlarm(Date.now() + 60_000, new Request('https://internal/alarm', { method: 'POST' }));
   }
 
   private async broadcastProgress(
@@ -519,8 +538,8 @@ export class ChatCoordinator {
       runId,
       stage,
       detail: detail || null,
-      eventId: progressEvent?.id,
-      lastEventId: progressEvent?.cursor
+      eventId: (progressEvent as { id: string; cursor: number } | undefined)?.id || undefined,
+      lastEventId: (progressEvent as { id: string; cursor: number } | undefined)?.cursor || undefined
     });
   }
 
@@ -576,7 +595,9 @@ async function routeWebSocketToCoordinator(request: Request, env: Env): Promise<
   const since = url.searchParams.get('since');
   const lastEventId = url.searchParams.get('lastEventId');
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
 
   if (!accountId) {
     return json({ ok: false, error: 'accountId query parameter is required' }, 400);
@@ -584,7 +605,9 @@ async function routeWebSocketToCoordinator(request: Request, env: Env): Promise<
 
   const canonicalAccountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
   const permission = await assertPermission(env, auth.principal, workspaceId, canonicalAccountId);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   const id = env.CHAT_COORDINATOR.idFromName(`${workspaceId}:${canonicalAccountId}`);
   const stub = env.CHAT_COORDINATOR.get(id);
   const connectUrl = new URL(request.url);
@@ -600,7 +623,9 @@ async function routeWebSocketToCoordinator(request: Request, env: Env): Promise<
 
 async function getSessionEvents(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const url = new URL(request.url);
   const parts = url.pathname.split('/');
   const sessionId = parts[2];
@@ -611,7 +636,9 @@ async function getSessionEvents(request: Request, env: Env): Promise<Response> {
     .first<{ workspace_id: string; account_id: string }>();
   if (!scope) return json({ ok: false, error: 'session_not_found' }, 404);
   const permission = await assertPermission(env, auth.principal, scope.workspace_id, scope.account_id);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   const since = url.searchParams.get('since');
   const lastEventId = url.searchParams.get('lastEventId');
   const limit = numberOr(url.searchParams.get('limit')) || 200;
@@ -621,7 +648,9 @@ async function getSessionEvents(request: Request, env: Env): Promise<Response> {
 
 async function getAuthWhoami(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
 
   const workspaceId = (new URL(request.url)).searchParams.get('workspaceId');
   if (!workspaceId) {
@@ -656,7 +685,9 @@ async function getAuthWhoami(request: Request, env: Env): Promise<Response> {
 
 async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
   let accountId = stringOr(payload.accountId);
@@ -670,7 +701,9 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
 
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   await ensureSession(env, { sessionId, workspaceId, accountId, userId });
 
   const runId = crypto.randomUUID();
@@ -703,12 +736,13 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
       intent,
       answer: unified.answer,
       citations: unified.citations,
+      citationStatus: 'sufficient' as const,
       searched: unified.searched
-    });
+    }) as QueryResult;
     proposals = unified.proposals;
   } else {
     const rawResult = await executeIntent(env, { workspaceId, accountId }, query, intent, runId);
-    result = enforceCitationContract(query, rawResult);
+    result = enforceCitationContract(query, rawResult) as QueryResult;
   }
 
   const assistantTurnId = await insertTurn(env, {
@@ -780,7 +814,9 @@ async function runHttpChatQuery(request: Request, env: Env): Promise<Response> {
 
 async function runSearch(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
   let accountId = stringOr(payload.accountId) || stringOr(payload.account_id);
@@ -794,7 +830,9 @@ async function runSearch(request: Request, env: Env): Promise<Response> {
 
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
 
   let results: SearchResult[] = [];
   try {
@@ -819,7 +857,9 @@ async function runSearch(request: Request, env: Env): Promise<Response> {
 
 async function runAgentChat(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
   let accountId = stringOr(payload.accountId) || stringOr(payload.account_id);
@@ -834,7 +874,9 @@ async function runAgentChat(request: Request, env: Env): Promise<Response> {
 
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   await ensureSession(env, { sessionId, workspaceId, accountId, userId });
 
   const runId = crypto.randomUUID();
@@ -998,7 +1040,9 @@ async function runAgentChat(request: Request, env: Env): Promise<Response> {
 
 async function runExtraction(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
   let accountId = stringOr(payload.accountId);
@@ -1010,7 +1054,9 @@ async function runExtraction(request: Request, env: Env): Promise<Response> {
 
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   const accountEmail = await resolveAccountEmail(env, workspaceId, accountId);
   if (!accountEmail) {
     return json({ ok: false, error: 'account email could not be resolved for accountId' }, 400);
@@ -1170,7 +1216,9 @@ async function runExtraction(request: Request, env: Env): Promise<Response> {
 
 async function getTodayBriefing(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const url = new URL(request.url);
   const workspaceId = url.searchParams.get('workspaceId') || 'default';
   let accountId = url.searchParams.get('accountId');
@@ -1181,7 +1229,9 @@ async function getTodayBriefing(request: Request, env: Env): Promise<Response> {
 
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
 
   const briefingTimezone = await getWorkspaceTimezone(env, workspaceId);
   const today = localDateInTimezone(briefingTimezone);
@@ -1362,7 +1412,9 @@ async function loadTodayBriefingData(
 
 async function proposeAction(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const payload = (await request.json()) as JsonRecord;
   const workspaceId = stringOr(payload.workspaceId) || 'default';
   let accountId = stringOr(payload.accountId);
@@ -1377,7 +1429,9 @@ async function proposeAction(request: Request, env: Env): Promise<Response> {
 
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
 
   const actionId = crypto.randomUUID();
   const approvalToken = crypto.randomUUID();
@@ -1425,7 +1479,9 @@ async function proposeAction(request: Request, env: Env): Promise<Response> {
 
 async function approveAction(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const payload = (await request.json()) as JsonRecord;
   const approvedBy = stringOr(payload.userId) || 'unknown';
   const confirm = payload.confirm === true;
@@ -1457,7 +1513,9 @@ async function approveAction(request: Request, env: Env): Promise<Response> {
     .first<{ workspace_id: string; account_id: string }>();
   if (!actionScope) return json({ ok: false, error: 'action_scope_missing' }, 404);
   const permission = await assertPermission(env, auth.principal, actionScope.workspace_id, actionScope.account_id);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   if (row.status !== 'proposed') return json({ ok: false, error: `action_not_approvable:${row.status}` }, 409);
   if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) {
     return json({ ok: false, error: 'approval_token_expired' }, 409);
@@ -1486,7 +1544,9 @@ async function approveAction(request: Request, env: Env): Promise<Response> {
 
 async function rejectAction(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const payload = (await request.json()) as JsonRecord;
   const rejectedBy = stringOr(payload.userId) || auth.principal.email || auth.principal.subject;
   const actionId = stringOr(payload.actionId);
@@ -1514,7 +1574,9 @@ async function rejectAction(request: Request, env: Env): Promise<Response> {
     .first<{ workspace_id: string; account_id: string }>();
   if (!actionScope) return json({ ok: false, error: 'action_scope_missing' }, 404);
   const permission = await assertPermission(env, auth.principal, actionScope.workspace_id, actionScope.account_id);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
 
   if (!['proposed', 'approved'].includes(row.status)) {
     return json({ ok: false, error: `action_not_rejectable:${row.status}` }, 409);
@@ -1547,7 +1609,9 @@ async function rejectAction(request: Request, env: Env): Promise<Response> {
 
 async function executeAction(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const payload = (await request.json()) as JsonRecord;
   const executedBy = stringOr(payload.userId) || auth.principal.email || auth.principal.subject;
   const actionId = stringOr(payload.actionId);
@@ -1562,7 +1626,9 @@ async function executeAction(request: Request, env: Env): Promise<Response> {
 
   if (!row) return json({ ok: false, error: 'action_not_found' }, 404);
   const permission = await assertPermission(env, auth.principal, row.workspace_id, row.account_id);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
 
   if (row.status !== 'approved') {
     return json({ ok: false, error: `action_not_executable:${row.status}` }, 409);
@@ -1595,7 +1661,9 @@ async function executeAction(request: Request, env: Env): Promise<Response> {
 
 async function getAccountOpsStatus(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
 
   const url = new URL(request.url);
   const workspaceId = url.searchParams.get('workspaceId') || 'default';
@@ -1604,7 +1672,9 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
 
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-  if (!permission.ok) return permission.response;
+  if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
 
   const [messages, threads, chunks, embeddings, tasksOpen, followupsOpen, decisionsRecent, chunkingMetrics, embeddingMetrics] = await Promise.all([
     env.SKY_DB
@@ -1701,7 +1771,7 @@ async function getAccountOpsStatus(request: Request, env: Env): Promise<Response
     embeddingPerformance: {
       totalEmbeddings: Number(embeddingMetrics?.total_embeddings || 0),
       successfulEmbeddings: Number(embeddingMetrics?.successful_embeddings || 0),
-      successRate: embeddingMetrics?.total_embeddings > 0 ? 
+      successRate: (embeddingMetrics?.total_embeddings || 0) > 0 ? 
         Number(((Number(embeddingMetrics?.successful_embeddings || 0) / Number(embeddingMetrics?.total_embeddings)) * 100).toFixed(2)) : 0,
       avgLatencyMs: Number(embeddingMetrics?.avg_latency_ms || 0),
       totalCostUsd: Number(Number(embeddingMetrics?.total_cost_usd || 0).toFixed(6))
@@ -1715,7 +1785,7 @@ async function resolveOpsScope(
   env: Env
 ): Promise<{ ok: true; workspaceId: string; accountId: string } | { ok: false; response: Response }> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return { ok: false, response: auth.response };
+  if (!auth.ok) return { ok: false, response: (auth as { ok: false; response: Response }).response };
 
   const url = new URL(request.url);
   const workspaceId = url.searchParams.get('workspaceId') || 'default';
@@ -1724,14 +1794,14 @@ async function resolveOpsScope(
   accountId = await ensureWorkspaceAndAccount(env, workspaceId, accountId);
 
   const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-  if (!permission.ok) return { ok: false, response: permission.response };
+  if (!permission.ok) return { ok: false, response: (permission as { ok: false; response: Response }).response };
 
   return { ok: true, workspaceId, accountId };
 }
 
 async function getIngestStats(request: Request, env: Env): Promise<Response> {
   const scope = await resolveOpsScope(request, env);
-  if (!scope.ok) return scope.response;
+  if (!scope.ok) return (scope as { ok: false; response: Response }).response;
   const { workspaceId, accountId } = scope;
 
   const [total, last24h, latest] = await Promise.all([
@@ -1779,7 +1849,7 @@ async function getIngestStats(request: Request, env: Env): Promise<Response> {
 
 async function getQueueStats(request: Request, env: Env): Promise<Response> {
   const scope = await resolveOpsScope(request, env);
-  if (!scope.ok) return scope.response;
+  if (!scope.ok) return (scope as { ok: false; response: Response }).response;
   const { workspaceId, accountId } = scope;
 
   const row = await env.SKY_DB
@@ -1813,7 +1883,7 @@ async function getQueueStats(request: Request, env: Env): Promise<Response> {
 
 async function getExtractionStats(request: Request, env: Env): Promise<Response> {
   const scope = await resolveOpsScope(request, env);
-  if (!scope.ok) return scope.response;
+  if (!scope.ok) return (scope as { ok: false; response: Response }).response;
   const { workspaceId, accountId } = scope;
 
   const [taskQueue, followupQueue, decisionQueue, extractionRows, citationRows] = await Promise.all([
@@ -1892,15 +1962,21 @@ async function getExtractionStats(request: Request, env: Env): Promise<Response>
 async function getUsageStats(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   const workspaceId = url.searchParams.get('workspaceId') || 'default';
   const accountId = (url.searchParams.get('accountId') || '').trim() || null;
   if (accountId) {
     const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-    if (!permission.ok) return permission.response;
+    if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   } else {
     const permission = await assertWorkspacePermission(env, auth.principal, workspaceId);
-    if (!permission.ok) return permission.response;
+    if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   }
 
   const daysRaw = Number(url.searchParams.get('days') || '7');
@@ -1983,7 +2059,9 @@ async function getUsageStats(request: Request, env: Env): Promise<Response> {
 
 async function getProviderHealth(request: Request, env: Env): Promise<Response> {
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
 
   const openai = await getProviderHealthState(env.SKY_DB, 'openai');
   const disabled = await isProviderTemporarilyDisabled(env.SKY_DB, 'openai');
@@ -2016,16 +2094,22 @@ async function getProviderHealth(request: Request, env: Env): Promise<Response> 
 async function getChunkingStats(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   
   const workspaceId = url.searchParams.get('workspaceId') || 'default';
   const accountId = (url.searchParams.get('accountId') || '').trim() || null;
   if (accountId) {
     const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-    if (!permission.ok) return permission.response;
+    if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   } else {
     const permission = await assertWorkspacePermission(env, auth.principal, workspaceId);
-    if (!permission.ok) return permission.response;
+    if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   }
 
   const daysRaw = Number(url.searchParams.get('days') || '7');
@@ -2110,16 +2194,22 @@ async function getChunkingStats(request: Request, env: Env): Promise<Response> {
 async function getEmbeddingStats(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const auth = await authorizeHttpRequest(request, env);
-  if (!auth.ok) return auth.response;
+  if (!auth.ok) {
+    return (auth as { ok: false; response: Response }).response;
+  }
   
   const workspaceId = url.searchParams.get('workspaceId') || 'default';
   const accountId = (url.searchParams.get('accountId') || '').trim() || null;
   if (accountId) {
     const permission = await assertPermission(env, auth.principal, workspaceId, accountId);
-    if (!permission.ok) return permission.response;
+    if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   } else {
     const permission = await assertWorkspacePermission(env, auth.principal, workspaceId);
-    if (!permission.ok) return permission.response;
+    if (!permission.ok) {
+    return (permission as { ok: false; response: Response }).response;
+  }
   }
 
   const daysRaw = Number(url.searchParams.get('days') || '7');
@@ -2199,7 +2289,7 @@ async function getEmbeddingStats(request: Request, env: Env): Promise<Response> 
       totalEmbeddings: Number(row.total_embeddings || 0),
       successfulEmbeddings: Number(row.successful_embeddings || 0),
       failedEmbeddings: Number(row.failed_embeddings || 0),
-      successRate: Number(row.total_embeddings > 0 ? ((Number(row.successful_embeddings || 0) / Number(row.total_embeddings)) * 100).toFixed(2) : 0),
+      successRate: Number(Number(row.total_embeddings || 0) > 0 ? ((Number(row.successful_embeddings || 0) / Number(row.total_embeddings || 0)) * 100).toFixed(2) : 0),
       avgLatencyMs: Number(row.avg_latency_ms || 0),
       minLatencyMs: Number(row.min_latency_ms || 0),
       maxLatencyMs: Number(row.max_latency_ms || 0),
@@ -2237,7 +2327,7 @@ async function assertWorkspacePermission(
 
 async function getTriageStats(request: Request, env: Env): Promise<Response> {
   const scope = await resolveOpsScope(request, env);
-  if (!scope.ok) return scope.response;
+  if (!scope.ok) return (scope as { ok: false; response: Response }).response;
   const { workspaceId, accountId } = scope;
 
   const [priorityRows, categoryRows, replyRows, sentimentRows] = await Promise.all([
@@ -2320,7 +2410,7 @@ function authorizeOpsRequest(request: Request, env: Env): boolean {
 }
 
 async function loadBlawbyContext(env: Env): Promise<string> {
-  const agent = (await getAgentByName(env.BLAWBY_AGENT, 'primary')) as {
+  const agent = (await getAgentByName(env.BLAWBY_AGENT as any, 'primary')) as unknown as {
     getContext(): Promise<string>;
   };
   return agent.getContext();
@@ -2340,7 +2430,7 @@ async function runBlawbySkill(request: Request, env: Env): Promise<Response> {
   if (!['immediateContext', 'shortTermMemory', 'longTermMemory', 'knowledgeProfile'].includes(skill)) {
     return json({ ok: false, error: 'invalid skill' }, 400);
   }
-  const agent = (await getAgentByName(env.BLAWBY_AGENT, 'primary')) as {
+  const agent = (await getAgentByName(env.BLAWBY_AGENT as any, 'primary')) as unknown as {
     skillImmediateContext(): Promise<void>;
     skillShortTermMemory(): Promise<void>;
     skillLongTermMemory(): Promise<void>;
@@ -2367,7 +2457,7 @@ async function getBlawbyContext(request: Request, env: Env): Promise<Response> {
     return json({ ok: false, error: 'unauthorized' }, 401);
   }
 
-  const agent = (await getAgentByName(env.BLAWBY_AGENT, 'primary')) as {
+  const agent = (await getAgentByName(env.BLAWBY_AGENT as any, 'primary')) as unknown as {
     getContext(): Promise<string>;
   };
   const context = await agent.getContext();
@@ -4944,6 +5034,358 @@ function stripJsonCodeFence(raw: string): string {
     return withoutFence.trim();
   }
   return raw;
+}
+
+// Extraction reporting types
+interface ExtractionReportRequest {
+  requestId?: string;
+  workspaceId: string;
+  accountId?: string;
+  sourceType?: string;
+  sourceRecordId?: string;
+  sourceMessageId?: string;
+  provider: string;
+  model: string;
+  status: 'succeeded' | 'failed';
+  latencyMs?: number;
+  tokenInput?: number;
+  tokenOutput?: number;
+  costUsd?: number;
+  entities?: ExtractedEntity[];
+  errorCode?: string | null;
+  errorMessage?: string | null;
+}
+
+interface ExtractedEntity {
+  entityType: string;
+  direction?: string;
+  counterparty?: string;
+  amount?: number | null;
+  currency?: string;
+  status?: string;
+  riskLevel?: string;
+  confidence?: number | null;
+  normalizedValue?: JsonRecord;
+}
+
+// Helper functions for extraction reporting
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return typeof value === 'string' ? value.trim() : null;
+}
+
+function generateId(prefix: string): string {
+  return `${prefix}_${crypto.randomUUID()}`;
+}
+
+function averageConfidence(entities: ExtractedEntity[]): number | null {
+  const confidences = entities
+    .map(e => e.confidence)
+    .filter((c): c is number => c !== null && typeof c === 'number');
+  
+  if (confidences.length === 0) return null;
+  const sum = confidences.reduce((acc, c) => acc + c, 0);
+  return sum / confidences.length;
+}
+
+function validateExtractionReport(payload: unknown): { valid: boolean; error?: string } {
+  if (!payload || typeof payload !== 'object') {
+    return { valid: false, error: 'Invalid JSON payload' };
+  }
+
+  const data = payload as Record<string, unknown>;
+
+  // Required fields
+  if (!isNonEmptyString(data.workspaceId)) {
+    return { valid: false, error: 'workspaceId is required and must be non-empty string' };
+  }
+
+  if (!isNonEmptyString(data.provider)) {
+    return { valid: false, error: 'provider is required and must be non-empty string' };
+  }
+
+  if (!isNonEmptyString(data.model)) {
+    return { valid: false, error: 'model is required and must be non-empty string' };
+  }
+
+  if (data.status !== 'succeeded' && data.status !== 'failed') {
+    return { valid: false, error: 'status must be "succeeded" or "failed"' };
+  }
+
+  // Optional field validation
+  if (data.latencyMs !== undefined && (typeof data.latencyMs !== 'number' || !Number.isFinite(data.latencyMs))) {
+    return { valid: false, error: 'latencyMs must be a number' };
+  }
+
+  if (data.tokenInput !== undefined && (typeof data.tokenInput !== 'number' || !Number.isFinite(data.tokenInput))) {
+    return { valid: false, error: 'tokenInput must be a number' };
+  }
+
+  if (data.tokenOutput !== undefined && (typeof data.tokenOutput !== 'number' || !Number.isFinite(data.tokenOutput))) {
+    return { valid: false, error: 'tokenOutput must be a number' };
+  }
+
+  if (data.costUsd !== undefined && (typeof data.costUsd !== 'number' || !Number.isFinite(data.costUsd))) {
+    return { valid: false, error: 'costUsd must be a number' };
+  }
+
+  // Optional string validation
+  if (data.requestId !== undefined && normalizeOptionalString(data.requestId) === null) {
+    return { valid: false, error: 'requestId must be a string' };
+  }
+
+  if (data.accountId !== undefined && normalizeOptionalString(data.accountId) === null) {
+    return { valid: false, error: 'accountId must be a string' };
+  }
+
+  if (data.sourceType !== undefined && normalizeOptionalString(data.sourceType) === null) {
+    return { valid: false, error: 'sourceType must be a string' };
+  }
+
+  if (data.sourceRecordId !== undefined && normalizeOptionalString(data.sourceRecordId) === null) {
+    return { valid: false, error: 'sourceRecordId must be a string' };
+  }
+
+  if (data.sourceMessageId !== undefined && normalizeOptionalString(data.sourceMessageId) === null) {
+    return { valid: false, error: 'sourceMessageId must be a string' };
+  }
+
+  if (data.errorCode !== undefined && normalizeOptionalString(data.errorCode) === null) {
+    return { valid: false, error: 'errorCode must be a string' };
+  }
+
+  if (data.errorMessage !== undefined && normalizeOptionalString(data.errorMessage) === null) {
+    return { valid: false, error: 'errorMessage must be a string' };
+  }
+
+  // Entity validation
+  if (data.entities !== undefined) {
+    if (!Array.isArray(data.entities)) {
+      return { valid: false, error: 'entities must be an array' };
+    }
+
+    for (const [index, entity] of data.entities.entries()) {
+      if (!entity || typeof entity !== 'object') {
+        return { valid: false, error: `entities[${index}] must be an object` };
+      }
+
+      const e = entity as Record<string, unknown>;
+      if (!isNonEmptyString(e.entityType)) {
+        return { valid: false, error: `entities[${index}].entityType is required and must be non-empty string` };
+      }
+
+      if (e.confidence !== undefined && e.confidence !== null && (typeof e.confidence !== 'number' || !Number.isFinite(e.confidence))) {
+        return { valid: false, error: `entities[${index}].confidence must be a number or null` };
+      }
+
+      if (e.amount !== undefined && e.amount !== null && (typeof e.amount !== 'number' || !Number.isFinite(e.amount))) {
+        return { valid: false, error: `entities[${index}].amount must be a number or null` };
+      }
+
+      // Optional entity string validation
+      if (e.direction !== undefined && normalizeOptionalString(e.direction) === null) {
+        return { valid: false, error: `entities[${index}].direction must be a string` };
+      }
+
+      if (e.counterparty !== undefined && normalizeOptionalString(e.counterparty) === null) {
+        return { valid: false, error: `entities[${index}].counterparty must be a string` };
+      }
+
+      if (e.currency !== undefined && normalizeOptionalString(e.currency) === null) {
+        return { valid: false, error: `entities[${index}].currency must be a string` };
+      }
+
+      if (e.status !== undefined && normalizeOptionalString(e.status) === null) {
+        return { valid: false, error: `entities[${index}].status must be a string` };
+      }
+
+      if (e.riskLevel !== undefined && normalizeOptionalString(e.riskLevel) === null) {
+        return { valid: false, error: `entities[${index}].riskLevel must be a string` };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
+async function reportExtraction(request: Request, env: Env): Promise<Response> {
+  try {
+    const payload = (await request.json()) as unknown;
+    const validation = validateExtractionReport(payload);
+
+    if (!validation.valid) {
+      return json({ ok: false, error: validation.error }, 400);
+    }
+
+    const data = payload as ExtractionReportRequest;
+    const requestId = normalizeOptionalString(data.requestId) ?? generateRequestId();
+    const extractionRunId = generateId('er');
+    const entities = data.entities ?? [];
+    const sourceType = normalizeOptionalString(data.sourceType) ?? 'mail';
+
+    // Calculate derived values
+    const confidenceAvg = averageConfidence(entities);
+    const entityCount = entities.length;
+
+    // Pipeline events
+    const eventWriter = new PipelineEventWriter();
+    const entityId = normalizeOptionalString(data.sourceMessageId) ?? normalizeOptionalString(data.sourceRecordId) ?? extractionRunId;
+
+    // Started event
+    const startedEvent: PipelineEventInput = {
+      id: generateId('pe'),
+      workspace_id: data.workspaceId,
+      account_id: normalizeOptionalString(data.accountId) ?? undefined,
+      source_type: sourceType,
+      entity_id: entityId,
+      entity_type: 'extraction_run',
+      pipeline_stage: 'extraction_started',
+      status: 'started',
+      request_id: requestId,
+      provider: data.provider,
+      model: data.model
+    };
+
+    await eventWriter.write(env.SKY_DB, startedEvent);
+
+    // Insert extraction run
+    await env.SKY_DB.prepare(`
+      INSERT INTO extraction_runs (
+        id, workspace_id, account_id, source_record_id, source_message_id,
+        provider, model, status, latency_ms, token_input, token_output,
+        cost_usd, confidence_avg, entity_count, error_code, error_message,
+        raw_response_artifact_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      extractionRunId,
+      data.workspaceId,
+      normalizeOptionalString(data.accountId),
+      normalizeOptionalString(data.sourceRecordId),
+      normalizeOptionalString(data.sourceMessageId),
+      data.provider,
+      data.model,
+      data.status,
+      data.latencyMs ?? null,
+      data.tokenInput ?? null,
+      data.tokenOutput ?? null,
+      data.costUsd ?? null,
+      confidenceAvg,
+      entityCount,
+      normalizeOptionalString(data.errorCode),
+      normalizeOptionalString(data.errorMessage),
+      null
+    ).run();
+
+    // Insert entities
+    for (const entity of entities) {
+      const entityId = generateId('ee');
+      await env.SKY_DB.prepare(`
+        INSERT INTO extracted_entities (
+          id, extraction_run_id, workspace_id, account_id, source_record_id, source_message_id,
+          entity_type, direction, counterparty, amount, currency, status, risk_level,
+          confidence, normalized_value_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        entityId,
+        extractionRunId,
+        data.workspaceId,
+        normalizeOptionalString(data.accountId),
+        normalizeOptionalString(data.sourceRecordId),
+        normalizeOptionalString(data.sourceMessageId),
+        entity.entityType,
+        normalizeOptionalString(entity.direction),
+        normalizeOptionalString(entity.counterparty),
+        entity.amount ?? null,
+        normalizeOptionalString(entity.currency),
+        normalizeOptionalString(entity.status),
+        normalizeOptionalString(entity.riskLevel),
+        entity.confidence ?? null,
+        entity.normalizedValue ? JSON.stringify(entity.normalizedValue) : null
+      ).run();
+    }
+
+    // Terminal event
+    const terminalStage = data.status === 'succeeded' ? 'extraction_completed' : 'extraction_failed';
+    const terminalEvent: PipelineEventInput = {
+      id: generateId('pe'),
+      workspace_id: data.workspaceId,
+      account_id: normalizeOptionalString(data.accountId) || undefined,
+      source_type: sourceType,
+      entity_id: entityId,
+      entity_type: 'extraction_run',
+      pipeline_stage: terminalStage,
+      status: data.status,
+      request_id: requestId,
+      provider: data.provider,
+      model: data.model,
+      output_count: entityCount,
+      token_count: data.tokenInput ?? undefined,
+      cost_usd: data.costUsd ?? undefined,
+      latency_ms: data.latencyMs ?? undefined,
+      error_code: normalizeOptionalString(data.errorCode) ?? undefined,
+      error_message: normalizeOptionalString(data.errorMessage) ?? undefined
+    };
+
+    await eventWriter.write(env.SKY_DB, terminalEvent);
+
+    // Usage ledger
+    const accountId = normalizeOptionalString(data.accountId);
+    if (accountId) {
+      const usageWriter = new UsageLedgerWriter();
+
+      // Extraction run
+      await usageWriter.write(env.SKY_DB, {
+        id: generateId('ul'),
+        workspace_id: data.workspaceId,
+        account_id: accountId,
+        usage_type: 'extractions_run',
+        quantity: 1,
+        unit: 'run',
+        source_event_id: terminalEvent.id
+      });
+
+      // Input tokens
+      if (data.tokenInput && data.tokenInput > 0) {
+        await usageWriter.write(env.SKY_DB, {
+          id: generateId('ul'),
+          workspace_id: data.workspaceId,
+          account_id: accountId,
+          usage_type: 'extraction_input_tokens',
+          quantity: data.tokenInput,
+          unit: 'token',
+          source_event_id: terminalEvent.id
+        });
+      }
+
+      // Output tokens
+      if (data.tokenOutput && data.tokenOutput > 0) {
+        await usageWriter.write(env.SKY_DB, {
+          id: generateId('ul'),
+          workspace_id: data.workspaceId,
+          account_id: accountId,
+          usage_type: 'extraction_output_tokens',
+          quantity: data.tokenOutput,
+          unit: 'token',
+          source_event_id: terminalEvent.id
+        });
+      }
+    }
+
+    return json({
+      ok: true,
+      extractionRunId,
+      entityCount,
+      requestId
+    });
+
+  } catch (error) {
+    console.error('Extraction reporting error:', error);
+    return json({ ok: false, error: 'internal_error' }, 500);
+  }
 }
 
 function json(payload: JsonRecord, status = 200): Response {
