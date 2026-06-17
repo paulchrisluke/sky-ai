@@ -198,47 +198,97 @@ function generateXcodeGenConfig() {
 
 fs.writeFileSync(path.join(rootDir, 'agent-mac/project.yml'), yaml.dump(generateXcodeGenConfig()));
 
-// Helper function to convert object to TOML
-function tomlify(obj, indent = '') {
+function formatScalar(key, value) {
+  if (typeof value === 'string') {
+    return `${key} = "${value}"`;
+  }
+  if (typeof value === 'boolean') {
+    return `${key} = ${value}`;
+  }
+  return `${key} = ${value}`;
+}
+
+function formatObjectLines(obj) {
   let result = '';
-  
   for (const [key, value] of Object.entries(obj)) {
     if (value === undefined || value === null) continue;
-    
-    if (typeof value === 'object' && !Array.isArray(value)) {
-      if (key === 'env') {
-        result += '\n[env]\n';
-        for (const [envKey, envValue] of Object.entries(value)) {
-          result += tomlify({ [envKey]: envValue }, '  ');
-        }
-      } else if (Array.isArray(value)) {
-        for (const item of value) {
-          if (typeof item === 'object') {
-            result += `\n[[${key}]]\n`;
-            result += tomlify(item, '  ');
-          }
-        }
-      } else {
-        result += `\n[${key}]\n`;
-        result += tomlify(value, '  ');
-      }
-    } else if (Array.isArray(value)) {
-      for (const item of value) {
-        if (typeof item === 'object') {
-          result += `\n[[${key}]]\n`;
-          result += tomlify(item, indent);
-        }
-      }
-    } else if (typeof value === 'string') {
-      result += `${indent}${key} = "${value}"\n`;
-    } else if (typeof value === 'boolean') {
-      result += `${indent}${key} = ${value}\n`;
-    } else {
-      result += `${indent}${key} = ${value}\n`;
+    result += `${formatScalar(key, value)}\n`;
+  }
+  return result;
+}
+
+function formatArrayOfTables(tablePath, items) {
+  let result = '';
+  for (const item of items) {
+    result += `\n[[${tablePath}]]\n`;
+    result += formatObjectLines(item);
+  }
+  return result;
+}
+
+function formatWorkerSection(config, envPrefix = '') {
+  const prefix = envPrefix ? `${envPrefix}.` : '';
+  let result = '';
+
+  if (config.vars) {
+    result += `\n[${prefix}vars]\n`;
+    result += formatObjectLines(config.vars);
+  }
+
+  if (config.d1_databases) {
+    result += formatArrayOfTables(`${prefix}d1_databases`, config.d1_databases);
+  }
+
+  if (config.r2_buckets) {
+    result += formatArrayOfTables(`${prefix}r2_buckets`, config.r2_buckets);
+  }
+
+  if (config.vectorize) {
+    result += formatArrayOfTables(`${prefix}vectorize`, config.vectorize);
+  }
+
+  if (config.ai) {
+    result += `\n[${prefix}ai]\n`;
+    result += formatObjectLines(config.ai);
+  }
+
+  if (config.durable_objects?.bindings) {
+    result += formatArrayOfTables(`${prefix}durable_objects.bindings`, config.durable_objects.bindings);
+  }
+
+  if (config.queues?.producers) {
+    result += formatArrayOfTables(`${prefix}queues.producers`, config.queues.producers);
+  }
+
+  return result;
+}
+
+function tomlify(config) {
+  let result = '';
+
+  for (const key of ['name', 'main', 'compatibility_date']) {
+    if (config[key] !== undefined) {
+      result += `${formatScalar(key, config[key])}\n`;
     }
   }
-  
-  return result;
+
+  if (config.compatibility_flags?.length) {
+    result += `compatibility_flags = [${config.compatibility_flags.map((flag) => `"${flag}"`).join(', ')}]\n`;
+  }
+
+  if (config.workers_dev !== undefined) {
+    result += `${formatScalar('workers_dev', config.workers_dev)}\n`;
+  }
+
+  result += formatWorkerSection(config);
+
+  if (config.env) {
+    for (const [envName, envConfig] of Object.entries(config.env)) {
+      result += formatWorkerSection(envConfig, `env.${envName}`);
+    }
+  }
+
+  return `${result.trim()}\n`;
 }
 
 console.log('Configuration files generated successfully');
