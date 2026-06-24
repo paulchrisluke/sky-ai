@@ -7,6 +7,7 @@ import {
   type AccessPrincipal
 } from '../../shared/auth';
 import { handleAuthRoutes } from '../../shared/authRoutes';
+import { handleMcpRequest } from '../../shared/mcp/server';
 import { enforceCitationContract } from '../../shared/citation';
 import { RUN_EVENT_TYPES } from '../../shared/events';
 import { extractProviderErrorCode } from '../../shared/providerErrors';
@@ -135,6 +136,18 @@ export default {
     if (env.BETTER_AUTH_SECRET && env.BETTER_AUTH_URL) {
       const authResponse = await handleAuthRoutes(request, env);
       if (authResponse) return authResponse;
+
+      if (request.method === 'POST' && url.pathname === '/mcp') {
+        return handleMcpRequest(request, env, {
+          semanticSearch: (workspaceId, accountId, query, k) =>
+            performSemanticSearch(env, workspaceId, accountId, query, k, {
+              workspaceId,
+              accountId,
+              operation: 'mcp_search',
+              endpoint: '/mcp',
+            }),
+        });
+      }
     }
 
     if (request.method === 'GET' && url.pathname === '/health') {
