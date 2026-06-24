@@ -23,7 +23,10 @@ export interface McpAuthContext {
   userId: string;
   email: string;
   workspaceId: string;
+  // Canonical connected_accounts.id (scopes calendar/iMessage/entities/memory).
   accountId: string;
+  // Mailbox address (scopes email_threads/email_messages by account_email).
+  accountEmail: string;
   scopes: string[];
 }
 
@@ -76,13 +79,20 @@ export async function requireMcpUser(request: Request, env: CloudflareAuthEnv): 
     );
   }
 
-  return { userId: userId as string, email, workspaceId: scope.workspaceId, accountId: scope.accountId, scopes };
+  return {
+    userId: userId as string,
+    email,
+    workspaceId: scope.workspaceId,
+    accountId: scope.accountId,
+    accountEmail: scope.accountEmail,
+    scopes,
+  };
 }
 
 async function resolveWorkspaceScope(
   db: D1Database,
   email: string,
-): Promise<{ workspaceId: string; accountId: string } | null> {
+): Promise<{ workspaceId: string; accountId: string; accountEmail: string } | null> {
   const perm = await db
     .prepare(
       `SELECT workspace_id, account_id
@@ -97,19 +107,31 @@ async function resolveWorkspaceScope(
   if (!perm) return null;
 
   if (perm.account_id && perm.account_id !== '*') {
-    return { workspaceId: perm.workspace_id, accountId: perm.account_id };
+    const account = await db
+      .prepare(`SELECT email FROM connected_accounts WHERE workspace_id = ? AND id = ? LIMIT 1`)
+      .bind(perm.workspace_id, perm.account_id)
+      .first<{ email: string | null }>();
+    return {
+      workspaceId: perm.workspace_id,
+      accountId: perm.account_id,
+      accountEmail: (account?.email ?? perm.account_id).toLowerCase(),
+    };
   }
 
   // Wildcard grant — pick the first active connected account in the workspace.
   const account = await db
     .prepare(
-      `SELECT id FROM connected_accounts WHERE workspace_id = ? AND status = 'active' ORDER BY created_at ASC LIMIT 1`,
+      `SELECT id, email FROM connected_accounts WHERE workspace_id = ? AND status = 'active' ORDER BY created_at ASC LIMIT 1`,
     )
     .bind(perm.workspace_id)
-    .first<{ id: string }>();
+    .first<{ id: string; email: string | null }>();
 
   if (!account?.id) return null;
-  return { workspaceId: perm.workspace_id, accountId: account.id };
+  return {
+    workspaceId: perm.workspace_id,
+    accountId: account.id,
+    accountEmail: (account.email ?? account.id).toLowerCase(),
+  };
 }
 
 async function verifyBearerToken(
