@@ -34,6 +34,11 @@
     "node": ">=20"
   },
   "dependencies": {
-    "agents": "^0.7.5"
+    "@better-auth/core": "^1.6.20",
+    "@better-auth/oauth-provider": "^1.6.20",
+    "agents": "^0.7.5",
+    "better-auth": "^1.6.20",
+    "drizzle-orm": "^0.45.2",
+    "jose": "^6.2.3"
   }
 }
