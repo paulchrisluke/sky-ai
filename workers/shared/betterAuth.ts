@@ -3,7 +3,7 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { admin, jwt, organization } from 'better-auth/plugins';
 import { oauthProvider } from '@better-auth/oauth-provider';
 import { drizzle } from 'drizzle-orm/d1';
-import type { D1Database } from '../shared/pipelineEvents';
+import type { D1Database } from './pipelineEvents';
 import { authSchema, organization as organizationTable, member as memberTable } from './authSchema';
 
 export interface CloudflareAuthEnv {
@@ -12,7 +12,6 @@ export interface CloudflareAuthEnv {
   BETTER_AUTH_URL?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
-  [key: string]: unknown;
 }
 
 /** Scope that grants access to the sky-ai MCP surface. */

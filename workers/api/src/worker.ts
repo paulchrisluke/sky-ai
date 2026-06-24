@@ -6,6 +6,7 @@ import {
   type AccessAuthEnv,
   type AccessPrincipal
 } from '../../shared/auth';
+import { handleAuthRoutes } from '../../shared/authRoutes';
 import { enforceCitationContract } from '../../shared/citation';
 import { RUN_EVENT_TYPES } from '../../shared/events';
 import { extractProviderErrorCode } from '../../shared/providerErrors';
@@ -43,6 +44,10 @@ export interface Env extends AccessAuthEnv {
   WORKER_API_KEY?: string;
   ACCESS_AUTH_ENABLED?: string;
   ALLOW_API_KEY_BYPASS?: string;
+  BETTER_AUTH_SECRET: string;
+  BETTER_AUTH_URL?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
   OPENAI_API_KEY?: string;
   CF_AIG_AUTH_TOKEN?: string;
   AIG_ACCOUNT_ID?: string;
@@ -125,6 +130,12 @@ type AuthPrincipal = {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // better-auth OAuth provider + discovery surfaces (only active when configured).
+    if (env.BETTER_AUTH_SECRET && env.BETTER_AUTH_URL) {
+      const authResponse = await handleAuthRoutes(request, env);
+      if (authResponse) return authResponse;
+    }
 
     if (request.method === 'GET' && url.pathname === '/health') {
       return json({ ok: true, service: 'sky-ai-api', env: env.ENVIRONMENT || 'unknown' });
