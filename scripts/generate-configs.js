@@ -117,11 +117,15 @@ function generateWranglerConfig(workerName, mainFile, additionalVars = {}) {
 const mainWorkerConfig = generateWranglerConfig('sky-ai', 'src/worker.ts');
 fs.writeFileSync(path.join(rootDir, 'wrangler.toml'), tomlify(mainWorkerConfig));
 
-// Generate API worker config
+// Generate API worker config.
+// BETTER_AUTH_URL is the public origin ChatGPT uses for OAuth + MCP discovery.
+// On workers.dev this is https://sky-ai-api.<your-subdomain>.workers.dev (no trailing slash).
+// Set `better_auth_url` under [shared] in config/shared.toml to override the placeholder.
 const apiWorkerConfig = generateWranglerConfig('sky-ai-api', 'workers/api/src/worker.ts', {
   WORKERS_AI_EMBEDDING_MODEL: "@cf/baai/bge-base-en-v1.5",
   WORKERS_AI_CHAT_MODEL: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-  VECTOR_DIMENSIONS: "1536"
+  VECTOR_DIMENSIONS: "1536",
+  BETTER_AUTH_URL: sharedConfig.shared.better_auth_url || "https://sky-ai-api.YOUR-SUBDOMAIN.workers.dev"
 });
 fs.writeFileSync(path.join(rootDir, 'wrangler.api.toml'), tomlify(apiWorkerConfig));
 

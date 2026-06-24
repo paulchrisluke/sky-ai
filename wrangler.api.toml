@@ -15,6 +15,7 @@ ALLOW_API_KEY_BYPASS = true
 WORKERS_AI_EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
 WORKERS_AI_CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 VECTOR_DIMENSIONS = "1536"
+BETTER_AUTH_URL = "https://sky-ai-api.YOUR-SUBDOMAIN.workers.dev"
 
 [[d1_databases]]
 binding = "SKY_DB"
@@ -40,6 +41,7 @@ ALLOW_API_KEY_BYPASS = false
 WORKERS_AI_EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
 WORKERS_AI_CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 VECTOR_DIMENSIONS = "1536"
+BETTER_AUTH_URL = "https://sky-ai-api.YOUR-SUBDOMAIN.workers.dev"
 
 [[env.prod.d1_databases]]
 binding = "SKY_DB"
