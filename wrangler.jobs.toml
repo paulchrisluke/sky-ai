@@ -6,7 +6,7 @@ workers_dev = true
 
 [vars]
 ENVIRONMENT = "dev"
-AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
+AIG_ACCOUNT_ID = "119641edf4fbeb5ac613d6b7db85f691"
 AIG_GATEWAY_ID = "sky-ai"
 OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -31,7 +31,7 @@ binding = "AI"
 
 [env.prod.vars]
 ENVIRONMENT = "prod"
-AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
+AIG_ACCOUNT_ID = "119641edf4fbeb5ac613d6b7db85f691"
 AIG_GATEWAY_ID = "sky-ai"
 OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
