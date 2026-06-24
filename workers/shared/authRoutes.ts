@@ -5,10 +5,19 @@ import {
   SKY_MCP_SCOPE,
   type CloudflareAuthEnv,
 } from './betterAuth';
+import { renderLoginPage, renderConsentPage } from './oauthPages';
 
 const JSON_HEADERS: Record<string, string> = {
   'content-type': 'application/json',
   'access-control-allow-origin': '*',
+};
+
+// Security headers for the OAuth UI pages — match krabiclaw's /oauth/** rules.
+const OAUTH_PAGE_HEADERS: Record<string, string> = {
+  'content-type': 'text/html; charset=utf-8',
+  'cache-control': 'no-store',
+  'content-security-policy': "frame-ancestors 'none'",
+  'x-frame-options': 'DENY',
 };
 
 /**
@@ -62,6 +71,17 @@ export async function handleAuthRoutes(
       asResponse: false,
     });
     return jsonResponse(metadata, { 'cache-control': 'public, max-age=3600' });
+  }
+
+  if (request.method === 'GET' && path === '/oauth/login') {
+    return new Response(
+      renderLoginPage({ googleEnabled: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) }),
+      { headers: OAUTH_PAGE_HEADERS },
+    );
+  }
+
+  if (request.method === 'GET' && path === '/oauth/consent') {
+    return new Response(renderConsentPage(), { headers: OAUTH_PAGE_HEADERS });
   }
 
   if (request.method === 'POST' && path === '/api/auth/oauth2/token') {
