@@ -146,3 +146,53 @@ INSERT OR IGNORE INTO email_entities (
   CURRENT_TIMESTAMP,
   CURRENT_TIMESTAMP
 );
+
+-- Semantic search path: chunks + embedding job (vectorize via jobs worker).
+INSERT OR IGNORE INTO normalized_records (
+  id, workspace_id, record_type, source_artifact_id, body_json, created_at, updated_at
+) VALUES (
+  'fixture-nr-1',
+  'default',
+  'email_message',
+  NULL,
+  '{"messageId":"fixture-msg-1","subject":"Call tomorrow about Q3 planning","bodyText":"Can we talk tomorrow at 2pm about the Q3 roadmap?","fromEmail":"alice@example.com","toEmails":["skylerbaird@me.com"],"mailbox":"INBOX","accountId":"skylerbaird@me.com"}',
+  CURRENT_TIMESTAMP,
+  CURRENT_TIMESTAMP
+);
+
+INSERT OR IGNORE INTO memory_chunks (
+  id, workspace_id, account_id, source_record_id, vector_id, chunk_text, metadata_json, created_at
+) VALUES (
+  'fixture-chunk-1',
+  'default',
+  'skylerbaird@me.com',
+  'fixture-nr-1',
+  'fixture-msg-1:0',
+  'Subject: Call tomorrow about Q3 planning
+
+Can we talk tomorrow at 2pm about the Q3 roadmap?',
+  '{"messageId":"fixture-msg-1","subject":"Call tomorrow about Q3 planning","fromEmail":"alice@example.com","toEmails":["skylerbaird@me.com"],"mailbox":"INBOX","accountId":"skylerbaird@me.com","chunkIndex":0}',
+  CURRENT_TIMESTAMP
+);
+
+INSERT INTO embedding_jobs (
+  id, workspace_id, account_id, source_record_id, status, attempts, next_attempt_at,
+  last_error, created_at, updated_at
+) VALUES (
+  'fixture-embed-job-1',
+  'default',
+  'skylerbaird@me.com',
+  'fixture-nr-1',
+  'queued',
+  0,
+  CURRENT_TIMESTAMP,
+  NULL,
+  CURRENT_TIMESTAMP,
+  CURRENT_TIMESTAMP
+)
+ON CONFLICT(source_record_id) DO UPDATE SET
+  status = 'queued',
+  attempts = 0,
+  next_attempt_at = CURRENT_TIMESTAMP,
+  last_error = NULL,
+  updated_at = CURRENT_TIMESTAMP;

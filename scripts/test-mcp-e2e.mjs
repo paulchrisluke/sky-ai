@@ -26,6 +26,10 @@ const BASE_URL = (
   argv.includes('--base-url') ? argv[argv.indexOf('--base-url') + 1] : process.env.MCP_BASE_URL ?? 'http://127.0.0.1:8787'
 ).replace(/\/$/, '');
 
+const JOBS_BASE_URL = (
+  process.env.JOBS_BASE_URL ?? BASE_URL.replace('sky-ai-api', 'sky-ai-jobs')
+).replace(/\/$/, '');
+
 const MCP_URL = `${BASE_URL}/mcp`;
 const MCP_VERSION = process.env.MCP_PROTOCOL_VERSION ?? '2025-11-25';
 const WORKSPACE_ID = process.env.MCP_WORKSPACE_ID ?? 'default';
@@ -169,6 +173,30 @@ function seedFixture() {
   }
 }
 
+async function processEmbeddingJobs() {
+  const apiKey = process.env.WORKER_API_KEY;
+  if (!apiKey) {
+    fail('WORKER_API_KEY required for vector search test (set in env or .dev.vars)');
+    return false;
+  }
+
+  const res = await fetch(`${JOBS_BASE_URL}/jobs/embeddings/process`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.status !== 200 || !body.ok) {
+    fail('jobs/embeddings/process', body);
+    return false;
+  }
+  if (Number(body.processed) < 1) {
+    fail('jobs/embeddings/process indexed at least one fixture chunk', body);
+    return false;
+  }
+  pass(`jobs/embeddings/process -> processed=${body.processed}`);
+  return true;
+}
+
 class CookieJar {
   #cookies = new Map();
 
@@ -233,10 +261,13 @@ async function main() {
   if (shouldSeed) {
     section('Seed fixture data');
     seedFixture();
-    pass('Fixture rows inserted (workspace, mail, calendar, iMessage)');
+    pass('Fixture rows inserted (workspace, mail, calendar, iMessage, memory chunks)');
+
+    section('Vectorize fixture chunks (jobs worker)');
+    await processEmbeddingJobs();
   } else {
     section('Seed fixture data');
-    console.log('  ⏭  Skipped (pass --seed to load mock data)');
+    console.log('  ⏭  Skipped (pass --seed to load mock data + vectorize)');
   }
 
   section('OAuth client registration');
@@ -418,6 +449,43 @@ async function main() {
     }
   } else {
     fail('list_threads', threads.body);
+  }
+
+  const search = await mcpCall(
+    accessToken,
+    {
+      jsonrpc: '2.0',
+      id: 6,
+      method: 'tools/call',
+      params: {
+        name: 'search_messages',
+        arguments: { query: 'call tomorrow Q3 planning with Alice', limit: 5 },
+      },
+    },
+    { 'mcp-protocol-version': MCP_VERSION },
+  );
+  const searchPayload = search.body?.result?.structuredContent;
+  if (search.status === 200 && searchPayload) {
+    if (shouldSeed) {
+      const hit = (searchPayload.results ?? []).find(
+        (r) =>
+          r.message_id === 'fixture-msg-1' ||
+          (typeof r.subject === 'string' && r.subject.includes('Q3 planning')),
+      );
+      if (hit) {
+        pass(
+          `search_messages -> "${hit.subject ?? hit.excerpt?.slice(0, 40)}" (score=${Number(hit.score ?? 0).toFixed(3)})`,
+        );
+      } else {
+        fail('search_messages finds Alice Q3 tomorrow email', searchPayload);
+      }
+    } else if (typeof searchPayload.count === 'number') {
+      pass(`search_messages -> count=${searchPayload.count}`);
+    } else {
+      fail('search_messages', search.body);
+    }
+  } else {
+    fail('search_messages', search.body);
   }
 
   console.log(`\nDone${exitCode ? ' with failures' : ''}.`);
