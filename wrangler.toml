@@ -10,8 +10,8 @@ AIG_ACCOUNT_ID = "119641edf4fbeb5ac613d6b7db85f691"
 AIG_GATEWAY_ID = "sky-ai"
 OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
-ACCESS_AUTH_ENABLED = true
-ALLOW_API_KEY_BYPASS = true
+ACCESS_AUTH_ENABLED = "true"
+ALLOW_API_KEY_BYPASS = "true"
 
 [[d1_databases]]
 binding = "SKY_DB"
@@ -48,8 +48,8 @@ AIG_ACCOUNT_ID = "119641edf4fbeb5ac613d6b7db85f691"
 AIG_GATEWAY_ID = "sky-ai"
 OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
-ACCESS_AUTH_ENABLED = true
-ALLOW_API_KEY_BYPASS = false
+ACCESS_AUTH_ENABLED = "true"
+ALLOW_API_KEY_BYPASS = "false"
 
 [[env.prod.d1_databases]]
 binding = "SKY_DB"

@@ -216,11 +216,18 @@ function formatScalar(key, value) {
   return `${key} = ${value}`;
 }
 
-function formatObjectLines(obj) {
+function formatVarScalar(key, value) {
+  if (typeof value === 'boolean') {
+    return `${key} = "${value ? 'true' : 'false'}"`;
+  }
+  return formatScalar(key, value);
+}
+
+function formatObjectLines(obj, formatValue = formatScalar) {
   let result = '';
   for (const [key, value] of Object.entries(obj)) {
     if (value === undefined || value === null) continue;
-    result += `${formatScalar(key, value)}\n`;
+    result += `${formatValue(key, value)}\n`;
   }
   return result;
 }
@@ -240,7 +247,7 @@ function formatWorkerSection(config, envPrefix = '') {
 
   if (config.vars) {
     result += `\n[${prefix}vars]\n`;
-    result += formatObjectLines(config.vars);
+    result += formatObjectLines(config.vars, formatVarScalar);
   }
 
   if (config.d1_databases) {
