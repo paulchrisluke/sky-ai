@@ -15,12 +15,12 @@ ALLOW_API_KEY_BYPASS = true
 WORKERS_AI_EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
 WORKERS_AI_CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 VECTOR_DIMENSIONS = "1536"
-BETTER_AUTH_URL = "https://sky-ai-api.YOUR-SUBDOMAIN.workers.dev"
+BETTER_AUTH_URL = "https://sky-ai-api.ahmad22selim.workers.dev"
 
 [[d1_databases]]
 binding = "SKY_DB"
 database_name = "sky-ai-dev"
-database_id = "4d6853be-e6da-45df-b054-afd2207413e6"
+database_id = "cd67c1c8-66db-43d2-9b43-4e3ec6398d04"
 migrations_dir = "db/migrations"
 
 [[vectorize]]
@@ -41,7 +41,7 @@ ALLOW_API_KEY_BYPASS = false
 WORKERS_AI_EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
 WORKERS_AI_CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 VECTOR_DIMENSIONS = "1536"
-BETTER_AUTH_URL = "https://sky-ai-api.YOUR-SUBDOMAIN.workers.dev"
+BETTER_AUTH_URL = "https://sky-ai-api.ahmad22selim.workers.dev"
 
 [[env.prod.d1_databases]]
 binding = "SKY_DB"

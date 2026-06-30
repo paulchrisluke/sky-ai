@@ -19,7 +19,7 @@ VECTOR_DIMENSIONS = "1536"
 [[d1_databases]]
 binding = "SKY_DB"
 database_name = "sky-ai-dev"
-database_id = "4d6853be-e6da-45df-b054-afd2207413e6"
+database_id = "cd67c1c8-66db-43d2-9b43-4e3ec6398d04"
 migrations_dir = "db/migrations"
 
 [[vectorize]]

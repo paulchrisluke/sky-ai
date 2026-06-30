@@ -13,13 +13,14 @@ openai_embedding_model = "text-embedding-3-small"
 # Authentication
 access_auth_enabled = true
 allow_api_key_bypass = true
+better_auth_url = "https://sky-ai-api.ahmad22selim.workers.dev"
 
 # Development Environment
 environment = "dev"
 
 # Database Configuration (Development)
 dev_database_name = "sky-ai-dev"
-dev_database_id = "4d6853be-e6da-45df-b054-afd2207413e6"
+dev_database_id = "cd67c1c8-66db-43d2-9b43-4e3ec6398d04"
 
 # Vectorize Configuration (Development)
 dev_vectorize_index = "sky-ai-memory-dev"

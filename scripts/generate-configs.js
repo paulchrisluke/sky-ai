@@ -57,6 +57,10 @@ function generateWranglerConfig(workerName, mainFile, additionalVars = {}) {
         class_name: "BlawbyAgent"
       }]
     } : undefined,
+    migrations: workerName === 'sky-ai' ? [{
+      tag: "v1",
+      new_sqlite_classes: ["BlawbyAgent"]
+    }] : undefined,
     queues: workerName === 'sky-ai' ? {
       producers: [{
         binding: "EMBEDDING_QUEUE",
@@ -258,6 +262,16 @@ function formatWorkerSection(config, envPrefix = '') {
 
   if (config.durable_objects?.bindings) {
     result += formatArrayOfTables(`${prefix}durable_objects.bindings`, config.durable_objects.bindings);
+  }
+
+  if (config.migrations?.length) {
+    for (const migration of config.migrations) {
+      result += `\n[[${prefix}migrations]]\n`;
+      result += `${formatScalar('tag', migration.tag)}\n`;
+      if (migration.new_sqlite_classes?.length) {
+        result += `new_sqlite_classes = [ ${migration.new_sqlite_classes.map((className) => `"${className}"`).join(', ')} ]\n`;
+      }
+    }
   }
 
   if (config.queues?.producers) {

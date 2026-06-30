@@ -16,7 +16,7 @@ ALLOW_API_KEY_BYPASS = true
 [[d1_databases]]
 binding = "SKY_DB"
 database_name = "sky-ai-dev"
-database_id = "4d6853be-e6da-45df-b054-afd2207413e6"
+database_id = "cd67c1c8-66db-43d2-9b43-4e3ec6398d04"
 migrations_dir = "db/migrations"
 
 [[r2_buckets]]
@@ -33,6 +33,10 @@ binding = "AI"
 [[durable_objects.bindings]]
 name = "BLAWBY_AGENT"
 class_name = "BlawbyAgent"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = [ "BlawbyAgent" ]
 
 [[queues.producers]]
 binding = "EMBEDDING_QUEUE"
