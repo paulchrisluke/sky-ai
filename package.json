@@ -21,7 +21,10 @@
     "cf:d1:migrate:prod:api": "node -e \"console.error('Blocked: prod migrations disabled in dev-only mode'); process.exit(1)\"",
     "cf:d1:migrate:prod:jobs": "node -e \"console.error('Blocked: prod migrations disabled in dev-only mode'); process.exit(1)\"",
     "config:generate": "node scripts/generate-configs.js",
-    "config:validate": "./scripts/validate-configs.sh"
+    "config:validate": "./scripts/validate-configs.sh",
+    "test:mcp": "node scripts/test-mcp-oauth.mjs",
+    "test:mcp:e2e": "node scripts/test-mcp-e2e.mjs --seed",
+    "seed:mcp": "./scripts/seed-mcp-fixture.sh"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
@@ -34,6 +37,11 @@
     "node": ">=20"
   },
   "dependencies": {
-    "agents": "^0.7.5"
+    "@better-auth/core": "^1.6.20",
+    "@better-auth/oauth-provider": "^1.6.20",
+    "agents": "^0.7.5",
+    "better-auth": "^1.6.20",
+    "drizzle-orm": "^0.45.2",
+    "jose": "^6.2.3"
   }
 }

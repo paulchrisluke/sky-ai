@@ -1,21 +1,22 @@
 name = "sky-ai"
 main = "src/worker.ts"
 compatibility_date = "2026-03-05"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 [vars]
-  ENVIRONMENT = "dev"
-  AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
-  AIG_GATEWAY_ID = "sky-ai"
-  OPENAI_MODEL = "gpt-4o-mini"
-  OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
-  ACCESS_AUTH_ENABLED = true
-  ALLOW_API_KEY_BYPASS = true
+ENVIRONMENT = "dev"
+AIG_ACCOUNT_ID = "119641edf4fbeb5ac613d6b7db85f691"
+AIG_GATEWAY_ID = "sky-ai"
+OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+ACCESS_AUTH_ENABLED = "true"
+ALLOW_API_KEY_BYPASS = "true"
 
 [[d1_databases]]
 binding = "SKY_DB"
 database_name = "sky-ai-dev"
-database_id = "4d6853be-e6da-45df-b054-afd2207413e6"
+database_id = "cd67c1c8-66db-43d2-9b43-4e3ec6398d04"
 migrations_dir = "db/migrations"
 
 [[r2_buckets]]
@@ -27,58 +28,50 @@ binding = "SKY_VECTORIZE"
 index_name = "sky-ai-memory-dev"
 
 [ai]
-  binding = "AI"
+binding = "AI"
 
-[durable_objects]
+[[durable_objects.bindings]]
+name = "BLAWBY_AGENT"
+class_name = "BlawbyAgent"
 
-[[bindings]]
-  name = "BLAWBY_AGENT"
-  class_name = "BlawbyAgent"
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = [ "BlawbyAgent" ]
 
-[queues]
+[[queues.producers]]
+binding = "EMBEDDING_QUEUE"
+queue = "sky-ai-embeddings-prod"
 
-[[producers]]
-  binding = "EMBEDDING_QUEUE"
-  queue = "sky-ai-embeddings-prod"
+[env.prod.vars]
+ENVIRONMENT = "prod"
+AIG_ACCOUNT_ID = "119641edf4fbeb5ac613d6b7db85f691"
+AIG_GATEWAY_ID = "sky-ai"
+OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+ACCESS_AUTH_ENABLED = "true"
+ALLOW_API_KEY_BYPASS = "false"
 
-[env]
+[[env.prod.d1_databases]]
+binding = "SKY_DB"
+database_name = "sky-ai-prod"
+database_id = "e0dc4ec1-26d5-46db-819d-a416bb76c7ec"
+migrations_dir = "db/migrations"
 
-[prod]
+[[env.prod.r2_buckets]]
+binding = "SKY_ARTIFACTS"
+bucket_name = "sky-ai-artifacts-prod"
 
-[vars]
-  ENVIRONMENT = "prod"
-  AIG_ACCOUNT_ID = "fa3dc6c06433f6b0ea78d95bce23ad91"
-  AIG_GATEWAY_ID = "sky-ai"
-  OPENAI_MODEL = "gpt-4o-mini"
-  OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
-  ACCESS_AUTH_ENABLED = true
-  ALLOW_API_KEY_BYPASS = false
+[[env.prod.vectorize]]
+binding = "SKY_VECTORIZE"
+index_name = "sky-ai-memory-prod"
 
-[[d1_databases]]
-  binding = "SKY_DB"
-  database_name = "sky-ai-prod"
-  database_id = "e0dc4ec1-26d5-46db-819d-a416bb76c7ec"
-  migrations_dir = "db/migrations"
+[env.prod.ai]
+binding = "AI"
 
-[[r2_buckets]]
-  binding = "SKY_ARTIFACTS"
-  bucket_name = "sky-ai-artifacts-prod"
+[[env.prod.durable_objects.bindings]]
+name = "BLAWBY_AGENT"
+class_name = "BlawbyAgent"
 
-[[vectorize]]
-  binding = "SKY_VECTORIZE"
-  index_name = "sky-ai-memory-prod"
-
-[ai]
-  binding = "AI"
-
-[durable_objects]
-
-[[bindings]]
-  name = "BLAWBY_AGENT"
-  class_name = "BlawbyAgent"
-
-[queues]
-
-[[producers]]
-  binding = "EMBEDDING_QUEUE"
-  queue = "sky-ai-embeddings-prod"
+[[env.prod.queues.producers]]
+binding = "EMBEDDING_QUEUE"
+queue = "sky-ai-embeddings-prod"

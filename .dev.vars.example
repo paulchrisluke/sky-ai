@@ -13,6 +13,16 @@ ACCESS_ISSUER="https://<team>.cloudflareaccess.com"
 ACCESS_JWKS_URL="https://<team>.cloudflareaccess.com/cdn-cgi/access/certs"
 ACCESS_AUD="replace-me"
 
+# Better Auth / ChatGPT MCP OAuth (sky-ai-api worker only).
+# BETTER_AUTH_URL must match the public origin ChatGPT reaches (no trailing slash).
+# For workers.dev: https://sky-ai-api.<your-subdomain>.workers.dev
+BETTER_AUTH_URL="https://sky-ai-api.YOUR-SUBDOMAIN.workers.dev"
+# Generate with: openssl rand -base64 32
+BETTER_AUTH_SECRET="replace-me"
+# Optional — enables "Continue with Google" on the OAuth login page.
+GOOGLE_CLIENT_ID="replace-me"
+GOOGLE_CLIENT_SECRET="replace-me"
+
 # Optional per-1M unit pricing for Workers AI cost estimation.
 # Leave unset to report usage units with unknown (null) estimated cost for Workers AI rows.
 WORKERS_AI_INPUT_COST_PER_1M=""

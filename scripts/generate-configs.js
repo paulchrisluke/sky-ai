@@ -16,6 +16,20 @@ const sharedConfig = toml.parse(fs.readFileSync(path.join(configDir, 'shared.tom
 // Load mac-agent configuration
 const macAgentConfig = yaml.load(fs.readFileSync(path.join(configDir, 'mac-agent.yml'), 'utf8'));
 
+const JOBS_CRON_TRIGGERS = ['*/15 * * * *', '0 * * * *'];
+
+function devEmbeddingQueueName() {
+  return sharedConfig.prod?.queues?.embedding_queue || 'sky-ai-embeddings-dev';
+}
+
+function jobsQueueConsumer(queueName) {
+  return {
+    queue: queueName,
+    max_batch_size: 10,
+    max_batch_timeout: 30
+  };
+}
+
 // Generate Wrangler configurations
 function generateWranglerConfig(workerName, mainFile, additionalVars = {}) {
   const config = {
@@ -57,11 +71,20 @@ function generateWranglerConfig(workerName, mainFile, additionalVars = {}) {
         class_name: "BlawbyAgent"
       }]
     } : undefined,
+    migrations: workerName === 'sky-ai' ? [{
+      tag: "v1",
+      new_sqlite_classes: ["BlawbyAgent"]
+    }] : undefined,
     queues: workerName === 'sky-ai' ? {
       producers: [{
         binding: "EMBEDDING_QUEUE",
-        queue: sharedConfig.prod?.queues?.embedding_queue || "sky-ai-embeddings-dev"
+        queue: devEmbeddingQueueName()
       }]
+    } : workerName === 'sky-ai-jobs' ? {
+      consumers: [jobsQueueConsumer(devEmbeddingQueueName())]
+    } : undefined,
+    triggers: workerName === 'sky-ai-jobs' ? {
+      crons: JOBS_CRON_TRIGGERS
     } : undefined
   };
 
@@ -106,6 +129,11 @@ function generateWranglerConfig(workerName, mainFile, additionalVars = {}) {
           binding: "EMBEDDING_QUEUE",
           queue: sharedConfig.prod.queues.embedding_queue
         }]
+      } : workerName === 'sky-ai-jobs' ? {
+        consumers: [jobsQueueConsumer(sharedConfig.prod.queues.embedding_queue)]
+      } : undefined,
+      triggers: workerName === 'sky-ai-jobs' ? {
+        crons: JOBS_CRON_TRIGGERS
       } : undefined
     }
   };
@@ -117,11 +145,15 @@ function generateWranglerConfig(workerName, mainFile, additionalVars = {}) {
 const mainWorkerConfig = generateWranglerConfig('sky-ai', 'src/worker.ts');
 fs.writeFileSync(path.join(rootDir, 'wrangler.toml'), tomlify(mainWorkerConfig));
 
-// Generate API worker config
+// Generate API worker config.
+// BETTER_AUTH_URL is the public origin ChatGPT uses for OAuth + MCP discovery.
+// On workers.dev this is https://sky-ai-api.<your-subdomain>.workers.dev (no trailing slash).
+// Set `better_auth_url` under [shared] in config/shared.toml to override the placeholder.
 const apiWorkerConfig = generateWranglerConfig('sky-ai-api', 'workers/api/src/worker.ts', {
   WORKERS_AI_EMBEDDING_MODEL: "@cf/baai/bge-base-en-v1.5",
   WORKERS_AI_CHAT_MODEL: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-  VECTOR_DIMENSIONS: "1536"
+  VECTOR_DIMENSIONS: "1536",
+  BETTER_AUTH_URL: sharedConfig.shared.better_auth_url || "https://sky-ai-api.YOUR-SUBDOMAIN.workers.dev"
 });
 fs.writeFileSync(path.join(rootDir, 'wrangler.api.toml'), tomlify(apiWorkerConfig));
 
@@ -198,47 +230,123 @@ function generateXcodeGenConfig() {
 
 fs.writeFileSync(path.join(rootDir, 'agent-mac/project.yml'), yaml.dump(generateXcodeGenConfig()));
 
-// Helper function to convert object to TOML
-function tomlify(obj, indent = '') {
+function formatScalar(key, value) {
+  if (typeof value === 'string') {
+    return `${key} = "${value}"`;
+  }
+  if (typeof value === 'boolean') {
+    return `${key} = ${value}`;
+  }
+  return `${key} = ${value}`;
+}
+
+function formatVarScalar(key, value) {
+  if (typeof value === 'boolean') {
+    return `${key} = "${value ? 'true' : 'false'}"`;
+  }
+  return formatScalar(key, value);
+}
+
+function formatObjectLines(obj, formatValue = formatScalar) {
   let result = '';
-  
   for (const [key, value] of Object.entries(obj)) {
     if (value === undefined || value === null) continue;
-    
-    if (typeof value === 'object' && !Array.isArray(value)) {
-      if (key === 'env') {
-        result += '\n[env]\n';
-        for (const [envKey, envValue] of Object.entries(value)) {
-          result += tomlify({ [envKey]: envValue }, '  ');
-        }
-      } else if (Array.isArray(value)) {
-        for (const item of value) {
-          if (typeof item === 'object') {
-            result += `\n[[${key}]]\n`;
-            result += tomlify(item, '  ');
-          }
-        }
-      } else {
-        result += `\n[${key}]\n`;
-        result += tomlify(value, '  ');
+    result += `${formatValue(key, value)}\n`;
+  }
+  return result;
+}
+
+function formatArrayOfTables(tablePath, items) {
+  let result = '';
+  for (const item of items) {
+    result += `\n[[${tablePath}]]\n`;
+    result += formatObjectLines(item);
+  }
+  return result;
+}
+
+function formatWorkerSection(config, envPrefix = '') {
+  const prefix = envPrefix ? `${envPrefix}.` : '';
+  let result = '';
+
+  if (config.vars) {
+    result += `\n[${prefix}vars]\n`;
+    result += formatObjectLines(config.vars, formatVarScalar);
+  }
+
+  if (config.d1_databases) {
+    result += formatArrayOfTables(`${prefix}d1_databases`, config.d1_databases);
+  }
+
+  if (config.r2_buckets) {
+    result += formatArrayOfTables(`${prefix}r2_buckets`, config.r2_buckets);
+  }
+
+  if (config.vectorize) {
+    result += formatArrayOfTables(`${prefix}vectorize`, config.vectorize);
+  }
+
+  if (config.ai) {
+    result += `\n[${prefix}ai]\n`;
+    result += formatObjectLines(config.ai);
+  }
+
+  if (config.durable_objects?.bindings) {
+    result += formatArrayOfTables(`${prefix}durable_objects.bindings`, config.durable_objects.bindings);
+  }
+
+  if (config.migrations?.length) {
+    for (const migration of config.migrations) {
+      result += `\n[[${prefix}migrations]]\n`;
+      result += `${formatScalar('tag', migration.tag)}\n`;
+      if (migration.new_sqlite_classes?.length) {
+        result += `new_sqlite_classes = [ ${migration.new_sqlite_classes.map((className) => `"${className}"`).join(', ')} ]\n`;
       }
-    } else if (Array.isArray(value)) {
-      for (const item of value) {
-        if (typeof item === 'object') {
-          result += `\n[[${key}]]\n`;
-          result += tomlify(item, indent);
-        }
-      }
-    } else if (typeof value === 'string') {
-      result += `${indent}${key} = "${value}"\n`;
-    } else if (typeof value === 'boolean') {
-      result += `${indent}${key} = ${value}\n`;
-    } else {
-      result += `${indent}${key} = ${value}\n`;
     }
   }
-  
+
+  if (config.queues?.producers) {
+    result += formatArrayOfTables(`${prefix}queues.producers`, config.queues.producers);
+  }
+
+  if (config.queues?.consumers) {
+    result += formatArrayOfTables(`${prefix}queues.consumers`, config.queues.consumers);
+  }
+
+  if (config.triggers?.crons?.length) {
+    result += `\n[${prefix}triggers]\n`;
+    result += `crons = [${config.triggers.crons.map((cron) => `"${cron}"`).join(', ')}]\n`;
+  }
+
   return result;
+}
+
+function tomlify(config) {
+  let result = '';
+
+  for (const key of ['name', 'main', 'compatibility_date']) {
+    if (config[key] !== undefined) {
+      result += `${formatScalar(key, config[key])}\n`;
+    }
+  }
+
+  if (config.compatibility_flags?.length) {
+    result += `compatibility_flags = [${config.compatibility_flags.map((flag) => `"${flag}"`).join(', ')}]\n`;
+  }
+
+  if (config.workers_dev !== undefined) {
+    result += `${formatScalar('workers_dev', config.workers_dev)}\n`;
+  }
+
+  result += formatWorkerSection(config);
+
+  if (config.env) {
+    for (const [envName, envConfig] of Object.entries(config.env)) {
+      result += formatWorkerSection(envConfig, `env.${envName}`);
+    }
+  }
+
+  return `${result.trim()}\n`;
 }
 
 console.log('Configuration files generated successfully');
