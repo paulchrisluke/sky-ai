@@ -29,6 +29,14 @@ index_name = "sky-ai-memory-dev"
 [ai]
 binding = "AI"
 
+[[queues.consumers]]
+queue = "sky-ai-embeddings-prod"
+max_batch_size = 10
+max_batch_timeout = 30
+
+[triggers]
+crons = ["*/15 * * * *", "0 * * * *"]
+
 [env.prod.vars]
 ENVIRONMENT = "prod"
 AIG_ACCOUNT_ID = "119641edf4fbeb5ac613d6b7db85f691"
@@ -53,3 +61,11 @@ index_name = "sky-ai-memory-prod"
 
 [env.prod.ai]
 binding = "AI"
+
+[[env.prod.queues.consumers]]
+queue = "sky-ai-embeddings-prod"
+max_batch_size = 10
+max_batch_timeout = 30
+
+[env.prod.triggers]
+crons = ["*/15 * * * *", "0 * * * *"]

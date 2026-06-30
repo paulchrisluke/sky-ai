@@ -16,6 +16,20 @@ const sharedConfig = toml.parse(fs.readFileSync(path.join(configDir, 'shared.tom
 // Load mac-agent configuration
 const macAgentConfig = yaml.load(fs.readFileSync(path.join(configDir, 'mac-agent.yml'), 'utf8'));
 
+const JOBS_CRON_TRIGGERS = ['*/15 * * * *', '0 * * * *'];
+
+function devEmbeddingQueueName() {
+  return sharedConfig.prod?.queues?.embedding_queue || 'sky-ai-embeddings-dev';
+}
+
+function jobsQueueConsumer(queueName) {
+  return {
+    queue: queueName,
+    max_batch_size: 10,
+    max_batch_timeout: 30
+  };
+}
+
 // Generate Wrangler configurations
 function generateWranglerConfig(workerName, mainFile, additionalVars = {}) {
   const config = {
@@ -64,8 +78,13 @@ function generateWranglerConfig(workerName, mainFile, additionalVars = {}) {
     queues: workerName === 'sky-ai' ? {
       producers: [{
         binding: "EMBEDDING_QUEUE",
-        queue: sharedConfig.prod?.queues?.embedding_queue || "sky-ai-embeddings-dev"
+        queue: devEmbeddingQueueName()
       }]
+    } : workerName === 'sky-ai-jobs' ? {
+      consumers: [jobsQueueConsumer(devEmbeddingQueueName())]
+    } : undefined,
+    triggers: workerName === 'sky-ai-jobs' ? {
+      crons: JOBS_CRON_TRIGGERS
     } : undefined
   };
 
@@ -110,6 +129,11 @@ function generateWranglerConfig(workerName, mainFile, additionalVars = {}) {
           binding: "EMBEDDING_QUEUE",
           queue: sharedConfig.prod.queues.embedding_queue
         }]
+      } : workerName === 'sky-ai-jobs' ? {
+        consumers: [jobsQueueConsumer(sharedConfig.prod.queues.embedding_queue)]
+      } : undefined,
+      triggers: workerName === 'sky-ai-jobs' ? {
+        crons: JOBS_CRON_TRIGGERS
       } : undefined
     }
   };
@@ -283,6 +307,15 @@ function formatWorkerSection(config, envPrefix = '') {
 
   if (config.queues?.producers) {
     result += formatArrayOfTables(`${prefix}queues.producers`, config.queues.producers);
+  }
+
+  if (config.queues?.consumers) {
+    result += formatArrayOfTables(`${prefix}queues.consumers`, config.queues.consumers);
+  }
+
+  if (config.triggers?.crons?.length) {
+    result += `\n[${prefix}triggers]\n`;
+    result += `crons = [${config.triggers.crons.map((cron) => `"${cron}"`).join(', ')}]\n`;
   }
 
   return result;
